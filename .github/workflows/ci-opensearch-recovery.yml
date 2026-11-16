@@ -6,7 +6,8 @@ name: Verify OTel Demo OpenSearch Recovery
 on:
   workflow_dispatch:
 
-permissions: read-all
+permissions:
+  contents: read
 
 concurrency:
   group: jaeger-otel-demo-opensearch-recovery
@@ -26,6 +27,7 @@ jobs:
     name: Create and test retained recovery point
     needs: require-main
     if: github.ref == 'refs/heads/main'
+    environment: demo-apply
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -42,10 +44,11 @@ jobs:
         cluster: ${{ secrets.OKE_CLUSTER_OCID }}
         enablePrivateEndpoint: false
 
-    - name: Checkout Jaeger repository
+    - name: Checkout demo configuration
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
         ref: ${{ github.sha }}
+        persist-credentials: false
 
     - name: Create and verify OpenSearch recovery point
       env:

@@ -1,0 +1,62 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Demo CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Demo tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Install shell dependencies
+      run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+    - name: Install shunit2
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        repository: kward/shunit2
+        ref: 080159b303537888c5d41910b4d47a5002638e30 # v2.1.8
+        path: .tools/shunit2
+        persist-credentials: false
+    - name: Install Helm for credential-free chart tests
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+    - name: Lint shell scripts
+      run: shellcheck scripts/demo/*.sh scripts/utils/*.sh
+    - name: Lint workflows
+      run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12
+    - name: Test scripts and chart rendering
+      env:
+        SHUNIT2: .tools/shunit2
+      run: make test
+
+  renovate:
+    name: Renovate discovery
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Validate Renovate configuration
+      run: |
+        docker run --rm -v "$PWD/renovate.json:/usr/src/app/renovate.json" \
+          ghcr.io/renovatebot/renovate:latest renovate-config-validator
+    - name: Verify dependency discovery without credentials
+      run: |
+        docker run --rm -v "$PWD:/repo" -w /repo \
+          -e LOG_LEVEL=debug -e LOG_FORMAT=json \
+          -e RENOVATE_PLATFORM=local -e RENOVATE_DRY_RUN=extract \
+          -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required \
+          -e RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements \
+          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+          ghcr.io/renovatebot/renovate:latest renovate > /tmp/renovate-extraction.jsonl
+        python3 scripts/demo/check-renovate-extraction.py /tmp/renovate-extraction.jsonl

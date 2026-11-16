@@ -91,7 +91,22 @@ testRequiresMainSha() {
   err=$(env -i bash "$SCRIPT" 2>&1)
   rc=$?
   assertEquals "exit 1 without MAIN_SHA" 1 $rc
-  assertContains "$err" "MAIN_SHA or GITHUB_SHA must be set"
+  assertContains "$err" "MAIN_SHA must be set to the resolved jaegertracing/jaeger commit"
+}
+
+testConfigRepositoryShaCannotBecomeAnImageTag() {
+  err=$(env -i GITHUB_SHA="$PUBLISHED" bash "$SCRIPT" 2>&1)
+  rc=$?
+  assertEquals "the config SHA is not an image fallback" 1 $rc
+  assertContains "$err" "MAIN_SHA must be set to the resolved jaegertracing/jaeger commit"
+}
+
+testUsesCoreShaInsteadOfConfigRepositorySha() {
+  out=$(run_script MAIN_SHA="$PUBLISHED" GITHUB_SHA="$NEWEST" 2>&1)
+  rc=$?
+  assertEquals "exit 0" 0 $rc
+  assertContains "$out" "Jaeger tag=$PUBLISHED"
+  assertContains "$out" "HotROD tag=$PUBLISHED"
 }
 
 testRequiresJq() {

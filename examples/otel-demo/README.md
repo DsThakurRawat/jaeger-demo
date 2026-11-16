@@ -1,5 +1,10 @@
 # OpenTelemetry Demo app + HotRODapp + Jaeger + OpenSearch
 
+> Hosted migration: follow the [handover](../../docs/cutover.md) and
+> [release](../../docs/releases.md) runbooks for the existing installation. The
+> setup examples below are retained for reference. Do not use `clean` for handover
+> or reinstall the shared ingress controller, cert-manager or certificate issuers.
+
 This example provides a one-command deployment of a complete observability stack on Kubernetes:
 - Jaeger (all-in-one) for tracing
 - OpenSearch and OpenSearch Dashboards

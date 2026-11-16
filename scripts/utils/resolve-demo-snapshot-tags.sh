@@ -23,11 +23,11 @@ set -euo pipefail
 
 : "${JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY:=jaegertracing/jaeger-snapshot}"
 : "${JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY:=jaegertracing/example-hotrod-snapshot}"
-: "${MAIN_SHA:=${GITHUB_SHA:-}}"
+: "${MAIN_SHA:=}"
 : "${GITHUB_EVENT_NAME:=workflow_dispatch}"
 
 if [[ -z "$MAIN_SHA" ]]; then
-  echo "MAIN_SHA or GITHUB_SHA must be set" >&2
+  echo "MAIN_SHA must be set to the resolved jaegertracing/jaeger commit" >&2
   exit 1
 fi
 

@@ -1,0 +1,8 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+.tools/
+__pycache__/
+*.pyc
+examples/oci/helm-charts/
+examples/otel-demo/helm-charts/

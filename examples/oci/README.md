@@ -1,5 +1,10 @@
 # Jaeger + Prometheus + HotROD Demo Setup (Helm v2 Branch)
 
+> Hosted migration: follow the [handover](../../docs/cutover.md) and
+> [release](../../docs/releases.md) runbooks for the existing installation. The
+> setup examples below are retained for reference. Do not use `clean` for handover
+> or reinstall the shared ingress controller, cert-manager or certificate issuers.
+
 This guide walks you through deploying **Jaeger** (using the v2 Helm chart), **Prometheus**, and the **HotROD demo app** on Kubernetes.
 
 ## Prerequisites
