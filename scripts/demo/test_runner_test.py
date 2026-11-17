@@ -23,6 +23,14 @@ class TestRunnerTests(unittest.TestCase):
             runner.parent.mkdir(parents=True)
             shutil.copyfile(ROOT / 'scripts/utils/run-tests.sh', runner)
             (repository / 'scripts/demo').mkdir()
+            (repository / 'scripts/demo/dependency_test.py').write_text('''import os
+from pathlib import Path
+import unittest
+
+class DependencyTest(unittest.TestCase):
+    def test_dependency_is_available(self):
+        self.assertTrue((Path(os.environ['SHUNIT2']) / 'shunit2').is_file())
+''')
 
             # Keep the real runner but replace the suites with dependency probes.
             suites = list(ROOT.glob('scripts/utils/*.test.sh')) + list(ROOT.glob('examples/otel-demo/*.test.sh'))
