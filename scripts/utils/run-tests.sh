@@ -11,6 +11,7 @@ if [[ ! -f "$SHUNIT2/shunit2" ]]; then
   echo "shunit2 not found at $SHUNIT2/shunit2" >&2
   exit 1
 fi
+SHUNIT2="$(cd "$SHUNIT2" && pwd)"
 export SHUNIT2
 cd "$ROOT"
 python3 -m unittest discover -s scripts/demo -p '*_test.py' -v
