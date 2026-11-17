@@ -1,0 +1,205 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Deploy Jaeger Demo to OKE
+
+on:
+  # Enable the daily refresh only after the verified script handover.
+  # schedule:
+  #   - cron: '0 13 * * *'
+  workflow_dispatch:
+    inputs:
+      expected_config_sha:
+        description: 'Expected full configuration commit SHA. Required by the initial handover runbook.'
+        required: false
+      image_tag:
+        description: 'Snapshot image tag to deploy for both images. Defaults to jaegertracing/jaeger main.'
+        required: false
+      jaeger_image_tag:
+        description: 'Jaeger snapshot image tag override. Defaults to image_tag or jaegertracing/jaeger main.'
+        required: false
+      hotrod_image_tag:
+        description: 'HotROD snapshot image tag override. Defaults to image_tag or jaegertracing/jaeger main.'
+        required: false
+      deploy_mode:
+        description: 'Deployment mode. Defaults to upgrade; use clean only to reinstall the demo.'
+        required: false
+        default: upgrade
+        type: choice
+        options:
+          - upgrade
+          - clean
+      demo_stack:
+        description: 'Demo stack to deploy. Defaults to the original OCI demo.'
+        required: false
+        default: oci
+        type: choice
+        options:
+          - oci
+          - otel
+          - all
+      otel_deploy_scope:
+        description: 'Component scope. monitoring applies to OCI; otel-demo and opensearch apply to OTel.'
+        required: false
+        default: jaeger
+        type: choice
+        options:
+          - jaeger
+          - otel-demo
+          - opensearch
+          - monitoring
+          - all
+      opensearch_recovery:
+        description: 'OpenSearch recovery policy. Waive only for disposable data in an isolated upgrade.'
+        required: false
+        default: required
+        type: choice
+        options:
+          - required
+          - waive
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jaeger-otel-demo-opensearch-recovery
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Jaeger to OKE Cluster
+    if: github.ref == 'refs/heads/main'
+    environment: demo-apply
+    runs-on: ubuntu-latest
+    # Budget for a full-stack run with the 'required' recovery policy, taking every
+    # wait at its limit: 90m backup-test (the ci-opensearch-recovery.yml limit),
+    # 70m OpenSearch and Dashboards Helm waits (10m + 60m), 45m for the other four
+    # Helm releases (10m + 15m + 10m + 10m), 15m trace generator restarts, and about
+    # 50m of smoke-check and trace-check retries. That is 270m; the rest is setup.
+    # Rollout checks that directly follow a Helm --wait return at once.
+    timeout-minutes: 300
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY: jaegertracing/jaeger-snapshot
+      JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY: jaegertracing/example-hotrod-snapshot
+      JAEGER_DEMO_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+      JAEGER_DEMO_JAEGER_IMAGE_TAG: ${{ github.event.inputs.jaeger_image_tag || github.event.inputs.image_tag }}
+      JAEGER_DEMO_HOTROD_IMAGE_TAG: ${{ github.event.inputs.hotrod_image_tag || github.event.inputs.image_tag }}
+      JAEGER_DEMO_IMAGE_PULL_POLICY: Always
+      JAEGER_DEMO_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode || 'upgrade' }}
+      JAEGER_DEMO_STACK: ${{ github.event.inputs.demo_stack || 'oci' }}
+      JAEGER_OTEL_DEMO_DEPLOY_SCOPE: ${{ github.event.inputs.otel_deploy_scope || 'jaeger' }}
+      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ github.event.inputs.opensearch_recovery || 'required' }}
+      RUN_PUBLIC_SMOKE_TESTS: "true"
+      GITHUB_EVENT_NAME: ${{ github.event_name }}
+
+    steps:
+    - name: Validate OpenSearch recovery policy
+      run: |
+        case "${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" in
+          required)
+            ;;
+          waive)
+            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ||
+              "${GITHUB_REF}" != "refs/heads/main" ||
+              "${JAEGER_DEMO_STACK}" != "otel" ||
+              "${JAEGER_DEMO_DEPLOY_MODE}" != "upgrade" ||
+              "${JAEGER_OTEL_DEMO_DEPLOY_SCOPE}" != "opensearch" ]]; then
+              echo "OpenSearch recovery may be waived only by a manual isolated otel/upgrade/opensearch run from main" >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "Invalid OpenSearch recovery policy: ${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Verify the reviewed configuration revision
+      env:
+        EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
+      run: |
+        if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
+          if [[ ! "$EXPECTED_CONFIG_SHA" =~ ^[0-9a-f]{40}$ || "$EXPECTED_CONFIG_SHA" != "$GITHUB_SHA" ]]; then
+            echo "The workflow revision does not match the reviewed configuration commit" >&2
+            exit 1
+          fi
+        fi
+
+    - name: Checkout demo configuration
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+
+    - name: Resolve upstream Jaeger main
+      shell: bash
+      run: |
+        core_sha=$(git ls-remote https://github.com/jaegertracing/jaeger.git refs/heads/main | awk '{print $1}')
+        if [[ ! "$core_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "Could not resolve jaegertracing/jaeger main to one full commit SHA" >&2
+          exit 1
+        fi
+        printf 'MAIN_SHA=%s\n' "$core_sha" >> "$GITHUB_ENV"
+        printf 'Configuration: %s\nUpstream Jaeger main: %s\n' "$GITHUB_SHA" "$core_sha" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Configure kubectl with OKE
+      id: configure-oke
+      uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
+      with:
+        cluster: ${{ secrets.OKE_CLUSTER_OCID }}
+        enablePrivateEndpoint: false
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+
+    - name: Reconcile demo components
+      run: python3 scripts/demo/deploy.py
+
+    - name: Collect OpenSearch recovery diagnostics
+      if: failure() && steps.configure-oke.outcome == 'success'
+      run: |
+        kubectl -n opensearch get volumesnapshots \
+          -l jaegertracing.io/recovery-source=opensearch \
+          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp || true
+        kubectl -n opensearch get pvc \
+          -l jaegertracing.io/recovery-source=opensearch \
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage || true
+        kubectl -n opensearch get pods \
+          -l jaegertracing.io/recovery-source=opensearch \
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
+
+    # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
+    # EXIT trap is not reliable when the job is cancelled or times out.
+    - name: Remove disposable restore pod
+      if: always() && steps.configure-oke.outcome == 'success'
+      env:
+        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      run: |
+        kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
+          --ignore-not-found=true --wait=false ||
+          echo "::warning::Could not confirm removal of restore pod jaeger-os-verify-$OPENSEARCH_RECOVERY_ID; delete it manually if the recovery test started"
+
+    - name: Send detailed Slack notification on failure
+      if: failure()
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_CHANNEL: '#jaeger-operations'
+        SLACK_COLOR: danger
+        SLACK_USERNAME: 'Jaeger CI Bot'
+        SLACK_ICON_EMOJI: ':warning:'
+        SLACK_TITLE: '🚨 Jaeger OKE Deployment Failed'
+        SLACK_MESSAGE: |
+          *Repository:* ${{ github.repository }}
+          *Workflow:* ${{ github.workflow }}
+          *Run ID:* ${{ github.run_id }}
+          *Trigger:* ${{ github.event_name }}
+          *Actor:* ${{ github.actor }}
+
+          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Failed Run>
+        SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
