@@ -32,6 +32,10 @@ PROMETHEUS_STACK_CHART="prometheus-community/kube-prometheus-stack"
 PROMETHEUS_STACK_CHART_VERSION="${PROMETHEUS_STACK_CHART_VERSION:-82.10.4}"
 CLEAN_UNINSTALL_TIMEOUT="${JAEGER_DEMO_CLEAN_UNINSTALL_TIMEOUT:-10m0s}"
 
+if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+  python3 "$SCRIPT_DIR/../../scripts/demo/handover.py" oci "$MODE" "$DEPLOY_SCOPE"
+fi
+
 uninstall_release() {
   local name=$1
 
@@ -61,6 +65,10 @@ prepare_upgrade_release() {
   local status
 
   status=$(release_status "$name")
+  if [[ -n "${EXPECTED_CONFIG_SHA:-}" && "$status" != "deployed" ]]; then
+    echo "Handover requires an existing deployed $name release; refusing reinstall" >&2
+    return 1
+  fi
   case "$status" in
     ""|deployed)
       ;;
@@ -111,6 +119,9 @@ if [[ "$MODE" == "upgrade" ]]; then
     esac
   fi
   HELM_JAEGER_CMD="upgrade --install --wait --atomic"
+  if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+    HELM_JAEGER_CMD="upgrade --wait --atomic"
+  fi
   HELM_PROM_CMD="upgrade --install --wait"
 else
   echo "🟣 Clean mode: Uninstalling Jaeger and Prometheus..."

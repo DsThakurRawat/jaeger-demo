@@ -142,6 +142,7 @@ class DeploymentTests(unittest.TestCase):
         diagnostics, cleanup, slack = steps[-3:]
         self.assertIn("\n      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
         self.assertIn("\n      if: always() && steps.configure-oke.outcome == 'success' && "
+                      "steps.reconcile.outputs.recovery_started == 'true' && "
                       "(steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || "
                       "steps.reconcile.outcome == 'cancelled')\n", cleanup)
         self.assertIn("\n      if: failure()\n", slack)
@@ -185,6 +186,100 @@ class DeploymentTests(unittest.TestCase):
         run.return_value.stdout = json.dumps({"data": self.desired})
         with self.assertRaises(ValueError):
             deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_OTEL_DEMO_DEPLOY_SCOPE="invalid"))
+
+    def handover_env(self, **overrides):
+        return dict(self.env, **dict({
+            "GITHUB_EVENT_NAME": "workflow_dispatch", "EXPECTED_CONFIG_SHA": "a" * 40, "GITHUB_SHA": "a" * 40,
+            "JAEGER_DEMO_STACK": "oci", "JAEGER_DEMO_DEPLOY_MODE": "upgrade", "JAEGER_OTEL_DEMO_DEPLOY_SCOPE": "jaeger",
+            "JAEGER_DEMO_JAEGER_IMAGE_TAG": "b" * 40, "JAEGER_DEMO_HOTROD_IMAGE_TAG": "c" * 40,
+        }, **overrides))
+
+    @patch("deploy.run")
+    def test_unsafe_handover_routes_fail_before_any_command(self, run):
+        for overrides in ({"GITHUB_EVENT_NAME": "schedule"}, {"JAEGER_DEMO_STACK": "all"},
+                          {"JAEGER_DEMO_DEPLOY_MODE": "clean"}, {"JAEGER_OTEL_DEMO_DEPLOY_SCOPE": "monitoring"},
+                          {"JAEGER_DEMO_JAEGER_IMAGE_TAG": "latest"}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                deploy.reconcile(self.handover_env(**overrides))
+        run.assert_not_called()
+
+    @patch("deploy.handover.preflight")
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_handover_preflight_precedes_deployment_and_state_write(self, run, component, resolve, preflight):
+        run.return_value.stdout = json.dumps({"data": self.desired})
+        calls = []
+        preflight.side_effect = lambda *args: calls.append("preflight")
+        component.side_effect = lambda *args: calls.append("deploy")
+        def command(*args, **kwargs):
+            if "input" in kwargs:
+                calls.append("state")
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": self.desired}))
+        run.side_effect = command
+        env = self.handover_env()
+        self.assertEqual(0, deploy.reconcile(env))
+        self.assertEqual(["preflight", "deploy", "state"], calls)
+        component.assert_called_once_with("oci-jaeger", env)
+        preflight.assert_called_once_with(env, "oci", "upgrade", "jaeger")
+
+    @patch("deploy.handover.preflight", side_effect=subprocess.CalledProcessError(1, "kubectl", stderr="NotFound"))
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_missing_handover_object_prevents_component_and_state_mutations(self, run, component, preflight):
+        run.return_value.stdout = ""
+        with self.assertRaises(subprocess.CalledProcessError):
+            deploy.reconcile(self.handover_env())
+        component.assert_not_called()
+        self.assertEqual(1, run.call_count)
+        self.assertNotIn("input", run.call_args.kwargs)
+
+    @patch("deploy.selected_components", return_value=["oci-jaeger", "oci-monitoring"])
+    @patch("deploy.handover.preflight")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_unexpected_handover_component_selection_fails_closed(self, run, component, preflight, selected):
+        run.return_value.stdout = ""
+        with self.assertRaisesRegex(ValueError, "selected components"):
+            deploy.reconcile(self.handover_env())
+        component.assert_not_called()
+        preflight.assert_not_called()
+        self.assertEqual(1, run.call_count)
+
+    @patch("deploy.handover.preflight")
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_changed_handover_image_resolution_prevents_all_writes(self, run, component, resolve, preflight):
+        run.return_value.stdout = ""
+        resolve.side_effect = lambda env: env.update(JAEGER_DEMO_JAEGER_IMAGE_TAG="d" * 40)
+        with self.assertRaisesRegex(ValueError, "image resolution changed"):
+            deploy.reconcile(self.handover_env())
+        component.assert_not_called()
+        self.assertEqual(1, run.call_count)
+
+    @patch("deploy.run")
+    def test_cleanup_signal_is_set_only_when_recovery_backup_starts(self, run):
+        for component, mode, policy, recovery in (("opensearch", "upgrade", "required", True),
+                                                  ("opensearch", "upgrade", "waive", False),
+                                                  ("opensearch", "clean", "required", False),
+                                                  ("oci-jaeger", "upgrade", "required", False),
+                                                  ("otel-jaeger", "upgrade", "required", False)):
+            with self.subTest(component=component, mode=mode, policy=policy), tempfile.NamedTemporaryFile() as output:
+                run.reset_mock()
+                env = dict(self.env, JAEGER_DEMO_DEPLOY_MODE=mode,
+                           JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=policy, GITHUB_OUTPUT=output.name)
+                def command(args, **kwargs):
+                    if args[-1] == "backup-test":
+                        self.assertEqual("recovery_started=true\n", Path(output.name).read_text())
+                        raise subprocess.CalledProcessError(1, args)
+                run.side_effect = command
+                if recovery:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        deploy.deploy_component(component, env)
+                else:
+                    deploy.deploy_component(component, env)
+                self.assertEqual("recovery_started=true\n" if recovery else "", Path(output.name).read_text())
 
 
 if __name__ == "__main__":

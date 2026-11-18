@@ -21,7 +21,7 @@ The current workflow supports these inputs:
 
 | Input | Use |
 | --- | --- |
-| `expected_config_sha` | Full reviewed configuration SHA; required for initial handover |
+| `expected_config_sha` | Full reviewed configuration SHA; activates restricted Stage 1 handover guards |
 | `demo_stack` | `oci`, `otel`, or `all` |
 | `otel_deploy_scope` | Component selection; despite its name it also selects OCI `jaeger` or `monitoring` |
 | `deploy_mode` | Use `upgrade` for routine maintenance and handover |
@@ -82,6 +82,16 @@ and checksum along with the runner image used for handover. Supply
 rejects a different configuration SHA before configuring OKE access. Verify the
 dispatched run's `headSha` and retain that evidence. Do not execute a different
 configuration revision under an earlier approval.
+
+With a reviewed SHA, only a manual single-stack Jaeger upgrade with explicit
+commit tags is permitted. Existing deployed release state, Helm storage/namespace
+and required objects are checked before application writes; the Helm commands
+cannot fall back to installation. See the [handover permission checks](cutover.md#check-the-restricted-handover-path).
+OTel ingress apply or certificate-read failures prevent a successful component
+record. Restore-pod cleanup runs only if this run actually started the recovery
+backup path, so Jaeger-only handover does not attempt OpenSearch Pod deletion.
+Without a reviewed SHA, ordinary deployment and schedule selection behavior is
+unchanged. Scheduling still requires its separate scope/access decision.
 
 After the run, append its URL, actual inputs, changed releases, resulting Helm
 revisions, image digests, checks and outcomes. Mark it successful only after the

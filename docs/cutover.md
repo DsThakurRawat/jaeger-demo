@@ -73,6 +73,71 @@ status by default; `--all` is not supported. Keep status filters unset for the
 inventory. The default limit is 256 releases, above the six application releases
 listed here.
 
+## Check the restricted handover path
+
+Supplying `expected_config_sha` activates the Stage 1 handover guards. The run must
+be a manual dispatch from main, select exactly one of `oci` or `otel`, use
+`upgrade` and `jaeger`, and supply explicit full Jaeger and HotROD commit tags.
+The reconciler checks its actual component selection and rejects any image-tag
+change during resolution. Omitting the reviewed SHA uses the ordinary deployment
+path; it is not an alternative for the first ownership transfer.
+
+Before application writes, `scripts/demo/handover.py` requires both `default/jaeger`
+and `jaeger/jaeger` to exist in `deployed` state using Helm Secret storage. The
+implicit kubectl and Helm namespace must be `default`. It requires every target
+chart object, generator, supplemental Service/Ingress and the shared
+`default/jaeger-demo-deployment-revisions` ConfigMap to exist and be readable.
+A denied read is a failure, not evidence that an object is absent. OCI refuses its
+ordinary uninstall/reinstall fallback; OTel repeats the check before HotROD
+replacement. Both handover Helm commands omit `--install`, and OTel also omits
+`--create-namespace`. OTel ingress apply and certificate-read errors fail the run.
+Jaeger-only runs skip restore-pod cleanup because they cannot start recovery.
+
+These guards do not compare full live manifests or authorize a new resource set.
+Before dispatch, compare captured current, desired and rollback object sets, chart
+hooks, exact image references and prior release revisions in the frozen record.
+The only accepted application-object deletion/recreation is OTel's
+`jaeger/jaeger-hotrod` Deployment. Missing objects, new hooks, unexplained revision
+changes or failed/pending releases require a separate repair and fresh verification.
+Drain old writers first and keep the new workflow serialized. Verify cluster
+identity, expected certificates and public TLS independently; readable certificate
+summaries alone do not prove TLS health.
+
+Check effective access using the actual new CI principal before its first write:
+
+| Capability | Initial handover requirement |
+| --- | --- |
+| Existing chart and supplemental objects | Named `get,patch`; chart/watcher workload reads include `list,watch` and dependent status resources |
+| OTel HotROD replacement | Named Deployment `delete` plus Deployment `create` in `jaeger`; native RBAC cannot name-limit top-level create |
+| Helm storage in `default` and `jaeger` | Secret `get,list,create`; `update,delete` restricted to individually listed retained Jaeger revisions and the next upgrade/rollback revisions |
+| OTel diagnostics and TLS summaries | Service list in `kube-system`, relevant Namespace reads and Certificate list in `jaeger`, `opensearch`, `otel-demo` |
+| Excluded mutations | Other application deletes/updates, OpenSearch Pod deletion, exec/port-forward, namespaces, storage, RBAC, CRDs/webhooks and AI ingress |
+
+Secret list discloses namespace Secret contents, and top-level Secret create cannot
+be name-limited with native RBAC. Keep that accepted trusted-writer scope explicit.
+Use exact observed revision Secret names, not wildcard `resourceNames`; a retry
+beyond the accepted revision range needs renewed verification. Include automatic
+rollback and history pruning in the permission rehearsal. For example:
+
+```bash
+# Expected yes under the apply principal:
+kubectl auth can-i patch deployments.apps/jaeger --namespace default
+kubectl auth can-i delete deployments.apps/jaeger-hotrod --namespace jaeger
+kubectl auth can-i create deployments.apps --namespace jaeger
+kubectl auth can-i list services --namespace kube-system
+# Expected no:
+kubectl auth can-i delete deployments.apps/jaeger --namespace default
+kubectl auth can-i delete pods --namespace opensearch
+kubectl auth can-i create pods --subresource=exec --namespace opensearch
+kubectl auth can-i create pods --subresource=portforward --namespace jaeger
+```
+
+These examples are not the complete permission matrix. Check all required verbs
+and positive reads/watches against the verified object set; never test forbidden
+writes by attempting them. RBAC grants are additive, so inspect other bindings as
+well. Keep an independent administrator recovery route. The restricted writer is
+not authorized to rebuild the installation or repair missing unrelated objects.
+
 ## Transfer workflow ownership
 
 1. Verify the concrete handover record with the human. Confirm tools, chart
@@ -110,6 +175,11 @@ listed here.
    stacks may run different image versions; one `demo_stack=all` invocation shares
    image inputs and cannot preserve those differences. Supply the full configuration SHA in
    `expected_config_sha`; the workflow fails before OKE setup if main has changed.
+   Capture the shared fingerprint ConfigMap immediately before each dispatch, with
+   a distinct snapshot for each stack. The pre-OTel capture must include the
+   successful OCI result. Keep these with that dispatch's release and supplemental
+   rollback captures; a snapshot from before both runs is insufficient for an
+   OTel-only rollback.
    Set these variables from the verified record, then dispatch:
 
    ```bash
@@ -150,11 +220,11 @@ listed here.
    Deployment replacement; review those expected effects rather than claiming this
    script handover preserves all pod or Deployment identities. Unchanged identity
    and pod-template adoption tests belong to the later Helmfile transition.
-7. Enable the daily script schedule only after the manual deployment passes. Before
-   enabling it, inspect the stored component fingerprints and intended selection;
-   a changed or missing fingerprint may select additional components. Verify the
-   first scheduled run and record its outcome. That completes Stage 1 operational
-   handover.
+7. Keep the daily script schedule disabled after the two manual runs. Their success
+   verifies only the selected Jaeger components, not the schedule's selection or
+   permissions. Obtain the separate scope/access decision described below before
+   enabling it, then verify the first scheduled run. Stage 1 operational handover
+   remains incomplete until that scheduled-refresh gate passes.
 
 Current recovery tooling remains present during extraction. Its waiver is limited
 to a manual `main` / `otel` / `upgrade` / `opensearch` invocation. It is not accepted
@@ -162,12 +232,72 @@ for `all/all`. Do not use `clean` or bypass recovery checks to make handover pas
 Deletion of recovery tooling and the routine recovery gate is explicitly scheduled
 for the Helmfile conversion.
 
+## Review scheduled scope
+
+The reconciler fingerprints the whole deployment script for each component in its
+stack. The handover guard changes therefore also change the OpenSearch, OTel Demo
+and monitoring fingerprints. Two successful manual Jaeger runs update only their
+own keys. A schedule selects every changed or missing component fingerprint plus
+both Jaeger components; it does not use the manual stack/scope filter. The initial
+apply role and its finite Helm revision window do not authorize this broader or
+repeated work.
+
+From the root of a clean checkout at the proposed merged configuration SHA,
+inspect the actual selection with this read-only command. It uses the same fingerprint and
+selection functions as the reconciler and reads only the shared ConfigMap:
+
+```bash
+: "${config_sha:?Set the proposed merged configuration SHA}"
+python3 - "$config_sha" <<'PY'
+import json
+import subprocess
+import sys
+
+if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != sys.argv[1]:
+    raise SystemExit("Checkout does not match the proposed configuration SHA")
+if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], text=True).strip():
+    raise SystemExit("Checkout has uncommitted changes")
+sys.path.insert(0, "scripts/demo")
+import deploy
+
+state = json.loads(subprocess.check_output([
+    "kubectl", "-n", "default", "get", "configmap", deploy.STATE, "-o", "json",
+], text=True))
+desired = {name: deploy.fingerprint(name) for name in deploy.COMPONENTS}
+selected = deploy.selected_components("schedule", "oci", "jaeger", "upgrade", state.get("data", {}), desired)
+print(json.dumps({"configuration": sys.argv[1], "state_resource_version": state["metadata"]["resourceVersion"],
+                  "selected_components": selected}, indent=2))
+PY
+```
+
+Retain the result and review every selected component, its recovery policy,
+effective permissions, revision allowance and rollback procedure. Rehearse the
+accepted selection with matching permissions before activation, and repeat this
+inspection if configuration or stored fingerprints change. Do not overwrite
+unapplied fingerprints to hide additional selections. The initial manual access
+approval is not approval to broaden permissions or remove the environment reviewer.
+
+While the old maintenance workflows are disabled and the new grant is limited to
+Jaeger, the independent operator owns maintenance and incident recovery through the
+separate administrator route. The new recovery and volume-expansion workflows
+remain outside this grant even though they share `demo-apply`. Record that interim
+owner until their replacement scope is accepted.
+
 ## If the handover fails
 
 Stop new automation first and retain diagnostics. Do not reactivate old workflows
 while the new path can still write. Restore application revisions and supplemental
 specs using the recorded scope, then verify health. See
 [release failure handling](releases.md#failure-handling).
+
+Restore the failed dispatch's application and supplemental resources first. After
+verification, restore only its key in `default/jaeger-demo-deployment-revisions`
+from that dispatch's pre-run capture: `oci-jaeger` or `otel-jaeger`. Use a merge
+patch containing only that entry under `data`; if the key was originally absent,
+use a null value to remove it. Read the current ConfigMap before patching and
+verify afterward that every other entry is unchanged. Never apply an entire old
+ConfigMap snapshot. In particular, an OTel-only rollback must preserve the earlier
+successful OCI fingerprint. An unchanged failed-component key needs no patch.
 
 The old key stays revoked. If returning operational ownership to core is necessary,
 verify a replacement scoped credential and the exact old configuration before
