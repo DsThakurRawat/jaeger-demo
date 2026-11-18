@@ -128,8 +128,8 @@ kubectl auth can-i list services --namespace kube-system
 # Expected no:
 kubectl auth can-i delete deployments.apps/jaeger --namespace default
 kubectl auth can-i delete pods --namespace opensearch
-kubectl auth can-i create pods/exec --namespace opensearch
-kubectl auth can-i create pods/portforward --namespace jaeger
+kubectl auth can-i create pods --subresource=exec --namespace opensearch
+kubectl auth can-i create pods --subresource=portforward --namespace jaeger
 ```
 
 These examples are not the complete permission matrix. Check all required verbs
