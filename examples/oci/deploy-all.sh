@@ -38,7 +38,7 @@ uninstall_release() {
   if ! helm uninstall "$name" --ignore-not-found --wait --timeout "$CLEAN_UNINSTALL_TIMEOUT"; then
     echo "❌ Failed to uninstall Helm release $name within $CLEAN_UNINSTALL_TIMEOUT"
     helm status "$name" || true
-    helm list --all --filter "^${name}$" || true
+    helm list --filter "^${name}$" || true
     return 1
   fi
 }

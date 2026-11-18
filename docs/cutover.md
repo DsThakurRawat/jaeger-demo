@@ -60,7 +60,7 @@ Useful read-only checks, from an authenticated administrative terminal:
 
 ```bash
 gh api repos/jaegertracing/jaeger-demo/commits/main --jq .sha
-helm list --all-namespaces --all
+helm list --all-namespaces -o json
 helm history jaeger --namespace default -o json
 helm history jaeger --namespace jaeger -o json
 kubectl get pvc --all-namespaces
@@ -68,7 +68,10 @@ kubectl get ingress --all-namespaces
 ```
 
 These commands are partial checks, not a complete inventory collector. Review any
-additional captured output before sharing it.
+additional captured output before sharing it. Helm 4.3.2 lists releases in every
+status by default; `--all` is not supported. Keep status filters unset for the
+inventory. The default limit is 256 releases, above the six application releases
+listed here.
 
 ## Transfer workflow ownership
 
