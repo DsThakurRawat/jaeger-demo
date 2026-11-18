@@ -1,0 +1,43 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+# Disposable rehearsal identity. This fixture authorizes no project infrastructure.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: demo-history-envelope
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [secrets]
+        scope: Namespaced
+  matchConditions:
+    - name: test-writer
+      expression: "request.userInfo.username == 'fixture-helm-writer'"
+  variables:
+    - name: records
+      expression: "request.operation == 'UPDATE' ? [oldObject, object] : (request.operation == 'DELETE' ? [oldObject] : [object])"
+  validations:
+    - expression: >-
+        variables.records.all(s,
+          s != null && has(s.type) && s.type == 'helm.sh/release.v1' &&
+          has(s.metadata.labels) &&
+          ['owner', 'name', 'version'].all(k, k in s.metadata.labels) &&
+          s.metadata.labels['owner'] == 'helm' &&
+          s.metadata.labels['version'].matches('^[1-9][0-9]*$') &&
+          s.metadata.name == 'sh.helm.release.v1.' + s.metadata.labels['name'] + '.v' + s.metadata.labels['version'] &&
+          (request.namespace + '/' + s.metadata.labels['name']) in [
+            'default/jaeger', 'default/prometheus', 'jaeger/jaeger',
+            'opensearch/opensearch', 'opensearch/opensearch-dashboards', 'otel-demo/otel-demo'])
+      message: Only canonical Helm history for the six hosted releases is permitted.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: demo-history-envelope
+spec:
+  policyName: demo-history-envelope
+  validationActions: [Deny]
