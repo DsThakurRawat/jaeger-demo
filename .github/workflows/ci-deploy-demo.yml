@@ -150,14 +150,22 @@ jobs:
     - name: Configure kubectl with OKE
       id: configure-oke
       uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
+      env:
+        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
       with:
         cluster: ${{ secrets.OKE_CLUSTER_OCID }}
         enablePrivateEndpoint: false
 
+    - name: Verify OCI CLI version
+      run: python scripts/demo/verify_oci_cli.py
+
     - name: Install Helm
       uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+      with:
+        version: v4.3.2
 
     - name: Reconcile demo components
+      id: reconcile
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
@@ -176,7 +184,7 @@ jobs:
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
     - name: Remove disposable restore pod
-      if: always() && steps.configure-oke.outcome == 'success'
+      if: always() && steps.configure-oke.outcome == 'success' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |

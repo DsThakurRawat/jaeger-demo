@@ -30,6 +30,14 @@ jobs:
         persist-credentials: false
     - name: Install Helm for credential-free chart tests
       uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+      with:
+        version: v4.3.2
+    - name: Install and verify constrained OCI CLI without credentials
+      env:
+        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
+      run: |
+        python -m pip install oci-cli
+        python scripts/demo/verify_oci_cli.py
     - name: Lint shell scripts
       run: shellcheck scripts/demo/*.sh scripts/utils/*.sh
     - name: Lint workflows

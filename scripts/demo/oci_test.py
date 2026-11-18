@@ -14,7 +14,7 @@ import deploy
 
 
 class OciScopeTests(unittest.TestCase):
-    def execute(self, scope, status="deployed", repo_failure="", status_error=""):
+    def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error=""):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             directory = root / "examples/oci"
@@ -38,6 +38,8 @@ if command == "helm":
         if os.environ["TEST_STATUS_ERROR"]:
             raise SystemExit("Error: " + os.environ["TEST_STATUS_ERROR"])
         print("STATUS: " + os.environ["TEST_RELEASE_STATUS"])
+    elif sys.argv[1] == "uninstall" and os.environ["TEST_UNINSTALL_ERROR"]:
+        raise SystemExit(os.environ["TEST_UNINSTALL_ERROR"])
     elif sys.argv[1:3] == ["repo", "add"]:
         if os.environ["TEST_REPO_FAILURE"] == "add":
             raise SystemExit("repository add failed")
@@ -63,7 +65,7 @@ if command == "helm":
                        JAEGER_DEMO_DEPLOY_SCOPE=scope, TEST_COMMAND_LOG=str(log),
                        TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS="false",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
-                       TEST_STATUS_ERROR=status_error)
+                       TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error)
             result = subprocess.run(["bash", str(directory / "deploy-all.sh"), "upgrade"],
                                     env=env, text=True, capture_output=True)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -131,6 +133,19 @@ if command == "helm":
         self.assertIn("Kubernetes cluster unreachable", result.stderr)
         self.assertNotIn("repair it separately", result.stderr)
         self.assertEqual([["helm", "status", "prometheus"]], calls)
+
+    def test_failed_jaeger_uninstall_uses_supported_diagnostic_flags(self):
+        result, calls = self.execute("jaeger", "failed", uninstall_error="uninstall timed out")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("uninstall timed out", result.stderr)
+        diagnostics = [call for call in calls if call[:2] == ["helm", "list"]]
+        self.assertEqual(1, len(diagnostics))
+        self.assertIn("^jaeger$", diagnostics[0])
+        # Parse the emitted command with the installed Helm, without cluster access.
+        parsed = subprocess.run(diagnostics[0] + ["--help"], text=True, capture_output=True)
+        self.assertEqual(0, parsed.returncode, parsed.stderr)
+        self.assertFalse(any(call[0] == "kubectl" or call[:2] in (
+            ["helm", "upgrade"], ["helm", "install"]) for call in calls))
 
     def test_pinned_chart_renders_grafana_liveness_delay(self):
         script = (deploy.ROOT / "examples/oci/deploy-all.sh").read_text()

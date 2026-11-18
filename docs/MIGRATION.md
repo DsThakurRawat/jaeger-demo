@@ -3,7 +3,7 @@
 
 # Hosted-demo migration plan
 
-Status: implementation in progress. Updated November 15, 2026. No production transition has been approved or executed.
+Status: production handover preparation. Updated November 17, 2026. Extraction is merged; no production transition has been approved or executed.
 
 ## Ownership and fixed constraints
 
@@ -32,23 +32,23 @@ Core retains product source, image publishing, ordinary examples and integration
 
 ### 1. Foundation
 
-Status: in progress.
+Status: repository controls verified; Renovate app coverage remains unresolved.
 
 Deliverables:
 
 - Public Apache-2.0 repository and five prerequisite issues: completed
-- Bootstrap CODEOWNERS, credential-free CI, contributor/agent and AI-policy guidance in the extraction PR
-- Verify DCO and Renovate app coverage; configure required PR review and actual CI check names after successful bootstrap checks
+- Bootstrap CODEOWNERS, credential-free CI, contributor/agent and AI-policy guidance delivered in [#3](https://github.com/jaegertracing/jaeger-demo/pull/3)
+- DCO app, required PR review/checks, maintainer ownership and read-only Actions defaults verified; Renovate app coverage still needs verification
 - Version-control this migration plan with status, issue/PR links, decisions, and evidence
 
 Exit criteria:
 
-- [ ] Bootstrap checks exist and pass; required review/check settings are verified without bypassing inherited rules
+- [x] Bootstrap checks exist and pass; required review/check settings are verified and restored after the approved one-time repository review bypass
 - [ ] App installation/access gaps have explicit owners; deployment workflows remain manual-only and production access is not enabled prematurely
 
 ### 2. Extraction
 
-Status: implementation in progress.
+Status: merged in [#3](https://github.com/jaegertracing/jaeger-demo/pull/3); deployment-ready tool pins and handover verification remain pending.
 
 Issues: [jaeger#10189](https://github.com/jaegertracing/jaeger/issues/10189).
 
@@ -61,13 +61,13 @@ Deliverables:
 
 Exit criteria:
 
-- [ ] Local tests and PR CI pass; maintainer-reviewed PR merged to main using a history-preserving merge
-- [ ] Imported authored ancestors and seed history are reachable from target main; source cutoff and adapter audit recorded
+- [x] Local tests and PR CI passed; the user-authorized history-preserving merge is [613f016](https://github.com/jaegertracing/jaeger-demo/commit/613f01691a2a24704f6de00b201149a0975b03d1). The temporary `jkowall` review bypass was removed immediately afterward and original protections were verified restored.
+- [x] All 55 mapped imported authored commits and seed history are reachable from target main; source cutoff and adapter audit recorded
 - [ ] Documentation commands validated; deployment-ready configuration commit pinned; no hosted core assets removed
 
 ### 3. Core hotrod fixture
 
-Status: implementation in progress.
+Status: [jaeger#10194](https://github.com/jaegertracing/jaeger/pull/10194) is open with successful checks; maintainer approval and merge remain pending.
 
 Issues: [jaeger#10190](https://github.com/jaegertracing/jaeger/issues/10190).
 
@@ -84,7 +84,7 @@ Exit criteria:
 
 ### 4. Verbatim script handover
 
-Status: pending.
+Status: preparation in progress. [#4](https://github.com/jaegertracing/jaeger-demo/issues/4) tracks tool freezing and per-stack handover instructions. Live inventory, access verification and the reviewed handover record remain pending.
 
 Requires: foundation, extraction.
 
@@ -216,9 +216,9 @@ Exit criteria:
 
 ## Current evidence and unresolved gates
 
-- Extraction source cutoff: [bcef01d0c848d5be0416c2eee117d5d306416dd7](https://github.com/jaegertracing/jaeger/commit/bcef01d0c848d5be0416c2eee117d5d306416dd7). Independent verification confirmed all 51 imported file blobs match that source and both imported and seed histories are reachable from the import merge. See the README for pending changes to rehome.
+- Extraction source cutoff: [bcef01d0c848d5be0416c2eee117d5d306416dd7](https://github.com/jaegertracing/jaeger/commit/bcef01d0c848d5be0416c2eee117d5d306416dd7). Independent verification confirmed all 51 imported file blobs match that source. After [#3](https://github.com/jaegertracing/jaeger-demo/pull/3) merged on November 17 as `613f016`, all 55 mapped authored commits and the seed remained reachable from main. [Main-branch Demo CI](https://github.com/jaegertracing/jaeger-demo/actions/runs/44193888416) passed. See the README for pending changes to rehome.
 - A preliminary sanitized live inventory was collected November 15, 2026. It omits embedded configuration and is not the full equivalence fixture.
 - Checkout SPM/traffic health has a separate investigation. A fresh healthy baseline is required before either production transition.
-- The Cloud Shell Helm client is not proof of the last release writer; establish the writer major before pinning Helm.
-- DCO/Renovate app coverage and required repository checks remain to be verified.
+- The latest observed [November 17 core writer](https://github.com/jaegertracing/jaeger/actions/runs/44090222704/job/134063110067) used Helm v4.3.2 and OCI CLI 3.96.3; its `default/jaeger` upgrade succeeded at revision 22 despite an earlier recovery failure blocking OTel components. Compare fresh live revisions/timestamps with writer evidence before handover. The Cloud Shell client is not writer evidence.
+- DCO app and required repository controls are verified. The historical-import exception passed at `e169d72`; the approved temporary review bypass used for #3 was removed. Renovate configuration/discovery CI passes, but the app's repository access is still unverified.
 - Add delivering PR links, merged commits and evidence as phases complete. Do not mark planned work complete.
