@@ -14,7 +14,7 @@ Core retains product source, image publishing, ordinary examples and integration
 - Existing OKE cluster, public URLs, DNS, namespaces, PVCs and six application release names
 - Certificate issuers externally managed
 - No ingress-controller/cert-manager upgrade or AI activation
-- Disposable traces do not justify automatic destructive resets
+- Generated traces are disposable. Destructive storage resets require explicit approval.
 - Generated code and submodules untouched
 
 ## Execution contract
@@ -84,7 +84,7 @@ Exit criteria:
 
 ### 4. Verbatim script handover
 
-Status: the [OCI run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431) reached revision 25 and the [OTel run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094) reached revision 14 at configuration `df261c2`. Both demos produced fresh queryable traces. The scheduled scope includes all five components. See the [script schedule](https://github.com/jaegertracing/jaeger-demo/issues/11) for access, rehearsal and first-run verification.
+Status: the [OCI run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431) reached revision 25 and the [OTel run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094) reached revision 14 at configuration `df261c2`. Both demos produced fresh queryable traces. The scheduled scope includes all five components and uses the existing live OpenSearch volume without snapshot or restore. Manual backup and recovery remain available during Stage 1. The later Helmfile plan retains its agreed retirement of those tools. See the [script schedule](https://github.com/jaegertracing/jaeger-demo/issues/11) for access, rehearsal and first-run verification.
 
 Requires: foundation, extraction.
 

@@ -228,11 +228,11 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    enabling it, then verify the first scheduled run. Stage 1 operational handover
    remains incomplete until that scheduled-refresh gate passes.
 
-Current recovery tooling remains present during extraction. Its waiver is limited
-to a manual `main` / `otel` / `upgrade` / `opensearch` invocation. It is not accepted
-for `all/all`. Do not use `clean` or bypass recovery checks to make handover pass.
-Deletion of recovery tooling and the routine recovery gate is explicitly scheduled
-for the Helmfile conversion.
+The manual OpenSearch recovery input defaults to `required`. A manual
+`main` / `otel` / `upgrade` / `opensearch` dispatch can explicitly waive it.
+The 13:00 UTC schedule handles disposable trace history automatically. The
+existing PVC and the live version and trace checks remain part of its upgrade.
+Manual recovery-tool retirement belongs to the later Helmfile conversion.
 
 ## Review scheduled scope
 
@@ -285,17 +285,12 @@ preparation. Confirm the effective value if the organization defines the same
 name. A skipped scheduled job receives no deployment environment or runner.
 Manual runs continue to use `demo-apply`.
 
-1. Review the pinned configuration and both OpenSearch recovery repairs. The
-   [API command issue](https://github.com/jaegertracing/jaeger-demo/issues/10) and
-   [fix](https://github.com/jaegertracing/jaeger-demo/pull/13) cover running the
-   verification probes in their target pods. The
-   [restore startup issue](https://github.com/jaegertracing/jaeger-demo/issues/12)
-   and [fix](https://github.com/jaegertracing/jaeger-demo/pull/14) cover the
-   OpenSearch setting used by the temporary restore pod.
-   Before the first scheduled OpenSearch upgrade, exercise the required snapshot,
-   restore PVC, restore pod, and in-pod verification on the actual CSI storage
-   path and confirm schedulable capacity. Preserve the snapshot and rollback
-   evidence for the release record.
+1. Review the pinned configuration and all selected releases. For OpenSearch,
+   capture the existing StatefulSet, PVC binding, release revision, running
+   image and version. Verify the paired Dashboards version and a fresh trace
+   before the change. The scheduled upgrade preserves the live volume and
+   repeats the version and trace checks afterward. Existing synthetic trace
+   history can be lost. Any destructive reset needs its own approval.
 2. Review the [proposed access and chart inventory](all-five-schedule-access.md).
    Prepare `demo-scheduled` in GitHub, restricted to main, with the approved
    unattended principal and its six OCI connection settings. Confirm the job
@@ -322,8 +317,8 @@ Manual runs continue to use `demo-apply`.
    component summary, and compare all six live release histories and fingerprint
    keys with the pre-run record. A skipped job does not satisfy the stage exit.
    Verify the [per-component checks](releases.md#daily-component-updates) and
-   the public health checks on both demos. Record the run URL, results and any
-   recovery artifacts before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
+   the public health checks on both demos. Record the run URL, versions, trace
+   ID, and PVC binding before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
 
    ```bash
    gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml \
@@ -332,9 +327,13 @@ Manual runs continue to use `demo-apply`.
 
 While the old maintenance workflows are disabled and the new grant is limited to
 Jaeger, the independent operator owns maintenance and incident recovery through the
-separate administrator route. The new recovery and volume-expansion workflows
-remain outside this grant even though they share `demo-apply`. Record that interim
-owner until their replacement scope is accepted.
+separate administrator route. Manual recovery and volume expansion use
+`demo-apply` workflows and require separately authorized storage access.
+The scheduled writer needs neither snapshot privileges nor restore capacity.
+The two manual recovery repairs cover in-pod API requests and OpenSearch startup
+in the isolated restore Pod. Verify them before relying on a manually tested
+recovery point. [In-pod command fix](https://github.com/jaegertracing/jaeger-demo/pull/13),
+[restore startup fix](https://github.com/jaegertracing/jaeger-demo/pull/14).
 
 ## If the handover fails
 
