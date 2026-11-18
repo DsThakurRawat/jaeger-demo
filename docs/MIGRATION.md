@@ -3,7 +3,7 @@
 
 # Hosted-demo migration plan
 
-Updated November 18, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh. Production access for that schedule and its first successful run are pending.
+Updated November 18, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh. The dedicated scheduled identity has read-only cluster access. Its production write grant, schedule activation and first unattended run remain pending. See the [scheduled access and rehearsal plan](all-five-schedule-access.md).
 
 ## Ownership and fixed constraints
 

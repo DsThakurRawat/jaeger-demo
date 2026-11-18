@@ -1,26 +1,36 @@
 <!-- Copyright (c) 2026 The Jaeger Authors. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Proposed access for daily hosted demo updates
+# Production access for daily hosted demo updates
 
-The 13:00 UTC job evaluates five components. Both Jaeger releases refresh their
+When enabled, the 13:00 UTC job evaluates five components. Both Jaeger releases refresh their
 images daily. OpenSearch and Dashboards, the OTel application and OCI monitoring
 apply reviewed input changes. Scheduled OpenSearch upgrades use the existing
 PVC and treat generated trace history as disposable. The separate manual recovery workflow can create a tested backup.
 
-## Next access decision
+## Current read-only access
 
-The proposed first grant creates a dedicated API-only OCI identity and a
-`demo-scheduled` GitHub environment restricted to `main`. Give that identity
-access to authenticate to the existing cluster and read the four demo namespaces'
-workload and readiness objects. Keep Secret reads and deployment writes out of
-this initial grant. The six connection settings belong in that environment, with
-the signing key handled under the project's credential custody procedure. Verify
-the actual principal can read target objects and is denied Secret reads and
-writes. Keep `DEMO_SCHEDULE_ENABLED=false` during setup. The `demo-apply`
-environment retains its reviewer for manual jobs.
+The dedicated `jaeger-demo-scheduled` OCI identity authenticates with an API
+signing key. Its IAM policy permits access to the existing demo cluster only.
+Four Kubernetes RoleBindings allow it to inspect workload and readiness objects
+in `default`, `jaeger`, `opensearch` and `otel-demo`. A separate ClusterRoleBinding
+lets it look up those four namespaces by name. These bindings grant no access to
+Secrets, Pod logs or exec, and no workload writes.
 
-The subsequent write-access decision covers the candidate and rollback release
+On November 18, 2026, maintainers authenticated as the scheduled identity and
+verified the expected cluster and four namespace identities. The Kubernetes
+authorization API returned 208 expected allows and 180 expected denials. The
+identity also completed 18 direct reads of non-Secret objects and two bounded
+watches.
+
+The `demo-scheduled` GitHub environment holds the six OCI connection settings.
+It is restricted to `main` and has no per-run reviewer. The
+`DEMO_SCHEDULE_ENABLED` switch remains off. Manual deployments continue to use
+the reviewer-gated `demo-apply` environment.
+
+## Deployment access awaiting approval
+
+The write-access decision covers the candidate and rollback release
 objects, the six Helm histories, live verification and the privileged monitoring
 hooks described below. Helm requires Secret GET/LIST in four namespaces. A
 credential with those permissions can read unrelated Secrets, including AI and
@@ -71,4 +81,4 @@ Kubernetes RBAC `resourceNames` can select existing objects for named actions. I
 3. Verify sufficient headroom for the existing OpenSearch StatefulSet, preserve the live PVC binding, and compare the actual OpenSearch and Dashboards versions and a newly written trace after upgrade. Scheduling omits backups. An incompatible storage change can make old synthetic traces unavailable. If repair requires a destructive storage reset, pause the writers and seek approval for the exact affected resources. Historical trace preservation is available under the separately authorized [manual recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md).
 4. Before the first scheduled write, capture all six releases and supplemental state, check that all five components can run or give a clear reason for each skip, and verify prior/candidate/rollback scope. After the first run inspect each release and component fingerprint plus fresh write/read traces, finite metrics under observed traffic, public UI, TLS, Grafana and Dashboards. On failure drain new writers, preserve successful siblings and restore only the affected release and its fingerprint after inspection.
 
-The [Helm history rehearsal](../scripts/demo/rehearsals/helm-history/README.md) ran Helm 4.3.2 against a disposable Kubernetes API server for all six release identities. Each fixture pruned an old revision, failed an upgrade on an immutable ConfigMap, rolled back to a new deployed revision, and retained the ConfigMap's data and UID. Eleven negative checks covered the Secret admission rules and the writer's RBAC. The live applications, monitoring hooks and scheduled principal still require verification, including that the original storage binding survives the in-place upgrade. Production access and the first unattended run remain pending.
+The [Helm history rehearsal](../scripts/demo/rehearsals/helm-history/README.md) ran Helm 4.3.2 against a disposable Kubernetes API server for all six release identities. Each fixture pruned an old revision, failed an upgrade on an immutable ConfigMap, rolled back to a new deployed revision, and retained the ConfigMap's data and UID. Eleven negative checks covered the Secret admission rules and the writer's RBAC. The live applications and monitoring hooks still need a rehearsal of the proposed write access, including a check that the original storage binding survives the in-place upgrade. The production write grant, activation and first unattended run remain pending.
