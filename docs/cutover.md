@@ -255,7 +255,7 @@ import sys
 
 if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != sys.argv[1]:
     raise SystemExit("Checkout does not match the proposed configuration SHA")
-if subprocess.run(["git", "diff", "--quiet", "HEAD"]).returncode:
+if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], text=True).strip():
     raise SystemExit("Checkout has uncommitted changes")
 sys.path.insert(0, "scripts/demo")
 import deploy
