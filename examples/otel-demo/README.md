@@ -132,7 +132,8 @@ workflow before an OpenSearch version upgrade. The workflow:
 2. flushes OpenSearch and creates a retained `VolumeSnapshot`;
 3. restores it to a new PVC;
 4. boots the exact live OpenSearch and Jaeger image digests without a Service
-   or ingress; and
+   or ingress. The OpenSearch image entrypoint reads `DISABLE_SECURITY_PLUGIN`
+   and supplies the setting for the loopback-only database.
 5. validates cluster recovery, every pre-snapshot Jaeger index, template, and
    alias mapping, document floors, and representative service and trace queries
    before marking the snapshot tested.
