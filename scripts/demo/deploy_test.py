@@ -37,6 +37,90 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(["otel-jaeger", "oci-jaeger"], deploy.selected_components(
             "schedule", "oci", "jaeger", "upgrade", self.desired, self.desired))
 
+    def test_schedule_reconciles_all_five_components_when_inputs_change(self):
+        self.assertEqual(list(deploy.COMPONENTS), deploy.selected_components(
+            "schedule", "oci", "jaeger", "upgrade", {}, self.desired))
+        for name in ("opensearch", "otel-demo", "oci-monitoring"):
+            previous = dict(self.desired, **{name: "old"})
+            self.assertEqual({name, "oci-jaeger", "otel-jaeger"}, set(deploy.selected_components(
+                "schedule", "oci", "jaeger", "upgrade", previous, self.desired)))
+
+    @patch("deploy.handover.read", return_value="default")
+    @patch("deploy.run")
+    def test_schedule_requires_existing_revision_state(self, run, read):
+        run.return_value.stdout = ""
+        with self.assertRaisesRegex(ValueError, "existing deployment revision"):
+            deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule"))
+        self.assertEqual(1, run.call_count)
+
+    @patch("deploy.handover.read")
+    @patch("deploy.run")
+    def test_schedule_rejects_invalid_context_clean_and_recovery_policy_before_mutation(self, run, read):
+        for overrides, namespace in (({"HELM_DRIVER": "configmap"}, ""), ({"HELM_NAMESPACE": "test"}, ""),
+                                     ({"HELM_KUBECONTEXT": "another-cluster"}, ""),
+                                     ({}, "other"), ({"JAEGER_DEMO_DEPLOY_MODE": "clean"}, ""),
+                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "waive"}, ""),
+                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "invalid"}, "")):
+            with self.subTest(overrides=overrides, namespace=namespace):
+                read.return_value = namespace
+                with self.assertRaises(ValueError):
+                    deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule", **overrides))
+                run.assert_not_called()
+
+    @patch("deploy.run")
+    def test_schedule_checks_all_existing_releases_before_mutating_component(self, run):
+        run.return_value.stdout = json.dumps({"info": {"status": "deployed"}})
+        for component in deploy.COMPONENTS:
+            deploy.check_scheduled_releases(component)
+        self.assertEqual([("opensearch", "opensearch"), ("opensearch", "opensearch-dashboards"),
+                          ("jaeger", "jaeger"), ("otel-demo", "otel-demo"),
+                          ("default", "jaeger"), ("default", "prometheus")],
+                         [(args[4], args[2]) for call in run.call_args_list for args in [call.args[0]]])
+
+    @patch("deploy.run")
+    def test_pending_or_missing_storage_stops_before_recovery(self, run):
+        for error in (subprocess.CalledProcessError(1, "helm status"), None):
+            with self.subTest(error=error):
+                run.reset_mock()
+                healthy = subprocess.CompletedProcess([], 0, stdout='{"info":{"status":"deployed"}}')
+                pending = subprocess.CompletedProcess([], 0, stdout='{"info":{"status":"pending-upgrade"}}')
+                run.side_effect = [healthy, error or pending]
+                with self.assertRaises((deploy.ScheduledReleaseError, subprocess.CalledProcessError)):
+                    deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="schedule"))
+                self.assertEqual([["helm", "status"]] * 2, [c.args[0][:2] for c in run.call_args_list])
+
+    @patch("deploy.run")
+    def test_failed_monitoring_can_retry_in_place_but_failed_jaeger_cannot(self, run):
+        run.return_value.stdout = '{"info":{"status":"failed"}}'
+        deploy.check_scheduled_releases("oci-monitoring")
+        for name in ("oci-jaeger", "otel-jaeger"):
+            with self.subTest(component=name), self.assertRaises(deploy.ScheduledReleaseError):
+                deploy.check_scheduled_releases(name)
+
+    @patch("deploy.handover.read", return_value="default")
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_schedule_patches_only_its_key_and_does_not_recreate_deleted_state(self, run, component, resolve, read):
+        for deleted in (False, True):
+            state = self.desired.copy()
+            def command(args, **kwargs):
+                if args[3] == "get":
+                    return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": state}))
+                self.assertEqual(["kubectl", "-n", "default", "patch", "configmap", deploy.STATE,
+                                  "--type=merge", "-p"], args[:-1])
+                patch = json.loads(args[-1])
+                self.assertEqual({"data": {component.call_args.args[0]: self.desired[component.call_args.args[0]]}}, patch)
+                if deleted:
+                    raise subprocess.CalledProcessError(1, args)
+                state["otel-demo"] = "independent-operator-update"
+                state.update(patch["data"])
+            run.side_effect = command
+            with self.subTest(deleted=deleted):
+                self.assertEqual(int(deleted), deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule")))
+                if not deleted:
+                    self.assertEqual("independent-operator-update", state["otel-demo"])
+
     def test_manual_routing_and_clean(self):
         for name, (stack, scope, _) in deploy.COMPONENTS.items():
             self.assertEqual([name], deploy.selected_components("workflow_dispatch", stack, scope, "upgrade", {}, self.desired))

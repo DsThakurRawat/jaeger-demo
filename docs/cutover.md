@@ -165,9 +165,11 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    Do not cancel an active Helm operation merely to expedite the handover. Inspect
    its state and use a reviewed completion/repair procedure. Matching concurrency
    group names do not coordinate across repositories.
-4. Revoke the old OCI key only after the old runs have drained and new access has
-   been verified. Record the credential identity and revocation result without the
-   key value. Retain a tested route to the cluster for recovery.
+4. After the old runs drain, retire their delivery of signing credentials. During
+   this handover the operator removed core's repository Actions secret
+   `OCI_CLI_KEY_CONTENT`. The corresponding maintainer OCI signing key remains
+   active because other consumers could not be ruled out. Record the credential
+   disposition and retain the tested independent recovery route.
 5. Enable the new manual deployment path if GitHub has disabled it. Dispatch only
    the reviewed inputs from main. Transfer the OCI demo first, verify it, then
    transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger`,
@@ -277,6 +279,52 @@ inspection if configuration or stored fingerprints change. Do not overwrite
 unapplied fingerprints to hide additional selections. The initial manual access
 approval is not approval to broaden permissions or remove the environment reviewer.
 
+The maintainers selected all five components for the 13:00 UTC job. Keep the
+repository Actions variable `DEMO_SCHEDULE_ENABLED` set to `false` through
+preparation. Confirm the effective value if the organization defines the same
+name. A skipped scheduled job receives no deployment environment or runner.
+Manual runs continue to use `demo-apply`.
+
+1. Review the pinned configuration, the [OpenSearch recovery fix](https://github.com/jaegertracing/jaeger-demo/issues/10)
+   and its [implementation](https://github.com/jaegertracing/jaeger-demo/pull/12).
+   Before the first scheduled OpenSearch upgrade, exercise the required snapshot,
+   restore PVC, restore pod, and in-pod verification on the actual CSI storage
+   path and confirm schedulable capacity. Preserve the snapshot and rollback
+   evidence for the release record.
+2. Review the [proposed access and chart inventory](all-five-schedule-access.md).
+   Prepare `demo-scheduled` in GitHub, restricted to main, with the approved
+   unattended principal and its six OCI connection settings. Confirm the job
+   cannot inherit other deployment credentials from repository or organization
+   secrets. Verify the five-component Kubernetes and OCI permissions, including
+   future Helm revisions, pruning and rollback in each release namespace. The
+   schedule must succeed with that principal. Keep the human reviewer on
+   `demo-apply` for manual jobs and maintenance.
+3. With explicit activation approval, enable the repository variable for the next
+   13:00 UTC event. To pause future scheduled jobs, set it to `false`. Inspect
+   and drain any queued or running writers before changing access or rolling back.
+
+   ```bash
+   gh variable set DEMO_SCHEDULE_ENABLED --body true --repo jaegertracing/jaeger-demo
+   ```
+
+   To pause:
+
+   ```bash
+   gh variable set DEMO_SCHEDULE_ENABLED --body false --repo jaegertracing/jaeger-demo
+   ```
+
+4. Find the scheduled run, check its event, configuration SHA, environment and
+   component summary, and compare all six live release histories and fingerprint
+   keys with the pre-run record. A skipped job does not satisfy the stage exit.
+   Verify the [per-component checks](releases.md#daily-component-updates) and
+   the public health checks on both demos. Record the run URL, results and any
+   recovery artifacts before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
+
+   ```bash
+   gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml \
+     --event schedule --limit 5 --json databaseId,headSha,status,conclusion,url
+   ```
+
 While the old maintenance workflows are disabled and the new grant is limited to
 Jaeger, the independent operator owns maintenance and incident recovery through the
 separate administrator route. The new recovery and volume-expansion workflows
@@ -299,9 +347,9 @@ verify afterward that every other entry is unchanged. Never apply an entire old
 ConfigMap snapshot. In particular, an OTel-only rollback must preserve the earlier
 successful OCI fingerprint. An unchanged failed-component key needs no patch.
 
-The old key stays revoked. If returning operational ownership to core is necessary,
+Keep the retired Actions secret absent from core. If returning operational ownership to core is necessary,
 verify a replacement scoped credential and the exact old configuration before
-enabling that path. Do not copy back the retired key or enable both repositories.
+enabling that path. Give exactly one repository write access to production at a time.
 Do not remove the legacy fingerprint ConfigMap during handover.
 
 ## Later Helmfile adoption

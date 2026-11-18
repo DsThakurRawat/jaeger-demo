@@ -3,7 +3,7 @@
 
 # Hosted-demo migration plan
 
-Status: production handover preparation. Updated November 17, 2026. Extraction is merged; no production transition has been approved or executed.
+Updated November 18, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh. Production access for that schedule and its first successful run are pending.
 
 ## Ownership and fixed constraints
 
@@ -48,7 +48,7 @@ Exit criteria:
 
 ### 2. Extraction
 
-Status: merged in [#3](https://github.com/jaegertracing/jaeger-demo/pull/3); deployment-ready tool pins and handover verification remain pending.
+Status: merged in [#3](https://github.com/jaegertracing/jaeger-demo/pull/3). Tool pins, the restricted handover guards and the deployed OCI configuration are recorded in [#5](https://github.com/jaegertracing/jaeger-demo/pull/5), [#7](https://github.com/jaegertracing/jaeger-demo/pull/7) and [#9](https://github.com/jaegertracing/jaeger-demo/pull/9).
 
 Issues: [jaeger#10189](https://github.com/jaegertracing/jaeger/issues/10189).
 
@@ -84,7 +84,7 @@ Exit criteria:
 
 ### 4. Verbatim script handover
 
-Status: preparation in progress. [#4](https://github.com/jaegertracing/jaeger-demo/issues/4) tracks tool freezing and per-stack handover instructions; [#6](https://github.com/jaegertracing/jaeger-demo/issues/6) adds guards for the restricted existing-release upgrade. Live inventory, access verification and the reviewed handover record remain pending.
+Status: the [OCI run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431) reached revision 25 and the [OTel run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094) reached revision 14 at configuration `df261c2`. Both demos produced fresh queryable traces. The scheduled scope includes all five components. See the [script schedule](https://github.com/jaegertracing/jaeger-demo/issues/11) for access, rehearsal and first-run verification.
 
 Requires: foundation, extraction.
 
@@ -94,15 +94,15 @@ Deliverables:
 - Prepare immutable handover inputs, resource/route/storage diff and precise rollback procedure
 - Prepare access plan; after human verification, provision fresh new-repo OCI access and separate plan/apply identities, verify permissions without deployment writes
 - Human verifies handover bundle; disable all three old workflows and drain running AND pending runs
-- Revoke old deployment key only after draining; enable the new manual path and deploy the verified bundle
+- Retire core delivery of the signing key after draining, then deploy the verified bundle through the new manual path
 - Verify both stacks, then enable the script schedule and verify one scheduled refresh
 
 Exit criteria:
 
-- [ ] Healthy baseline verified before first production change and recorded with bundle digest
-- [ ] Human-verified handover uses merged main and exact frozen inputs; old runs drained and old key revoked
+- [x] Healthy baseline verified before the first production change and recorded with the reviewed configuration and rollback captures
+- [x] Human-verified handover used merged main and frozen inputs. All three old workflows were disabled and drained. Core’s Actions signing secret was deleted. The shared maintainer OCI key remains active.
 - [ ] Manual deployment and scheduled refresh succeed without unexplained resource, route or storage changes
-- [ ] Runbook and release record include actual revisions, verification and rollback evidence
+- [x] The manual handover records contain the actual revisions, verification and per-stack rollback inputs
 
 ### 5. Helmfile conversion
 
@@ -218,7 +218,7 @@ Exit criteria:
 
 - Extraction source cutoff: [bcef01d0c848d5be0416c2eee117d5d306416dd7](https://github.com/jaegertracing/jaeger/commit/bcef01d0c848d5be0416c2eee117d5d306416dd7). Independent verification confirmed all 51 imported file blobs match that source. After [#3](https://github.com/jaegertracing/jaeger-demo/pull/3) merged on November 17 as `613f016`, all 55 mapped authored commits and the seed remained reachable from main. [Main-branch Demo CI](https://github.com/jaegertracing/jaeger-demo/actions/runs/44193888416) passed. See the README for pending changes to rehome.
 - A preliminary sanitized live inventory was collected November 15, 2026. It omits embedded configuration and is not the full equivalence fixture.
-- Checkout SPM/traffic health has a separate investigation. A fresh healthy baseline is required before either production transition.
-- The latest observed [November 17 core writer](https://github.com/jaegertracing/jaeger/actions/runs/44090222704/job/134063110067) used Helm v4.3.2 and OCI CLI 3.96.3; its `default/jaeger` upgrade succeeded at revision 22 despite an earlier recovery failure blocking OTel components. Compare fresh live revisions/timestamps with writer evidence before handover. The Cloud Shell client is not writer evidence.
+- Post-handover checks found fresh traces on both demos and finite checkout SPM during observed checkout traffic. Refresh the baseline before schedule activation and later Helmfile adoption.
+- The historical [November 17 core writer](https://github.com/jaegertracing/jaeger/actions/runs/44090222704/job/134063110067) used Helm v4.3.2 and OCI CLI 3.96.3; its `default/jaeger` upgrade succeeded at revision 22 despite an earlier recovery failure blocking OTel components. The November 18 manual handover runs above supersede that revision. Compare live revisions with writer evidence before each transition.
 - DCO app and required repository controls are verified. The historical-import exception passed at `e169d72`; the approved temporary review bypass used for #3 was removed. Renovate configuration/discovery CI passes, but the app's repository access is still unverified.
 - Add delivering PR links, merged commits and evidence as phases complete. Do not mark planned work complete.

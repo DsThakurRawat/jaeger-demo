@@ -84,12 +84,39 @@ def resolve_snapshots(env):
                 env[key] = value
 
 
+class ScheduledReleaseError(RuntimeError):
+    """A selected release cannot be upgraded in place."""
+
+
+def check_scheduled_releases(component):
+    # The daily job updates the existing installation. Check both storage releases
+    # before starting recovery, and check Jaeger before replacing OTel HotROD.
+    releases = {
+        "opensearch": ("opensearch", ("opensearch", "opensearch-dashboards")),
+        "otel-jaeger": ("jaeger", ("jaeger",)),
+        "otel-demo": ("otel-demo", ("otel-demo",)),
+        "oci-jaeger": ("default", ("jaeger",)),
+        "oci-monitoring": ("default", ("prometheus",)),
+    }
+    namespace, names = releases[component]
+    for name in names:
+        result = run(["helm", "status", name, "--namespace", namespace, "-o", "json"], capture_output=True)
+        release = json.loads(result.stdout)
+        status = release["info"]["status"]
+        # Non-atomic chart upgrades may leave a failed release to repair in
+        # place. Neither Jaeger path may reinstall or replace a failed release.
+        if status != "deployed" and not (status == "failed" and name != "jaeger"):
+            raise ScheduledReleaseError(f"Cannot schedule {namespace}/{name} with Helm status {status}")
+
+
 def deploy_component(component, env):
     stack, scope, _ = COMPONENTS[component]
     directory = ROOT / "examples" / ("otel-demo" if stack == "otel" else "oci")
     child_env = dict(env, JAEGER_DEMO_STACK=stack, JAEGER_DEMO_DEPLOY_SCOPE=scope,
                      JAEGER_OTEL_DEMO_DEPLOY_SCOPE=scope)
     mode = env.get("JAEGER_DEMO_DEPLOY_MODE", "upgrade")
+    if env.get("GITHUB_EVENT_NAME") == "schedule":
+        check_scheduled_releases(component)
     if scope == "opensearch" and mode == "upgrade" and env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "required":
         if env.get("GITHUB_OUTPUT"):
             with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
@@ -119,6 +146,10 @@ def reconcile(env, root=ROOT):
             event != "workflow_dispatch" or env.get("GITHUB_REF") != "refs/heads/main"
             or stack != "otel" or scope != "opensearch" or mode != "upgrade"):
         raise ValueError("Recovery waiver requires a manual main/otel/upgrade/opensearch deployment")
+    if event == "schedule":
+        if env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") != "required":
+            raise ValueError("Scheduled deployments require OpenSearch recovery")
+        handover.check_helm_context(env)
     if event == "workflow_dispatch" and mode == "clean":
         # Clean is an explicit whole-stack operation, not a per-component loop.
         resolve_snapshots(env)
@@ -131,6 +162,8 @@ def reconcile(env, root=ROOT):
 
     result = run(["kubectl", "-n", "default", "get", "configmap", STATE,
                   "--ignore-not-found", "-o", "json"], capture_output=True)
+    if event == "schedule" and not result.stdout.strip():
+        raise ValueError("Scheduled upgrades require the existing deployment revision ConfigMap")
     previous = json.loads(result.stdout).get("data", {}) if result.stdout.strip() else {}
     desired = {name: fingerprint(name, root) for name in COMPONENTS}
     selected = selected_components(event, stack, scope, mode, previous, desired)
@@ -159,14 +192,18 @@ def reconcile(env, root=ROOT):
                 snapshots_resolved = True
             print(f"::group::Deploy {name}", flush=True)
             deploy_component(name, env)
-            updated = dict(previous, **{name: desired[name]})
-            state = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
-                "name": STATE, "namespace": "default"}, "data": updated}
-            run(["kubectl", "apply", "-f", "-"], input=json.dumps(state))
-            previous = updated
+            if event == "schedule":
+                patch = json.dumps({"data": {name: desired[name]}})
+                run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
+            else:
+                updated = dict(previous, **{name: desired[name]})
+                state = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
+                    "name": STATE, "namespace": "default"}, "data": updated}
+                run(["kubectl", "apply", "-f", "-"], input=json.dumps(state))
+                previous = updated
             print(f"{name}: deployed successfully", flush=True)
-        except subprocess.CalledProcessError as error:
-            print(f"::error::{name}: deployment failed ({error.returncode})", flush=True)
+        except (subprocess.CalledProcessError, ScheduledReleaseError) as error:
+            print(f"::error::{name}: {error}", flush=True)
             failures.append(name)
         finally:
             print("::endgroup::", flush=True)

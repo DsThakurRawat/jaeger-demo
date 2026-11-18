@@ -181,7 +181,7 @@ run_jaeger_deploy() {
     source "$1"
     MODE="$2"
     EXPECTED_CONFIG_SHA="${3:-}"
-    DEPLOY_SCOPE=jaeger
+    DEPLOY_SCOPE="${4:-jaeger}"
     RUN_PUBLIC_SMOKE_TESTS=false
     log() { :; }
     need() { :; }
@@ -189,7 +189,9 @@ run_jaeger_deploy() {
     check_handover() { :; }
     cleanup() { :; }
     clone_jaeger_v2() { :; }
-    deploy_opensearch_releases() { :; }
+    wait_for_statefulset() { :; }
+    wait_for_opensearch_dashboards() { :; }
+    bash() { printf "bash %s\n" "$*"; }
     adopt_resource_for_helm_release() { :; }
     delete_deployment_before_helm_upgrade() { :; }
     wait_for_deployment() { :; }
@@ -203,7 +205,7 @@ run_jaeger_deploy() {
       fi
     }
     main
-  ' _ "$SCRIPT" "$1" "${2:-}"
+  ' _ "$SCRIPT" "$1" "${2:-}" "${3:-jaeger}"
 }
 
 testJaegerUpgradeIncludesSharedUIConfig() {
@@ -234,6 +236,62 @@ testHandoverHelmCommandCannotInstallOrCreateNamespace() {
   assertEquals "handover Jaeger upgrade should succeed" 0 "$rc"
   assertContains "$output" "helm upgrade --wait --atomic jaeger"
   assertContains "$output" "--namespace jaeger"
+  assertNotContains "$output" "--install"
+  assertNotContains "$output" "--create-namespace"
+}
+
+testScheduledIngressUpdateFailureStopsReconciliation() {
+  local output rc
+  output=$(GITHUB_EVENT_NAME=schedule run_ingress_check "" ingress-jaeger.yaml)
+  rc=$?
+  assertNotEquals "failed ingress update must fail the scheduled component" 0 "$rc"
+  assertEquals "stop at the first failed ingress" 1 "$(wc -l < "$SHUNIT_TMPDIR/ingress-commands" | tr -d ' ')"
+}
+
+testScheduledHotrodMutationsRequireExistingReleaseOwnership() {
+  local ownership operation output rc
+  for ownership in Helm/jaeger/jaeger Helm/default/jaeger Helm/jaeger/foreign "" denied; do
+    for operation in serviceaccount service deployment; do
+      output=$(GITHUB_EVENT_NAME=schedule bash -c '
+        source "$1"
+        log() { :; }
+        check_handover() { :; }
+        kubectl() {
+          if [[ "$1" == get && "$*" == *jsonpath=* ]]; then
+            [[ "$OWNER" != denied ]] || return 1
+            printf "%s" "$OWNER"
+          else
+            printf "mutation %s\n" "$*"
+          fi
+        }
+        OWNER="$2"
+        if [[ "$3" == deployment ]]; then
+          delete_deployment_before_helm_upgrade jaeger jaeger-hotrod
+        else
+          adopt_resource_for_helm_release jaeger "$3" jaeger-hotrod jaeger
+        fi
+      ' _ "$SCRIPT" "$ownership" "$operation")
+      rc=$?
+      if [[ "$ownership" == Helm/jaeger/jaeger ]]; then
+        assertEquals "owned $operation" 0 "$rc"
+        assertNotContains "$output" mutation
+      else
+        assertNotEquals "unowned/unreadable $operation" 0 "$rc"
+        assertNotContains "$output" mutation
+      fi
+    done
+  done
+}
+
+testScheduledOtelUpgradesCannotInstallOrCreateNamespaces() {
+  local output
+  output=$(GITHUB_EVENT_NAME=schedule run_jaeger_deploy upgrade "" all)
+  assertEquals "scheduled upgrade should succeed" 0 "$?"
+  assertContains "$output" "opensearch-recovery.sh verify"
+  assertContains "$output" "helm upgrade opensearch opensearch/opensearch"
+  assertContains "$output" "helm upgrade opensearch-dashboards opensearch/opensearch-dashboards"
+  assertContains "$output" "helm upgrade --wait --atomic jaeger"
+  assertContains "$output" "helm upgrade otel-demo open-telemetry/opentelemetry-demo"
   assertNotContains "$output" "--install"
   assertNotContains "$output" "--create-namespace"
 }

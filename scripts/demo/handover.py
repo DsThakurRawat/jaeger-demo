@@ -61,14 +61,20 @@ def required_objects(stack):
     return objects
 
 
+def check_helm_context(env):
+    if env.get("HELM_DRIVER", "secret") not in ("", "secret", "secrets"):
+        raise ValueError("Hosted upgrades require Helm Secret storage")
+    if env.get("HELM_KUBECONTEXT"):
+        raise ValueError("Hosted upgrades require Helm to use the current kubectl context")
+    namespace = read(["kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}"]).strip()
+    if namespace not in ("", "default") or env.get("HELM_NAMESPACE", "default") not in ("", "default"):
+        raise ValueError("Hosted upgrades require the implicit kubectl and Helm namespace to be default")
+
+
 def preflight(env, stack, mode, scope):
     if not validate_inputs(env, stack, mode, scope):
         return
-    if env.get("HELM_DRIVER", "secret") not in ("", "secret", "secrets"):
-        raise ValueError("Handover requires Helm Secret storage")
-    namespace = read(["kubectl", "config", "view", "--minify", "-o", "jsonpath={..namespace}"]).strip()
-    if namespace not in ("", "default") or env.get("HELM_NAMESPACE", "default") not in ("", "default"):
-        raise ValueError("Handover requires the implicit kubectl and Helm namespace to be default")
+    check_helm_context(env)
     # Both releases must be healthy before either ownership transfer. Never infer
     # absence from a denied read or let OCI's reinstall fallback handle this path.
     for namespace in ("default", "jaeger"):

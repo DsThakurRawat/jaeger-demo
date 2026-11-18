@@ -15,7 +15,7 @@ import deploy
 
 class OciScopeTests(unittest.TestCase):
     def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error="",
-                reviewed_handover=False, preflight_status="deployed"):
+                reviewed_handover=False, preflight_status="deployed", event="workflow_dispatch"):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             directory = root / "examples/oci"
@@ -74,7 +74,7 @@ elif command == "kubectl" and "get" in sys.argv:
                        TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS="false",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
                        TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error,
-                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="")
+                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="", GITHUB_EVENT_NAME=event)
             if reviewed_handover:
                 env.update(EXPECTED_CONFIG_SHA="a" * 40, GITHUB_SHA="a" * 40,
                            GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/main",
@@ -94,6 +94,18 @@ elif command == "kubectl" and "get" in sys.argv:
         checkouts = [call for call in calls if "checkout" in call]
         self.assertEqual(1, len(checkouts))
         self.assertIn("--detach", checkouts[0])
+
+    def test_scheduled_jaeger_cannot_install_or_reinstall(self):
+        for state in ("", "failed", "pending-upgrade"):
+            with self.subTest(state=state):
+                result, calls = self.execute("jaeger", status=state, event="schedule")
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(any(c[:2] in (["helm", "uninstall"], ["helm", "upgrade"]) for c in calls))
+        result, calls = self.execute("all", event="schedule")
+        self.assertEqual(0, result.returncode, result.stderr)
+        upgrades = [call for call in calls if call[:2] == ["helm", "upgrade"]]
+        self.assertEqual(2, len(upgrades))
+        self.assertTrue(all("--install" not in call for call in upgrades))
 
     def test_monitoring_scope_bootstraps_fresh_repository_without_touching_jaeger(self):
         result, calls = self.execute("monitoring")

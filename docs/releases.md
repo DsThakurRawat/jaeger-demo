@@ -11,8 +11,9 @@ it does not create a second Jaeger product version or image-publishing pipeline.
 ## Current stage
 
 The extraction retains the existing shell scripts and Python reconciler.
-Production workflows are manual-only until the handover in
-[cutover.md](cutover.md) is accepted. The future Helmfile runner, generated immutable
+Manual deployments use a reviewed GitHub environment. The
+[script schedule](cutover.md#review-scheduled-scope) has its own environment
+and activation switch. The future Helmfile runner, generated immutable
 bundle, read-only `plan` operation and automatic image-compatibility gate are not
 implemented by extraction. Track them in
 [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
@@ -126,12 +127,28 @@ payloads.
 6. Record the result. Diagnose failures before retrying or rolling back; do not
    promote an unverified result to last-known-good state.
 
-Reviewed chart changes and scheduled image refreshes are separate deployment
-causes. Renovate checks daily, waits seven days, and opens reviewed updates without
-automerge; preserve the paired OpenSearch/Dashboards 3.x policy. Stage 1 schedules
-remain disabled until the manual handover passes. The first scheduled run also
-needs verification because the reconciler may select changed fingerprints beyond
-the two Jaeger components.
+## Daily component updates
+
+The scheduled job resolves upstream Jaeger and HotROD snapshot tags independently
+and refreshes both Jaeger releases daily. Renovate proposes chart, image and
+dependency changes for maintainer review, with a seven-day release-age policy
+and manual merges. The next daily reconciliation uses the reviewed configuration
+on main. Unchanged storage, monitoring and sample-application inputs retain their
+current releases. Each successful component records its fingerprint in
+`default/jaeger-demo-deployment-revisions`.
+
+| Component | Helm releases | Daily action and checks |
+| --- | --- | --- |
+| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, run the retained snapshot/restore test, verify the recovery point, upgrade the paired chart versions, then verify the reported version and write/read a fresh trace. |
+| OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
+| OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. |
+| OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
+| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
+
+An OpenSearch failure holds both dependent OTel components. Independent OCI
+updates may succeed in the same run. A failed component keeps its preceding
+fingerprint. Inspect each component outcome and its live Helm history before a
+retry, especially when OpenSearch upgraded before Dashboards failed.
 
 ## Failure handling
 

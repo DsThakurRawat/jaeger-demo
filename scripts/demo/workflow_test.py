@@ -45,8 +45,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(source.index('    - name: Configure kubectl with OKE\n'), check)
         self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
 
-    def test_production_workflows_are_manual_main_only_and_environment_scoped(self):
-        for filename in ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
+    def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
+        for filename in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
             with self.subTest(workflow=filename):
                 source = (WORKFLOWS / filename).read_text()
                 events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
@@ -54,6 +54,27 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn("    if: github.ref == 'refs/heads/main'\n    environment: demo-apply", source)
                 self.assertIn('  group: jaeger-otel-demo-opensearch-recovery\n  cancel-in-progress: false', source)
                 self.assertNotIn('pull_request_target', source)
+
+    def test_daily_activation_and_manual_jobs_use_separate_environments(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
+        self.assertEqual(['schedule', 'workflow_dispatch'], re.findall(r'^  ([a-z_]+):', events, re.MULTILINE))
+        self.assertIn("  schedule:\n    - cron: '0 13 * * *'\n", events)
+        job = source.split('\njobs:\n  deploy:\n', 1)[1]
+        condition = ' '.join(job.split('    if: >-\n', 1)[1].split('\n    environment:', 1)[0].split())
+        self.assertIn("    environment: ${{ github.event_name == 'schedule' && 'demo-scheduled' || 'demo-apply' }}", job)
+        self.assertIn('    concurrency:\n      group: jaeger-otel-demo-opensearch-recovery\n      cancel-in-progress: false', job)
+        self.assertNotIn('\nconcurrency:', source)
+        for event in ('schedule', 'workflow_dispatch', 'push', 'pull_request_target'):
+            for ref in ('refs/heads/main', 'refs/heads/topic', 'refs/tags/main'):
+                for switch in ('true', 'false', '', 'yes'):
+                    with self.subTest(event=event, ref=ref, switch=switch):
+                        expression = condition.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
+                        expression = expression.replace('vars.DEMO_SCHEDULE_ENABLED', repr(switch))
+                        expression = expression.replace('&&', 'and').replace('||', 'or')
+                        self.assertEqual(ref == 'refs/heads/main' and
+                                         (event == 'workflow_dispatch' or (event == 'schedule' and switch == 'true')),
+                                         eval(expression, {'__builtins__': {}}, {}))
 
     def test_config_guard_accepts_only_matching_full_sha_or_no_override(self):
         script = step_script('Verify the reviewed configuration revision')

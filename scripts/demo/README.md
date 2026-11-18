@@ -12,15 +12,15 @@ direct image overrides and load-generator requirements are tracked separately.
 PostgreSQL, Valkey, and OpenSearch stay within their configured major lines until
 a reviewed migration or compatibility change updates that constraint.
 
-The extracted deployment workflow is manual-only and restricted to main until the
-[ownership handover](../../docs/cutover.md) passes. Its daily trigger is present
-only as a comment. After verified activation, the existing reconciler operates as
-described below.
+Manual deployment runs use the reviewed `demo-apply` environment. The 13:00 UTC
+job on main uses `demo-scheduled` after activation through the
+[handover runbook](../../docs/cutover.md#review-scheduled-scope).
+
 `deploy.py` fingerprints each component's deployment inputs and records successful
 revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap. Failed
 revisions are not recorded, so the next reconciliation retries them. The daily
-run also refreshes Jaeger and HotROD snapshots in both demos. New installations
-without revision records reconcile every component once. A partial failure does
+run also refreshes Jaeger and HotROD snapshots in both demos. A missing component key selects that component. Scheduled runs require the
+existing revision ConfigMap and existing Helm releases. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 

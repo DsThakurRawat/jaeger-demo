@@ -4,9 +4,8 @@
 name: Deploy Jaeger Demo to OKE
 
 on:
-  # Enable the daily refresh only after the verified script handover.
-  # schedule:
-  #   - cron: '0 13 * * *'
+  schedule:
+    - cron: '0 13 * * *'
   workflow_dispatch:
     inputs:
       expected_config_sha:
@@ -61,15 +60,17 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: jaeger-otel-demo-opensearch-recovery
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: Deploy Jaeger to OKE Cluster
-    if: github.ref == 'refs/heads/main'
-    environment: demo-apply
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'schedule' && vars.DEMO_SCHEDULE_ENABLED == 'true'))
+    environment: ${{ github.event_name == 'schedule' && 'demo-scheduled' || 'demo-apply' }}
+    concurrency:
+      group: jaeger-otel-demo-opensearch-recovery
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # Budget for a full-stack run with the 'required' recovery policy, taking every
     # wait at its limit: 90m backup-test (the ci-opensearch-recovery.yml limit),

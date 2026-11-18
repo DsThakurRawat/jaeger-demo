@@ -8,10 +8,14 @@ Kubernetes Engine (OKE) cluster. Jaeger and HotROD source, image publishing,
 product releases and integration tests remain in
 [jaegertracing/jaeger](https://github.com/jaegertracing/jaeger).
 
-This repository is in the extraction stage. The imported deployment scripts are
-present, but production ownership has not transferred. All production workflows
-are manual-only and restricted to `main`; access and first deployment require the
-verified [handover](docs/cutover.md). Helmfile conversion is subsequent work.
+This repository deployed both hosted Jaeger releases on November 18, 2026.
+The [OCI deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431)
+reached Helm revision 25 and the [OTel deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094)
+reached revision 14. The previous core deployment and maintenance workflows are disabled.
+The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
+the OTel sample application, and OCI monitoring. Its production activation
+and first verified run are tracked in the [handover runbook](docs/cutover.md#review-scheduled-scope).
+Helmfile adoption follows the script handover.
 
 ## Architecture and ownership
 
