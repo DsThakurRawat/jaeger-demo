@@ -285,8 +285,13 @@ preparation. Confirm the effective value if the organization defines the same
 name. A skipped scheduled job receives no deployment environment or runner.
 Manual runs continue to use `demo-apply`.
 
-1. Review the pinned configuration, the [OpenSearch recovery fix](https://github.com/jaegertracing/jaeger-demo/issues/10)
-   and its [implementation](https://github.com/jaegertracing/jaeger-demo/pull/12).
+1. Review the pinned configuration and both OpenSearch recovery repairs. The
+   [API command issue](https://github.com/jaegertracing/jaeger-demo/issues/10) and
+   [fix](https://github.com/jaegertracing/jaeger-demo/pull/13) cover running the
+   verification probes in their target pods. The
+   [restore startup issue](https://github.com/jaegertracing/jaeger-demo/issues/12)
+   and [fix](https://github.com/jaegertracing/jaeger-demo/pull/14) cover the
+   OpenSearch setting used by the temporary restore pod.
    Before the first scheduled OpenSearch upgrade, exercise the required snapshot,
    restore PVC, restore pod, and in-pod verification on the actual CSI storage
    path and confirm schedulable capacity. Preserve the snapshot and rollback
