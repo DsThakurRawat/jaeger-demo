@@ -95,32 +95,11 @@ jobs:
       JAEGER_DEMO_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode || 'upgrade' }}
       JAEGER_DEMO_STACK: ${{ github.event.inputs.demo_stack || 'oci' }}
       JAEGER_OTEL_DEMO_DEPLOY_SCOPE: ${{ github.event.inputs.otel_deploy_scope || 'jaeger' }}
-      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ github.event.inputs.opensearch_recovery || 'required' }}
+      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ inputs.opensearch_recovery }}
       RUN_PUBLIC_SMOKE_TESTS: "true"
       GITHUB_EVENT_NAME: ${{ github.event_name }}
 
     steps:
-    - name: Validate OpenSearch recovery policy
-      run: |
-        case "${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" in
-          required)
-            ;;
-          waive)
-            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ||
-              "${GITHUB_REF}" != "refs/heads/main" ||
-              "${JAEGER_DEMO_STACK}" != "otel" ||
-              "${JAEGER_DEMO_DEPLOY_MODE}" != "upgrade" ||
-              "${JAEGER_OTEL_DEMO_DEPLOY_SCOPE}" != "opensearch" ]]; then
-              echo "OpenSearch recovery may be waived only by a manual isolated otel/upgrade/opensearch run from main" >&2
-              exit 1
-            fi
-            ;;
-          *)
-            echo "Invalid OpenSearch recovery policy: ${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" >&2
-            exit 1
-            ;;
-        esac
-
     - name: Verify the reviewed configuration revision
       run: |
         if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
@@ -135,6 +114,11 @@ jobs:
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
+
+    - name: Validate OpenSearch recovery policy
+      run: |
+        python3 scripts/demo/recovery_policy.py "$JAEGER_DEMO_STACK" "$JAEGER_DEMO_DEPLOY_MODE" \
+          "$JAEGER_OTEL_DEMO_DEPLOY_SCOPE" "$JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY"
 
     - name: Resolve upstream Jaeger main
       shell: bash
@@ -169,7 +153,7 @@ jobs:
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
-      if: failure() && steps.configure-oke.outcome == 'success'
+      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
@@ -184,7 +168,7 @@ jobs:
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
     - name: Remove disposable restore pod
-      if: always() && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
+      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |

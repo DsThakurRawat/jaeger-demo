@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 import handover
+import recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,8 +90,7 @@ class ScheduledReleaseError(RuntimeError):
 
 
 def check_scheduled_releases(component):
-    # The daily job updates the existing installation. Check both storage releases
-    # before starting recovery, and check Jaeger before replacing OTel HotROD.
+    # Check each selected release before attempting an in-place upgrade.
     releases = {
         "opensearch": ("opensearch", ("opensearch", "opensearch-dashboards")),
         "otel-jaeger": ("jaeger", ("jaeger",)),
@@ -109,6 +109,27 @@ def check_scheduled_releases(component):
             raise ScheduledReleaseError(f"Cannot schedule {namespace}/{name} with Helm status {status}")
 
 
+def opensearch_data_binding():
+    def get(kind, name):
+        return json.loads(run(["kubectl", "-n", "opensearch", "get", kind, name, "-o", "json"],
+                              capture_output=True).stdout)
+
+    pod = get("pod", "opensearch-cluster-single-0")
+    spec = pod.get("spec", {})
+    mounts = {mount["name"] for container in spec.get("containers", []) if container["name"] == "opensearch"
+              for mount in container.get("volumeMounts", []) if mount["mountPath"] == "/usr/share/opensearch/data"}
+    claims = [v.get("persistentVolumeClaim", {}).get("claimName") for v in spec.get("volumes", [])
+              if v["name"] in mounts]
+    if len(claims) != 1 or not claims[0]:
+        raise ScheduledReleaseError("Cannot identify the existing OpenSearch data PVC")
+    claim = get("pvc", claims[0])
+    metadata = claim.get("metadata", {})
+    uid, pv = metadata.get("uid"), claim.get("spec", {}).get("volumeName")
+    if not uid or not pv or claim.get("status", {}).get("phase") != "Bound" or metadata.get("deletionTimestamp"):
+        raise ScheduledReleaseError("Scheduled OpenSearch updates require a bound, active data PVC")
+    return claims[0], uid, pv
+
+
 def deploy_component(component, env):
     stack, scope, _ = COMPONENTS[component]
     directory = ROOT / "examples" / ("otel-demo" if stack == "otel" else "oci")
@@ -117,13 +138,20 @@ def deploy_component(component, env):
     mode = env.get("JAEGER_DEMO_DEPLOY_MODE", "upgrade")
     if env.get("GITHUB_EVENT_NAME") == "schedule":
         check_scheduled_releases(component)
-    if scope == "opensearch" and mode == "upgrade" and env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "required":
-        if env.get("GITHUB_OUTPUT"):
-            with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                output.write("recovery_started=true\n")
-        run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
+    binding = None
+    if scope == "opensearch" and mode == "upgrade":
+        policy = recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
+        if policy == "preserve-pvc":
+            binding = opensearch_data_binding()
+        elif policy == "required":
+            if env.get("GITHUB_OUTPUT"):
+                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    output.write("recovery_started=true\n")
+            run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
     run(["bash", str(directory / "deploy-all.sh"), mode], env=child_env)
     if scope == "opensearch":
+        if binding is not None and opensearch_data_binding() != binding:
+            raise ScheduledReleaseError("OpenSearch data PVC or bound PV changed during the scheduled upgrade")
         version = dict(PIN_LINE.findall((directory / "deploy-all.sh").read_text()))["OPENSEARCH_CHART_VERSION"]
         run(["python3", str(ROOT / "scripts/demo/verify_trace.py"), version], env=child_env)
 
@@ -142,13 +170,8 @@ def reconcile(env, root=ROOT):
         raise ValueError("Invalid demo stack or mode")
     if event != "workflow_dispatch" and mode != "upgrade":
         raise ValueError("Automatic demo deployments must use upgrade mode")
-    if env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "waive" and (
-            event != "workflow_dispatch" or env.get("GITHUB_REF") != "refs/heads/main"
-            or stack != "otel" or scope != "opensearch" or mode != "upgrade"):
-        raise ValueError("Recovery waiver requires a manual main/otel/upgrade/opensearch deployment")
+    recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
     if event == "schedule":
-        if env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") != "required":
-            raise ValueError("Scheduled deployments require OpenSearch recovery")
         handover.check_helm_context(env)
     if event == "workflow_dispatch" and mode == "clean":
         # Clean is an explicit whole-stack operation, not a per-component loop.

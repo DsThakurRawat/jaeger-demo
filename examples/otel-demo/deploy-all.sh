@@ -20,7 +20,7 @@ IMAGE_PULL_POLICY="${JAEGER_DEMO_IMAGE_PULL_POLICY:-IfNotPresent}"
 PUBLIC_JAEGER_URL="${JAEGER_DEMO_PUBLIC_JAEGER_URL:-${JAEGER_OTEL_DEMO_JAEGER_URL:-https://jaeger.demo.jaegertracing.io}}"
 RUN_PUBLIC_SMOKE_TESTS="${RUN_PUBLIC_SMOKE_TESTS:-false}"
 DEPLOY_SCOPE="${JAEGER_DEMO_DEPLOY_SCOPE:-${JAEGER_OTEL_DEMO_DEPLOY_SCOPE:-jaeger}}"
-OPENSEARCH_RECOVERY="${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY:-required}"
+OPENSEARCH_RECOVERY="${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY:-}"
 # renovate: datasource=helm depName=opentelemetry-demo registryUrl=https://open-telemetry.github.io/opentelemetry-helm-charts
 OTEL_DEMO_CHART_VERSION="0.40.9"
 # renovate: datasource=helm depName=opensearch registryUrl=https://opensearch-project.github.io/helm-charts
@@ -39,6 +39,10 @@ fi
 
 log() { echo "[$(date +"%F %T")] $*"; }
 err() { echo "[$(date +"%F %T")] ERROR: $*" >&2; exit 1; }
+
+recovery_policy() {
+  python3 "$SCRIPT_DIR/../../scripts/demo/recovery_policy.py" "${JAEGER_DEMO_STACK:-}" "$MODE" "$DEPLOY_SCOPE" "$OPENSEARCH_RECOVERY"
+}
 
 validate_options() {
   case "$MODE" in
@@ -62,25 +66,7 @@ validate_options() {
       ;;
   esac
 
-  case "$OPENSEARCH_RECOVERY" in
-    required|waive)
-      ;;
-    *)
-      echo "Error: Invalid OpenSearch recovery policy '$OPENSEARCH_RECOVERY'" >&2
-      echo "Expected JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY to be 'required' or 'waive'" >&2
-      return 1
-      ;;
-  esac
-
-  if [[ "$OPENSEARCH_RECOVERY" == "waive" ]] &&
-    { [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]] ||
-      [[ "${GITHUB_REF:-}" != "refs/heads/main" ]] ||
-      [[ "${JAEGER_DEMO_STACK:-}" != "otel" ]] ||
-      [[ "$MODE" != "upgrade" ]] ||
-      [[ "$DEPLOY_SCOPE" != "opensearch" ]]; }; then
-    echo "Error: OpenSearch recovery may be waived only by a manual isolated otel/upgrade/opensearch run from main" >&2
-    return 1
-  fi
+  recovery_policy >/dev/null
 }
 
 existing_installation() {
@@ -469,10 +455,15 @@ reconcile_ingress() {
 
 deploy_opensearch_releases() {
   if [[ "$MODE" == "upgrade" ]]; then
-    case "$OPENSEARCH_RECOVERY" in
+    local policy
+    policy=$(recovery_policy) || return 1
+    case "$policy" in
       required)
         log "Verifying a recent tested OpenSearch recovery point"
         bash "$SCRIPT_DIR/opensearch-recovery.sh" verify
+        ;;
+      preserve-pvc)
+        log "Upgrading OpenSearch in place with its existing data volume"
         ;;
       waive)
         log "WARNING: OpenSearch recovery was explicitly waived; this upgrade has no tested rollback or data-recovery path"

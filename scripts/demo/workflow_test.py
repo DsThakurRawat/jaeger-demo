@@ -128,7 +128,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('      MAIN_SHA: ${{ github.sha }}', source)
         self.assertIn('    - name: Configure kubectl with OKE\n      id: configure-oke\n', source)
         diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
-        self.assertIn("      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
+        self.assertIn("      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
 
     def test_restore_cleanup_runs_only_after_recovery_started(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
@@ -144,9 +144,37 @@ class WorkflowTests(unittest.TestCase):
                         expression = expression.replace('steps.reconcile.outcome', repr(reconcile))
                         expression = expression.replace('steps.reconcile.outputs.recovery_started', repr(recovery))
                         expression = expression.replace('&&', 'and').replace('||', 'or')
-                        result = eval(expression, {'__builtins__': {}}, {})
-                        self.assertEqual(configure == 'success' and recovery == 'true'
-                                         and reconcile in ('success', 'failure', 'cancelled'), result)
+                        for event in ('workflow_dispatch', 'schedule'):
+                            result = eval(expression.replace('github.event_name', repr(event)), {'__builtins__': {}}, {})
+                            self.assertEqual(event == 'workflow_dispatch' and configure == 'success' and recovery == 'true'
+                                             and reconcile in ('success', 'failure', 'cancelled'), result)
+
+    def test_recovery_input_stays_manual_and_policy_validates_before_cluster_access(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        self.assertIn('      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ inputs.opensearch_recovery }}', source)
+        self.assertIn('    - name: Validate OpenSearch recovery policy\n      run: |\n        python3 scripts/demo/recovery_policy.py', source)
+        self.assertLess(source.index('    - name: Validate OpenSearch recovery policy'),
+                        source.index('    - name: Configure kubectl with OKE'))
+
+    def test_workflow_recovery_policy_matches_event_and_scope(self):
+        script = step_script('Validate OpenSearch recovery policy')
+        for event, ref, stack, mode, scope, requested, expected in (
+                ('schedule', 'main', 'oci', 'upgrade', 'jaeger', '', 'preserve-pvc'),
+                ('schedule', 'main', 'oci', 'upgrade', 'jaeger', 'required', None),
+                ('schedule', 'main', 'otel', 'clean', 'opensearch', '', None),
+                ('schedule', 'feature', 'otel', 'upgrade', 'opensearch', '', None),
+                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', '', 'required'),
+                ('workflow_dispatch', 'main', 'all', 'upgrade', 'all', 'required', 'required'),
+                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', 'waive', 'waive'),
+                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'all', 'waive', None),
+                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', 'preserve-pvc', None)):
+            env = dict(os.environ, GITHUB_EVENT_NAME=event, GITHUB_REF='refs/heads/' + ref, JAEGER_DEMO_STACK=stack,
+                       JAEGER_DEMO_DEPLOY_MODE=mode, JAEGER_OTEL_DEMO_DEPLOY_SCOPE=scope,
+                       JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=requested)
+            with self.subTest(event=event, ref=ref, stack=stack, mode=mode, scope=scope, requested=requested):
+                result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT, env=env, text=True, capture_output=True)
+                self.assertEqual(expected is not None, result.returncode == 0, result.stderr)
+                self.assertEqual(expected or '', result.stdout.strip())
 
     def test_reviewed_sha_is_shared_with_reconciler_and_child_scripts(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()

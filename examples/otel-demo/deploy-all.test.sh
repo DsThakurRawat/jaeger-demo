@@ -285,9 +285,9 @@ testScheduledHotrodMutationsRequireExistingReleaseOwnership() {
 
 testScheduledOtelUpgradesCannotInstallOrCreateNamespaces() {
   local output
-  output=$(GITHUB_EVENT_NAME=schedule run_jaeger_deploy upgrade "" all)
+  output=$(GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main run_jaeger_deploy upgrade "" all)
   assertEquals "scheduled upgrade should succeed" 0 "$?"
-  assertContains "$output" "opensearch-recovery.sh verify"
+  assertNotContains "$output" "opensearch-recovery.sh"
   assertContains "$output" "helm upgrade opensearch opensearch/opensearch"
   assertContains "$output" "helm upgrade opensearch-dashboards opensearch/opensearch-dashboards"
   assertContains "$output" "helm upgrade --wait --atomic jaeger"
@@ -597,6 +597,9 @@ testRecoveryWaiverSkipsOnlyRecoveryGate() {
     source "$1"
     MODE=upgrade
     OPENSEARCH_RECOVERY=waive
+    GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main JAEGER_DEMO_STACK=otel
+    export GITHUB_EVENT_NAME GITHUB_REF JAEGER_DEMO_STACK
+    DEPLOY_SCOPE=opensearch
     log() { printf "log %s\n" "$*"; }
     bash() { printf "unsafe recovery call\n"; }
     helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
@@ -645,6 +648,7 @@ testHandoverPreflightStopsBeforeWritesAndRechecksAfterChartPreparation() {
       check_cluster() { :; }
       clone_jaeger_v2() { printf "chart prepared\n"; }
       python3() {
+        if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
         checks=$((checks + 1))
         printf "preflight %s: %s\n" "$checks" "$*"
         [[ "$checks" -ne "$stop_at" ]]
