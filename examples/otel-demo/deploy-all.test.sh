@@ -180,11 +180,13 @@ run_jaeger_deploy() {
   bash -c '
     source "$1"
     MODE="$2"
+    EXPECTED_CONFIG_SHA="${3:-}"
     DEPLOY_SCOPE=jaeger
     RUN_PUBLIC_SMOKE_TESTS=false
     log() { :; }
     need() { :; }
     check_cluster() { :; }
+    check_handover() { :; }
     cleanup() { :; }
     clone_jaeger_v2() { :; }
     deploy_opensearch_releases() { :; }
@@ -201,7 +203,7 @@ run_jaeger_deploy() {
       fi
     }
     main
-  ' _ "$SCRIPT" "$1"
+  ' _ "$SCRIPT" "$1" "${2:-}"
 }
 
 testJaegerUpgradeIncludesSharedUIConfig() {
@@ -210,6 +212,7 @@ testJaegerUpgradeIncludesSharedUIConfig() {
 
   assertEquals "Jaeger upgrade should succeed" 0 "$rc"
   assertContains "$output" "helm upgrade --install --wait --atomic jaeger"
+  assertContains "$output" "--namespace jaeger --create-namespace"
   assertContains "$output" "--set-file uiconfig=$(dirname "$SCRIPT")/../oci/ui-config.json"
   assertContains "$output" "--set-file userconfig=$(dirname "$SCRIPT")/jaeger-config.yaml"
 }
@@ -220,7 +223,19 @@ testJaegerCleanInstallIncludesSharedUIConfig() {
 
   assertEquals "Jaeger install should succeed" 0 "$rc"
   assertContains "$output" "helm install --wait jaeger"
+  assertContains "$output" "--namespace jaeger --create-namespace"
   assertContains "$output" "--set-file uiconfig=$(dirname "$SCRIPT")/../oci/ui-config.json"
+}
+
+testHandoverHelmCommandCannotInstallOrCreateNamespace() {
+  output=$(run_jaeger_deploy upgrade reviewed)
+  rc=$?
+
+  assertEquals "handover Jaeger upgrade should succeed" 0 "$rc"
+  assertContains "$output" "helm upgrade --wait --atomic jaeger"
+  assertContains "$output" "--namespace jaeger"
+  assertNotContains "$output" "--install"
+  assertNotContains "$output" "--create-namespace"
 }
 
 testPinsCompatibleOtelDemoChart() {
@@ -554,6 +569,193 @@ testInvalidRecoveryPolicyCannotCallHelm() {
   assertNotEquals "invalid recovery policy must stop deployment" 0 "$rc"
   assertContains "$output" "Invalid OpenSearch recovery policy 'invalid'"
   assertNotContains "$output" "unsafe helm call"
+}
+
+testHandoverPreflightStopsBeforeWritesAndRechecksAfterChartPreparation() {
+  local stop_at
+  for stop_at in 1 2; do
+    output=$(bash -c '
+      source "$1"
+      MODE=upgrade
+      DEPLOY_SCOPE=jaeger
+      EXPECTED_CONFIG_SHA=reviewed
+      RUN_PUBLIC_SMOKE_TESTS=false
+      checks=0
+      stop_at=$2
+      log() { :; }
+      need() { :; }
+      check_cluster() { :; }
+      clone_jaeger_v2() { printf "chart prepared\n"; }
+      python3() {
+        checks=$((checks + 1))
+        printf "preflight %s: %s\n" "$checks" "$*"
+        [[ "$checks" -ne "$stop_at" ]]
+      }
+      helm() { [[ "$1" == repo ]] || printf "unsafe helm mutation\n"; }
+      kubectl() { printf "unsafe kubectl mutation\n"; }
+      main
+    ' _ "$SCRIPT" "$stop_at" 2>&1)
+    rc=$?
+
+    assertNotEquals "handover check $stop_at must stop deployment" 0 "$rc"
+    assertContains "$output" "preflight $stop_at: $(dirname "$SCRIPT")/../../scripts/demo/handover.py otel upgrade jaeger"
+    assertNotContains "$output" "unsafe helm mutation"
+    assertNotContains "$output" "unsafe kubectl mutation"
+    if [[ "$stop_at" -eq 2 ]]; then
+      assertContains "$output" "chart prepared"
+    else
+      assertNotContains "$output" "chart prepared"
+    fi
+  done
+}
+
+run_resource_read_failure() {
+  bash -c '
+    source "$1"
+    EXPECTED_CONFIG_SHA=$2
+    operation=$3
+    failed_read=$4
+    check_handover() { :; }
+    kubectl() {
+      if [[ "$1" == get ]]; then
+        if [[ "$failed_read" == object || "$*" == *jsonpath* ]]; then
+          printf "Forbidden\n" >&2
+          return 1
+        fi
+        return 0
+      fi
+      printf "unsafe mutation: %s\n" "$*"
+    }
+    if [[ "$operation" == adopt ]]; then
+      adopt_resource_for_helm_release jaeger serviceaccount jaeger-hotrod jaeger
+    else
+      delete_deployment_before_helm_upgrade jaeger jaeger-hotrod
+    fi
+  ' _ "$SCRIPT" "$1" "$2" "$3" 2>&1
+}
+
+testHandoverResourceReadFailuresCannotBecomeAbsenceOrPermitMutation() {
+  local operation
+  for operation in adopt delete; do
+    output=$(run_resource_read_failure reviewed "$operation" object)
+    rc=$?
+    assertNotEquals "$operation must fail on an unreadable required resource" 0 "$rc"
+    assertContains "$output" "Cannot read required"
+    assertNotContains "$output" "unsafe mutation"
+  done
+  output=$(run_resource_read_failure reviewed adopt ownership)
+  rc=$?
+  assertNotEquals "unreadable Helm ownership must stop adoption" 0 "$rc"
+  assertContains "$output" "Cannot read Helm ownership"
+  assertNotContains "$output" "unsafe mutation"
+}
+
+testHandoverRechecksImmediatelyBeforeHotrodDeletion() {
+  output=$(bash -c '
+    source "$1"
+    EXPECTED_CONFIG_SHA=reviewed
+    check_handover() { printf "release state changed\n"; return 1; }
+    kubectl() { printf "unsafe kubectl operation: %s\n" "$*"; }
+    delete_deployment_before_helm_upgrade jaeger jaeger-hotrod
+  ' _ "$SCRIPT" 2>&1)
+  rc=$?
+
+  assertNotEquals "changed release state must prevent HotROD deletion" 0 "$rc"
+  assertContains "$output" "release state changed"
+  assertNotContains "$output" "unsafe kubectl operation"
+}
+
+testOrdinaryMissingResourceBehaviorIsPreserved() {
+  local operation
+  for operation in adopt delete; do
+    output=$(run_resource_read_failure '' "$operation" object)
+    rc=$?
+    assertEquals "ordinary $operation still tolerates a missing resource" 0 "$rc"
+    assertNotContains "$output" "unsafe mutation"
+  done
+}
+
+run_ingress_check() {
+  rm -f "$SHUNIT_TMPDIR/ingress-commands"
+  bash -c '
+    source "$1"
+    EXPECTED_CONFIG_SHA=$2
+    failed_command=$3
+    commands=$4
+    sleep() { :; }
+    kubectl() {
+      printf "%s\n" "$*" >> "$commands"
+      if [[ -n "$failed_command" && "$*" == *"$failed_command"* ]]; then
+        printf "Forbidden\n" >&2
+        return 1
+      fi
+      case "$1" in
+        apply) printf "ingress configured\n" ;;
+        get) [[ "$*" != *jsonpath* ]] || printf "True\n" ;;
+      esac
+      return 0
+    }
+    deploy_ingress
+  ' _ "$SCRIPT" "$1" "$2" "$SHUNIT_TMPDIR/ingress-commands" 2>&1
+}
+
+testHandoverStopsOnEachFailedIngressApply() {
+  local ingress
+  local count=0
+  for ingress in ingress-jaeger.yaml ingress-opensearch.yaml ingress-otel-demo.yaml; do
+    count=$((count + 1))
+    output=$(run_ingress_check reviewed "$ingress")
+    rc=$?
+    assertNotEquals "$ingress failure must fail handover" 0 "$rc"
+    assertContains "$output" "Failed to apply"
+    assertEquals "later applies must not continue" "$count" "$(wc -l < "$SHUNIT_TMPDIR/ingress-commands" | tr -d ' ')"
+    assertNotContains "$output" "All SSL certificates ready"
+  done
+}
+
+testHandoverCertificateReadErrorsAreNotReportedAsMissing() {
+  local failed_read
+  for failed_read in 'get namespace jaeger' 'get certificate -n jaeger' 'get certificate -n jaeger -o'; do
+    output=$(run_ingress_check reviewed "$failed_read")
+    rc=$?
+    assertNotEquals "$failed_read must fail handover" 0 "$rc"
+    assertContains "$output" "Cannot"
+    assertNotContains "$output" "No certificates found"
+    assertNotContains "$output" "All SSL certificates ready"
+  done
+}
+
+testHandoverIngressSuccessAndOrdinaryFailureBehavior() {
+  output=$(run_ingress_check reviewed '')
+  rc=$?
+  assertEquals "successful handover ingress must pass" 0 "$rc"
+  assertContains "$output" "All SSL certificates ready (3/3)"
+
+  output=$(run_ingress_check '' apply)
+  rc=$?
+  assertEquals "ordinary ingress failures keep their existing behavior" 0 "$rc"
+  assertEquals "ordinary path still attempts every ingress" 3 "$(grep -c '^apply ' "$SHUNIT_TMPDIR/ingress-commands")"
+}
+
+testHandoverRequiresEveryIngressFileBeforeFirstApply() {
+  local directory="$SHUNIT_TMPDIR/handover-ingress"
+  local missing
+  mkdir -p "$directory/ingress"
+  for missing in ingress-jaeger.yaml ingress-opensearch.yaml ingress-otel-demo.yaml; do
+    cp "$(dirname "$SCRIPT")/ingress/ingress-"*.yaml "$directory/ingress/"
+    rm "$directory/ingress/$missing"
+    output=$(bash -c '
+      source "$1"
+      SCRIPT_DIR=$2
+      EXPECTED_CONFIG_SHA=reviewed
+      kubectl() { printf "unsafe ingress apply\n"; }
+      deploy_ingress
+    ' _ "$SCRIPT" "$directory" 2>&1)
+    rc=$?
+    assertNotEquals "$missing must be required" 0 "$rc"
+    assertContains "$output" "Missing required handover ingress file: $missing"
+    assertNotContains "$output" "unsafe ingress apply"
+  done
 }
 
 # shellcheck disable=SC1091

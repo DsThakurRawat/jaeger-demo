@@ -75,8 +75,13 @@ validate_options() {
 }
 
 configure_jaeger_helm_command() {
+  HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger --create-namespace)
   if [[ "$MODE" == "upgrade" ]]; then
     HELM_JAEGER_CMD="upgrade --install --wait --atomic"
+    if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      HELM_JAEGER_CMD="upgrade --wait --atomic"
+      HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger)
+    fi
   else
     # For clean mode, use install after cleanup.
     HELM_JAEGER_CMD="install --wait"
@@ -92,6 +97,12 @@ need() {
 check_cluster() {
   if ! kubectl cluster-info >/dev/null 2>&1; then
     err "Cannot reach a Kubernetes cluster with kubectl"
+  fi
+}
+
+check_handover() {
+  if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+    python3 "$SCRIPT_DIR/../../scripts/demo/handover.py" otel "$MODE" "$DEPLOY_SCOPE"
   fi
 }
 
@@ -340,11 +351,20 @@ adopt_resource_for_helm_release() {
   local release=$4
 
   if ! kubectl get "$kind" "$name" -n "$namespace" >/dev/null 2>&1; then
+    if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      log "Cannot read required $kind $namespace/$name during handover"
+      return 1
+    fi
     return 0
   fi
 
   local managed_by
-  managed_by=$(kubectl get "$kind" "$name" -n "$namespace" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)
+  if ! managed_by=$(kubectl get "$kind" "$name" -n "$namespace" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null); then
+    if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      log "Cannot read Helm ownership for $kind $namespace/$name during handover"
+      return 1
+    fi
+  fi
   if [[ "$managed_by" == "Helm" ]]; then
     return 0
   fi
@@ -361,7 +381,12 @@ delete_deployment_before_helm_upgrade() {
   local namespace=$1
   local deployment=$2
 
+  check_handover || return 1
   if ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; then
+    if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      log "Cannot read required deployment $namespace/$deployment during handover"
+      return 1
+    fi
     return 0
   fi
 
@@ -479,6 +504,16 @@ cleanup() {
 deploy_ingress() {
   log "Deploying HTTPS ingress resources..."
 
+  if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+    local file
+    for file in ingress-jaeger.yaml ingress-opensearch.yaml ingress-otel-demo.yaml; do
+      if [[ ! -f "$SCRIPT_DIR/ingress/$file" ]]; then
+        log "Missing required handover ingress file: $file"
+        return 1
+      fi
+    done
+  fi
+
   # Check if ingress files exist
   if [[ ! -f "$SCRIPT_DIR/ingress/ingress-jaeger.yaml" ]]; then
     log " Ingress files not found in $SCRIPT_DIR/ingress/ - skipping HTTPS setup"
@@ -490,18 +525,21 @@ deploy_ingress() {
     log "Jaeger ingress configured (jaeger.demo.jaegertracing.io, hotrod.demo.jaegertracing.io)"
   else
     log " Failed to apply Jaeger ingress "
+    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
   fi
 
   if kubectl apply -f "$SCRIPT_DIR/ingress/ingress-opensearch.yaml" 2>&1 | grep -q "created\|configured\|unchanged"; then
     log " OpenSearch ingress configured (opensearch.demo.jaegertracing.io)"
   else
     log "  Failed to apply OpenSearch ingress "
+    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
   fi
 
   if kubectl apply -f "$SCRIPT_DIR/ingress/ingress-otel-demo.yaml" 2>&1 | grep -q "created\|configured\|unchanged"; then
     log " OTel Demo ingress configured (shop.demo.jaegertracing.io)"
   else
     log "  Failed to apply OTel Demo ingress "
+    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
   fi
 
   log "Waiting for SSL certificates to be issued..."
@@ -510,15 +548,27 @@ deploy_ingress() {
   # Check certificate status
   local certs_ready=0
   local certs_total=0
+  local certificate_status
 
   for ns in jaeger opensearch otel-demo; do
     if kubectl get namespace "$ns" >/dev/null 2>&1; then
       if kubectl get certificate -n "$ns" >/dev/null 2>&1; then
         certs_total=$((certs_total + 1))
-        if kubectl get certificate -n "$ns" -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
-          certs_ready=$((certs_ready + 1))
+        if certificate_status=$(kubectl get certificate -n "$ns" -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null); then
+          if grep -q "True" <<< "$certificate_status"; then
+            certs_ready=$((certs_ready + 1))
+          fi
+        elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+          log "Cannot read certificate status in $ns during handover"
+          return 1
         fi
+      elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+        log "Cannot list certificates in $ns during handover"
+        return 1
       fi
+    elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      log "Cannot read namespace $ns during handover"
+      return 1
     fi
   done
 
@@ -549,6 +599,7 @@ clone_jaeger_v2() {
 
 main() {
   validate_options || exit 1
+  check_handover || return 1
   configure_jaeger_helm_command
   echo " Running in '$MODE' mode..."
   log "Starting CI deploy (weekly refresh)"
@@ -584,6 +635,7 @@ main() {
 
   if deploy_jaeger_stack; then
     if [[ "$MODE" == "upgrade" ]]; then
+      check_handover || return 1
       adopt_resource_for_helm_release jaeger serviceaccount jaeger-hotrod jaeger
       adopt_resource_for_helm_release jaeger service jaeger-hotrod jaeger
       delete_deployment_before_helm_upgrade jaeger jaeger-hotrod
@@ -592,7 +644,7 @@ main() {
     log "Deploying Jaeger image ${JAEGER_IMAGE_REPOSITORY}:${JAEGER_IMAGE_TAG}"
     log "Deploying HotROD image ${HOTROD_IMAGE_REPOSITORY}:${HOTROD_IMAGE_TAG}"
     if ! helm $HELM_JAEGER_CMD jaeger "$SCRIPT_DIR/helm-charts/charts/jaeger" \
-      --namespace jaeger --create-namespace \
+      "${HELM_JAEGER_NAMESPACE_ARGS[@]}" \
       --set allInOne.enabled=true \
       --set storage.type=elasticsearch \
       --set storage.elasticsearch.anonymous=true \

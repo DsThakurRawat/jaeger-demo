@@ -13,6 +13,8 @@ import re
 import subprocess
 import tempfile
 
+import handover
+
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE = "jaeger-demo-deployment-revisions"
@@ -89,6 +91,9 @@ def deploy_component(component, env):
                      JAEGER_OTEL_DEMO_DEPLOY_SCOPE=scope)
     mode = env.get("JAEGER_DEMO_DEPLOY_MODE", "upgrade")
     if scope == "opensearch" and mode == "upgrade" and env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "required":
+        if env.get("GITHUB_OUTPUT"):
+            with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                output.write("recovery_started=true\n")
         run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
     run(["bash", str(directory / "deploy-all.sh"), mode], env=child_env)
     if scope == "opensearch":
@@ -105,6 +110,7 @@ def reconcile(env, root=ROOT):
     mode = env.get("JAEGER_DEMO_DEPLOY_MODE", "upgrade")
     stack = env.get("JAEGER_DEMO_STACK", "oci")
     scope = env.get("JAEGER_OTEL_DEMO_DEPLOY_SCOPE", "jaeger")
+    reviewed_handover = handover.validate_inputs(env, stack, mode, scope)
     if stack not in ("oci", "otel", "all") or mode not in ("upgrade", "clean"):
         raise ValueError("Invalid demo stack or mode")
     if event != "workflow_dispatch" and mode != "upgrade":
@@ -130,6 +136,10 @@ def reconcile(env, root=ROOT):
     selected = selected_components(event, stack, scope, mode, previous, desired)
     if event == "workflow_dispatch" and not selected:
         raise ValueError("Invalid scope for selected demo stack")
+    if reviewed_handover:
+        if selected != [stack + "-jaeger"]:
+            raise ValueError("Handover selected components differ from the reviewed single Jaeger release")
+        handover.preflight(env, stack, mode, scope)
     failures = []
     snapshots_resolved = False
     for name in selected:
@@ -139,7 +149,13 @@ def reconcile(env, root=ROOT):
             continue
         try:
             if COMPONENTS[name][1] == "jaeger" and not snapshots_resolved:
+                image_inputs = {key: env.get(key) for key in (
+                    "JAEGER_DEMO_JAEGER_IMAGE_TAG", "JAEGER_DEMO_HOTROD_IMAGE_TAG")}
                 resolve_snapshots(env)
+                if reviewed_handover:
+                    handover.validate_inputs(env, stack, mode, scope)
+                    if any(env.get(key) != value for key, value in image_inputs.items()):
+                        raise ValueError("Handover image resolution changed the reviewed commit tags")
                 snapshots_resolved = True
             print(f"::group::Deploy {name}", flush=True)
             deploy_component(name, env)

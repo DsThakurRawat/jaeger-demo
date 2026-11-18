@@ -73,6 +73,71 @@ status by default; `--all` is not supported. Keep status filters unset for the
 inventory. The default limit is 256 releases, above the six application releases
 listed here.
 
+## Check the restricted handover path
+
+Supplying `expected_config_sha` activates the Stage 1 handover guards. The run must
+be a manual dispatch from main, select exactly one of `oci` or `otel`, use
+`upgrade` and `jaeger`, and supply explicit full Jaeger and HotROD commit tags.
+The reconciler checks its actual component selection and rejects any image-tag
+change during resolution. Omitting the reviewed SHA uses the ordinary deployment
+path; it is not an alternative for the first ownership transfer.
+
+Before application writes, `scripts/demo/handover.py` requires both `default/jaeger`
+and `jaeger/jaeger` to exist in `deployed` state using Helm Secret storage. The
+implicit kubectl and Helm namespace must be `default`. It requires every target
+chart object, generator, supplemental Service/Ingress and the shared
+`default/jaeger-demo-deployment-revisions` ConfigMap to exist and be readable.
+A denied read is a failure, not evidence that an object is absent. OCI refuses its
+ordinary uninstall/reinstall fallback; OTel repeats the check before HotROD
+replacement. Both handover Helm commands omit `--install`, and OTel also omits
+`--create-namespace`. OTel ingress apply and certificate-read errors fail the run.
+Jaeger-only runs skip restore-pod cleanup because they cannot start recovery.
+
+These guards do not compare full live manifests or authorize a new resource set.
+Before dispatch, compare captured current, desired and rollback object sets, chart
+hooks, exact image references and prior release revisions in the frozen record.
+The only accepted application-object deletion/recreation is OTel's
+`jaeger/jaeger-hotrod` Deployment. Missing objects, new hooks, unexplained revision
+changes or failed/pending releases require a separate repair and fresh verification.
+Drain old writers first and keep the new workflow serialized. Verify cluster
+identity, expected certificates and public TLS independently; readable certificate
+summaries alone do not prove TLS health.
+
+Check effective access using the actual new CI principal before its first write:
+
+| Capability | Initial handover requirement |
+| --- | --- |
+| Existing chart and supplemental objects | Named `get,patch`; chart/watcher workload reads include `list,watch` and dependent status resources |
+| OTel HotROD replacement | Named Deployment `delete` plus Deployment `create` in `jaeger`; native RBAC cannot name-limit top-level create |
+| Helm storage in `default` and `jaeger` | Secret `get,list,create`; `update,delete` restricted to individually listed retained Jaeger revisions and the next upgrade/rollback revisions |
+| OTel diagnostics and TLS summaries | Service list in `kube-system`, relevant Namespace reads and Certificate list in `jaeger`, `opensearch`, `otel-demo` |
+| Excluded mutations | Other application deletes/updates, OpenSearch Pod deletion, exec/port-forward, namespaces, storage, RBAC, CRDs/webhooks and AI ingress |
+
+Secret list discloses namespace Secret contents, and top-level Secret create cannot
+be name-limited with native RBAC. Keep that accepted trusted-writer scope explicit.
+Use exact observed revision Secret names, not wildcard `resourceNames`; a retry
+beyond the accepted revision range needs renewed verification. Include automatic
+rollback and history pruning in the permission rehearsal. For example:
+
+```bash
+# Expected yes under the apply principal:
+kubectl auth can-i patch deployments.apps/jaeger --namespace default
+kubectl auth can-i delete deployments.apps/jaeger-hotrod --namespace jaeger
+kubectl auth can-i create deployments.apps --namespace jaeger
+kubectl auth can-i list services --namespace kube-system
+# Expected no:
+kubectl auth can-i delete deployments.apps/jaeger --namespace default
+kubectl auth can-i delete pods --namespace opensearch
+kubectl auth can-i create pods/exec --namespace opensearch
+kubectl auth can-i create pods/portforward --namespace jaeger
+```
+
+These examples are not the complete permission matrix. Check all required verbs
+and positive reads/watches against the verified object set; never test forbidden
+writes by attempting them. RBAC grants are additive, so inspect other bindings as
+well. Keep an independent administrator recovery route. The restricted writer is
+not authorized to rebuild the installation or repair missing unrelated objects.
+
 ## Transfer workflow ownership
 
 1. Verify the concrete handover record with the human. Confirm tools, chart

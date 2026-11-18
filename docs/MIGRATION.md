@@ -84,7 +84,7 @@ Exit criteria:
 
 ### 4. Verbatim script handover
 
-Status: preparation in progress. [#4](https://github.com/jaegertracing/jaeger-demo/issues/4) tracks tool freezing and per-stack handover instructions. Live inventory, access verification and the reviewed handover record remain pending.
+Status: preparation in progress. [#4](https://github.com/jaegertracing/jaeger-demo/issues/4) tracks tool freezing and per-stack handover instructions; [#6](https://github.com/jaegertracing/jaeger-demo/issues/6) adds guards for the restricted existing-release upgrade. Live inventory, access verification and the reviewed handover record remain pending.
 
 Requires: foundation, extraction.
 

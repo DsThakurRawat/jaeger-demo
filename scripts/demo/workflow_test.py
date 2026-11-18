@@ -109,20 +109,28 @@ class WorkflowTests(unittest.TestCase):
         diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
         self.assertIn("      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
 
-    def test_restore_cleanup_runs_only_after_reconciliation_started(self):
+    def test_restore_cleanup_runs_only_after_recovery_started(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         self.assertIn('    - name: Reconcile demo components\n      id: reconcile\n', source)
         cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
         condition = re.search(r'^      if: (.+)$', cleanup, re.MULTILINE)[1]
         for configure in ('success', 'failure', 'cancelled', 'skipped', ''):
             for reconcile in ('success', 'failure', 'cancelled', 'skipped', ''):
-                with self.subTest(configure=configure, reconcile=reconcile):
-                    expression = condition.replace('always()', 'True')
-                    expression = expression.replace('steps.configure-oke.outcome', repr(configure))
-                    expression = expression.replace('steps.reconcile.outcome', repr(reconcile))
-                    expression = expression.replace('&&', 'and').replace('||', 'or')
-                    result = eval(expression, {'__builtins__': {}}, {})
-                    self.assertEqual(configure == 'success' and reconcile in ('success', 'failure', 'cancelled'), result)
+                for recovery in ('true', 'false', ''):
+                    with self.subTest(configure=configure, reconcile=reconcile, recovery=recovery):
+                        expression = condition.replace('always()', 'True')
+                        expression = expression.replace('steps.configure-oke.outcome', repr(configure))
+                        expression = expression.replace('steps.reconcile.outcome', repr(reconcile))
+                        expression = expression.replace('steps.reconcile.outputs.recovery_started', repr(recovery))
+                        expression = expression.replace('&&', 'and').replace('||', 'or')
+                        result = eval(expression, {'__builtins__': {}}, {})
+                        self.assertEqual(configure == 'success' and recovery == 'true'
+                                         and reconcile in ('success', 'failure', 'cancelled'), result)
+
+    def test_reviewed_sha_is_shared_with_reconciler_and_child_scripts(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        job = source.split('\n    steps:', 1)[0]
+        self.assertIn('      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}\n', job)
 
 
 if __name__ == '__main__':

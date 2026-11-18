@@ -14,7 +14,8 @@ import deploy
 
 
 class OciScopeTests(unittest.TestCase):
-    def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error=""):
+    def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error="",
+                reviewed_handover=False, preflight_status="deployed"):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             directory = root / "examples/oci"
@@ -22,6 +23,7 @@ class OciScopeTests(unittest.TestCase):
             (directory / "helm-charts/.git").mkdir(parents=True)
             (root / "scripts/demo").mkdir(parents=True)
             shutil.copy(deploy.ROOT / "scripts/demo/jaeger-chart.sh", root / "scripts/demo")
+            shutil.copy(deploy.ROOT / "scripts/demo/handover.py", root / "scripts/demo")
             binaries = root / "bin"
             binaries.mkdir()
             fake = binaries / "fake"
@@ -37,7 +39,11 @@ if command == "helm":
     if sys.argv[1] == "status":
         if os.environ["TEST_STATUS_ERROR"]:
             raise SystemExit("Error: " + os.environ["TEST_STATUS_ERROR"])
-        print("STATUS: " + os.environ["TEST_RELEASE_STATUS"])
+        if "json" in sys.argv:
+            print(json.dumps({"name": "jaeger", "namespace": sys.argv[sys.argv.index("--namespace") + 1],
+                              "version": 22, "info": {"status": os.environ["TEST_PREFLIGHT_STATUS"]}}))
+        else:
+            print("STATUS: " + os.environ["TEST_RELEASE_STATUS"])
     elif sys.argv[1] == "uninstall" and os.environ["TEST_UNINSTALL_ERROR"]:
         raise SystemExit(os.environ["TEST_UNINSTALL_ERROR"])
     elif sys.argv[1:3] == ["repo", "add"]:
@@ -56,6 +62,8 @@ if command == "helm":
     elif sys.argv[1] in ("upgrade", "install") and "prometheus-community/kube-prometheus-stack" in sys.argv:
         if not repositories.get("prometheus-community"):
             raise SystemExit("Prometheus chart repository is missing or its index is unavailable")
+elif command == "kubectl" and "get" in sys.argv:
+    print("existing-object")
 ''')
             fake.chmod(0o755)
             for name in ("helm", "kubectl", "git"):
@@ -65,7 +73,12 @@ if command == "helm":
                        JAEGER_DEMO_DEPLOY_SCOPE=scope, TEST_COMMAND_LOG=str(log),
                        TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS="false",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
-                       TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error)
+                       TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error,
+                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="")
+            if reviewed_handover:
+                env.update(EXPECTED_CONFIG_SHA="a" * 40, GITHUB_SHA="a" * 40,
+                           GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/main",
+                           JAEGER_DEMO_JAEGER_IMAGE_TAG="b" * 40, JAEGER_DEMO_HOTROD_IMAGE_TAG="c" * 40)
             result = subprocess.run(["bash", str(directory / "deploy-all.sh"), "upgrade"],
                                     env=env, text=True, capture_output=True)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -146,6 +159,43 @@ if command == "helm":
         self.assertEqual(0, parsed.returncode, parsed.stderr)
         self.assertFalse(any(call[0] == "kubectl" or call[:2] in (
             ["helm", "upgrade"], ["helm", "install"]) for call in calls))
+
+    def test_handover_rejects_unhealthy_releases_before_application_writes(self):
+        for status in ("", "failed", "pending-upgrade", "uninstalling"):
+            with self.subTest(status=status):
+                result, calls = self.execute("jaeger", reviewed_handover=True, preflight_status=status)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("existing deployed", result.stderr)
+                self.assertTrue(all(call[0] == "kubectl" and call[1:3] == ["config", "view"]
+                                    or call[:2] == ["helm", "status"] for call in calls))
+
+    def test_handover_never_falls_back_to_reinstall_when_release_changes_after_preflight(self):
+        for status in ("", "failed", "pending-upgrade"):
+            with self.subTest(status=status):
+                result, calls = self.execute("jaeger", status=status, reviewed_handover=True)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("refusing reinstall", result.stderr)
+                self.assertFalse(any(call[0] == "helm" and call[1] != "status" for call in calls))
+                self.assertFalse(any(call[0] == "kubectl" and "get" not in call and "config" not in call for call in calls))
+
+    def test_healthy_handover_checks_existing_objects_before_upgrade(self):
+        result, calls = self.execute("jaeger", reviewed_handover=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        upgrade = next(index for index, call in enumerate(calls) if call[:2] == ["helm", "upgrade"])
+        state = ["kubectl", "-n", "default", "get", "configmap", "jaeger-demo-deployment-revisions", "-o", "name"]
+        self.assertIn(state, calls[:upgrade])
+        self.assertNotIn("--install", calls[upgrade])
+        self.assertNotIn("--create-namespace", calls[upgrade])
+        self.assertIn("--wait", calls[upgrade])
+        self.assertIn("--atomic", calls[upgrade])
+        self.assertFalse(any(call[:2] == ["helm", "uninstall"] for call in calls))
+
+    def test_ordinary_failed_jaeger_still_uses_existing_reinstall_policy(self):
+        result, calls = self.execute("jaeger", status="failed")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(any(call[:2] == ["helm", "uninstall"] for call in calls))
+        upgrade = next(call for call in calls if call[:2] == ["helm", "upgrade"])
+        self.assertIn("--install", upgrade)
 
     def test_pinned_chart_renders_grafana_liveness_delay(self):
         script = (deploy.ROOT / "examples/oci/deploy-all.sh").read_text()

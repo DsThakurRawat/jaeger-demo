@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_config_sha:
-        description: 'Expected full configuration commit SHA. Required by the initial handover runbook.'
+        description: 'Reviewed full SHA. Enables the restricted manual single-stack Jaeger handover guards.'
         required: false
       image_tag:
         description: 'Snapshot image tag to deploy for both images. Defaults to jaegertracing/jaeger main.'
@@ -79,6 +79,7 @@ jobs:
     # Rollout checks that directly follow a Helm --wait return at once.
     timeout-minutes: 300
     env:
+      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
@@ -120,8 +121,6 @@ jobs:
         esac
 
     - name: Verify the reviewed configuration revision
-      env:
-        EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
       run: |
         if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
           if [[ ! "$EXPECTED_CONFIG_SHA" =~ ^[0-9a-f]{40}$ || "$EXPECTED_CONFIG_SHA" != "$GITHUB_SHA" ]]; then
@@ -184,7 +183,7 @@ jobs:
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
     - name: Remove disposable restore pod
-      if: always() && steps.configure-oke.outcome == 'success' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
+      if: always() && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
