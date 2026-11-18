@@ -22,7 +22,6 @@ STATE = "jaeger-demo-deployment-revisions"
 COMPONENTS = {
     "opensearch": ("otel", "opensearch", [
         "opensearch-values.yaml", "opensearch-dashboard-values.yaml",
-        "opensearch-recovery.sh", "opensearch-volume-snapshot-class.yaml",
     ]),
     "otel-jaeger": ("otel", "jaeger", [
         "jaeger-values.yaml", "jaeger-config.yaml", "jaeger-query-service.yaml",
@@ -61,6 +60,8 @@ def fingerprint(component, root=ROOT):
     inputs += [name + "\n" + (directory / name).read_text() for name in files]
     if scope == "jaeger":
         inputs.append((root / "scripts/demo/jaeger-chart.sh").read_text())
+    elif scope == "opensearch":
+        inputs.append((root / "scripts/demo/recovery_policy.py").read_text())
     return hashlib.sha256("\0".join(inputs).encode()).hexdigest()
 
 

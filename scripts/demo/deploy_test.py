@@ -140,6 +140,39 @@ class DeploymentTests(unittest.TestCase):
             values.write_text(values.read_text() + "\n# revised application\n")
             self.assertNotEqual(self.desired["otel-demo"], deploy.fingerprint("otel-demo", root))
 
+    def test_opensearch_fingerprint_tracks_deployed_inputs_independently_of_manual_recovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copytree(deploy.ROOT / "examples", root / "examples")
+            shutil.copytree(deploy.ROOT / "scripts/demo", root / "scripts/demo")
+            stack = root / "examples/otel-demo"
+            script = stack / "deploy-all.sh"
+            edits = [(stack / name, None, False) for name in (
+                "opensearch-recovery.sh", "opensearch-volume-snapshot-class.yaml")]
+            edits.extend((path, None, True) for path in (
+                root / "scripts/demo/recovery_policy.py", stack / "opensearch-values.yaml",
+                stack / "opensearch-dashboard-values.yaml"))
+            edits.extend((script, pin, True) for pin in deploy.CHART_PINS["opensearch"])
+            for path, pin, should_select in edits:
+                with self.subTest(path=path.name, pin=pin):
+                    original = path.read_text()
+                    updated = (re.sub(rf'^{pin}="[^"]+"', f'{pin}="99.99.99"', original, flags=re.MULTILINE)
+                               if pin else original + "\n# revised input\n")
+                    self.assertNotEqual(original, updated)
+                    path.write_text(updated)
+                    try:
+                        desired = {name: deploy.fingerprint(name, root) for name in deploy.COMPONENTS}
+                    finally:
+                        path.write_text(original)
+                    changed = {name for name in desired if desired[name] != self.desired[name]}
+                    self.assertEqual({"opensearch"} if should_select else set(), changed)
+                    daily = deploy.selected_components("schedule", "oci", "jaeger", "upgrade", self.desired, desired)
+                    self.assertEqual({"oci-jaeger", "otel-jaeger"} | changed, set(daily))
+                    manual = deploy.selected_components("workflow_dispatch", "otel", "opensearch", "upgrade", self.desired, desired)
+                    self.assertEqual(["opensearch"], manual)
+                    self.assertEqual(changed, set(deploy.selected_components("push", "oci", "jaeger", "upgrade",
+                                                                            self.desired, desired)))
+
     @patch("deploy.run")
     def test_schedule_needs_a_unique_persistent_claim_mounted_by_the_database(self, run):
         for volumes in ([], [{"name": "sidecar", "persistentVolumeClaim": {"claimName": "wrong"}}],
