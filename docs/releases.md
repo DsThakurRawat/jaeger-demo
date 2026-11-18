@@ -30,7 +30,8 @@ The current workflow supports these inputs:
 | `image_tag` | Shared fallback when an independent tag is omitted |
 | `opensearch_recovery` | Existing recovery policy; the extraction retains its restrictions |
 
-Supply explicit published commit tags for the first handover. Do not use `latest`
+Supply each stack's existing published commit tags for the first handover, using
+separate OCI and OTel dispatches when they run different images. Do not use `latest`
 or leave image selection implicit for that reviewed run. Default image selection
 resolves upstream `jaegertracing/jaeger` main, never this configuration repository's
 SHA. Jaeger and HotROD tags can differ because they are published independently.
@@ -64,9 +65,20 @@ contract merely because its final value appears in a job log. For Stage 1 this i
 an operational gate. The generated bundle and automatic rejection of drift arrive
 with Helmfile.
 
-The current Helm setup must be inspected before handover. If it still chooses a
-floating version, freeze the verified version before deployment; the Cloud Shell
-client version is not evidence of the last release writer. Supply `expected_config_sha` during the reviewed script handover. The workflow
+Production and credential-free chart tests pin Helm v4.3.2, the version observed
+in the November 17, 2026 core deployment writer. Compare fresh release revisions
+and timestamps with that writer evidence before handover; the Cloud Shell client
+version is not evidence of the last release writer. Freeze and verify the other
+tool versions and checksums in the operational record as well. The OKE setup
+action's pip installation is constrained by `scripts/demo/oci-cli-constraints.txt`
+to OCI CLI 3.96.3 and the dependency versions observed in the same writer. After
+setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
+the CLI executable's version, including when the action's installed marker skips
+installation. A rejected tool check cannot start reconciliation or restore-pod
+cleanup. Credential-free CI installs and verifies these pins.
+Kubectl follows the live cluster's Kubernetes version; record its exact version
+and checksum along with the runner image used for handover. Supply
+`expected_config_sha` during the reviewed script handover. The workflow
 rejects a different configuration SHA before configuring OKE access. Verify the
 dispatched run's `headSha` and retain that evidence. Do not execute a different
 configuration revision under an earlier approval.

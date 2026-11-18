@@ -141,7 +141,9 @@ class DeploymentTests(unittest.TestCase):
 
         diagnostics, cleanup, slack = steps[-3:]
         self.assertIn("\n      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
-        self.assertIn("\n      if: always() && steps.configure-oke.outcome == 'success'\n", cleanup)
+        self.assertIn("\n      if: always() && steps.configure-oke.outcome == 'success' && "
+                      "(steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || "
+                      "steps.reconcile.outcome == 'cancelled')\n", cleanup)
         self.assertIn("\n      if: failure()\n", slack)
         self.assertIn("\n        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n", cleanup)
         script = deploy.ROOT / "examples/otel-demo/opensearch-recovery.sh"

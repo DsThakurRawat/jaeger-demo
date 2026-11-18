@@ -101,29 +101,47 @@ additional captured output before sharing it.
    been verified. Record the credential identity and revocation result without the
    key value. Retain a tested route to the cluster for recovery.
 5. Enable the new manual deployment path if GitHub has disabled it. Dispatch only
-   the reviewed inputs from main. For the narrow both-demo handover, use
-   `demo_stack=all`, `otel_deploy_scope=jaeger`, `deploy_mode=upgrade`, and independent
-   explicit Jaeger/HotROD commit tags. Supply the full configuration SHA in
+   the reviewed inputs from main. Transfer the OCI demo first, verify it, then
+   transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger`,
+   `deploy_mode=upgrade`, and each stack's existing Jaeger/HotROD commit tags. The
+   stacks may run different image versions; one `demo_stack=all` invocation shares
+   image inputs and cannot preserve those differences. Supply the full configuration SHA in
    `expected_config_sha`; the workflow fails before OKE setup if main has changed.
    Set these variables from the verified record, then dispatch:
 
    ```bash
    : "${config_sha:?Set the reviewed full configuration SHA}"
-   : "${jaeger_tag:?Set the reviewed Jaeger commit tag}"
-   : "${hotrod_tag:?Set the reviewed HotROD commit tag}"
+   : "${oci_jaeger_tag:?Set the existing OCI Jaeger commit tag}"
+   : "${oci_hotrod_tag:?Set the existing OCI HotROD commit tag}"
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
-     -f demo_stack=all -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
-     -f "jaeger_image_tag=$jaeger_tag" -f "hotrod_image_tag=$hotrod_tag" \
+     -f demo_stack=oci -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f "jaeger_image_tag=$oci_jaeger_tag" -f "hotrod_image_tag=$oci_hotrod_tag" \
      -f opensearch_recovery=required
    ```
 
-   Verify and record the run's `headSha` and inputs. A differing configuration
+   Wait for the OCI run to finish and verify its functional and resource checks.
+   Only then dispatch the OTel run from the same reviewed configuration:
+
+   ```bash
+   : "${config_sha:?Set the reviewed full configuration SHA}"
+   : "${otel_jaeger_tag:?Set the existing OTel Jaeger commit tag}"
+   : "${otel_hotrod_tag:?Set the existing OTel HotROD commit tag}"
+   gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
+     -f "expected_config_sha=$config_sha" \
+     -f demo_stack=otel -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f "jaeger_image_tag=$otel_jaeger_tag" -f "hotrod_image_tag=$otel_hotrod_tag" \
+     -f opensearch_recovery=required
+   ```
+
+   Verify and record each run's `headSha` and inputs. A differing configuration
    revision requires re-verification, not removal of the guard.
 
-   This selection deploys the two Jaeger components. It does not exercise a chart
+   These runs deploy the two Jaeger components. They do not exercise a chart
    upgrade of OpenSearch, monitoring or the OTel application. The full release and
    public-behavior checks still cover the existing six-release installation.
+   Keep `opensearch_recovery=required`; the Jaeger-only scope does not invoke the
+   OpenSearch recovery or upgrade path.
 6. Verify actual changes and all health checks in [releases.md](releases.md). The
    extracted scripts retain unconditional generator restarts and OTel HotROD
    Deployment replacement; review those expected effects rather than claiming this

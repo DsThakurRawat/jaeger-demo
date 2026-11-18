@@ -25,6 +25,26 @@ def step_script(name):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_production_and_chart_tests_use_the_same_pinned_helm_version(self):
+        versions = []
+        for filename in ('ci-deploy-demo.yml', 'ci.yml'):
+            with self.subTest(workflow=filename):
+                source = (WORKFLOWS / filename).read_text()
+                setup = source.split('uses: azure/setup-helm@', 1)[1].split('\n    - name:', 1)[0]
+                version = re.search(r'^        version: (v\d+\.\d+\.\d+)$', setup, re.MULTILINE)
+                self.assertIsNotNone(version, 'Helm must use an exact release, not the action default')
+                versions.append(version[1])
+        self.assertEqual(2, len(versions))
+        self.assertEqual(versions[0], versions[1])
+
+    def test_oci_cli_install_is_constrained_and_verified_before_reconciliation(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        configure = source.split('    - name: Configure kubectl with OKE\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt\n', configure)
+        check = source.index('    - name: Verify OCI CLI version\n      run: python scripts/demo/verify_oci_cli.py\n')
+        self.assertLess(source.index('    - name: Configure kubectl with OKE\n'), check)
+        self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
+
     def test_production_workflows_are_manual_main_only_and_environment_scoped(self):
         for filename in ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
             with self.subTest(workflow=filename):
@@ -86,10 +106,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(all('github.sha' not in line for line in image_lines))
         self.assertNotIn('      MAIN_SHA: ${{ github.sha }}', source)
         self.assertIn('    - name: Configure kubectl with OKE\n      id: configure-oke\n', source)
-        for name, condition in (('Collect OpenSearch recovery diagnostics', 'failure()'),
-                                ('Remove disposable restore pod', 'always()')):
-            step = source.split('    - name: ' + name + '\n', 1)[1].split('\n    - name:', 1)[0]
-            self.assertIn("      if: " + condition + " && steps.configure-oke.outcome == 'success'\n", step)
+        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn("      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
+
+    def test_restore_cleanup_runs_only_after_reconciliation_started(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        self.assertIn('    - name: Reconcile demo components\n      id: reconcile\n', source)
+        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
+        condition = re.search(r'^      if: (.+)$', cleanup, re.MULTILINE)[1]
+        for configure in ('success', 'failure', 'cancelled', 'skipped', ''):
+            for reconcile in ('success', 'failure', 'cancelled', 'skipped', ''):
+                with self.subTest(configure=configure, reconcile=reconcile):
+                    expression = condition.replace('always()', 'True')
+                    expression = expression.replace('steps.configure-oke.outcome', repr(configure))
+                    expression = expression.replace('steps.reconcile.outcome', repr(reconcile))
+                    expression = expression.replace('&&', 'and').replace('||', 'or')
+                    result = eval(expression, {'__builtins__': {}}, {})
+                    self.assertEqual(configure == 'success' and reconcile in ('success', 'failure', 'cancelled'), result)
 
 
 if __name__ == '__main__':
