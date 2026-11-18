@@ -152,9 +152,14 @@ retry, especially when OpenSearch upgraded before Dashboards failed.
 
 ## Failure handling
 
-Stop further automation before a rollback. Preserve the failed run's diagnostics
-and compare the actual release state with the recorded prior revisions. Do not
-retry a pending Helm operation blindly or uninstall a release to clear it.
+A failure leaves the schedule enabled. The next 13:00 UTC event retries eligible
+components, including changed components whose last attempt did not record a new
+fingerprint. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
+pause future scheduled jobs while inspecting a failure. Check queued and running
+writers separately and let an active Helm transaction finish before rolling back.
+Preserve the failed run's diagnostics and compare actual release state with the
+recorded prior revisions. Inspect a pending Helm operation before deciding how
+to recover it. [Pause and resume the script schedule](cutover.md#review-scheduled-scope).
 
 For an application release, a previously recorded revision can be restored with
 `helm rollback` after verifying that its values, images and external dependencies
