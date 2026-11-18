@@ -175,6 +175,11 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    stacks may run different image versions; one `demo_stack=all` invocation shares
    image inputs and cannot preserve those differences. Supply the full configuration SHA in
    `expected_config_sha`; the workflow fails before OKE setup if main has changed.
+   Capture the shared fingerprint ConfigMap immediately before each dispatch, with
+   a distinct snapshot for each stack. The pre-OTel capture must include the
+   successful OCI result. Keep these with that dispatch's release and supplemental
+   rollback captures; a snapshot from before both runs is insufficient for an
+   OTel-only rollback.
    Set these variables from the verified record, then dispatch:
 
    ```bash
@@ -215,11 +220,11 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    Deployment replacement; review those expected effects rather than claiming this
    script handover preserves all pod or Deployment identities. Unchanged identity
    and pod-template adoption tests belong to the later Helmfile transition.
-7. Enable the daily script schedule only after the manual deployment passes. Before
-   enabling it, inspect the stored component fingerprints and intended selection;
-   a changed or missing fingerprint may select additional components. Verify the
-   first scheduled run and record its outcome. That completes Stage 1 operational
-   handover.
+7. Keep the daily script schedule disabled after the two manual runs. Their success
+   verifies only the selected Jaeger components, not the schedule's selection or
+   permissions. Obtain the separate scope/access decision described below before
+   enabling it, then verify the first scheduled run. Stage 1 operational handover
+   remains incomplete until that scheduled-refresh gate passes.
 
 Current recovery tooling remains present during extraction. Its waiver is limited
 to a manual `main` / `otel` / `upgrade` / `opensearch` invocation. It is not accepted
@@ -227,12 +232,72 @@ for `all/all`. Do not use `clean` or bypass recovery checks to make handover pas
 Deletion of recovery tooling and the routine recovery gate is explicitly scheduled
 for the Helmfile conversion.
 
+## Review scheduled scope
+
+The reconciler fingerprints the whole deployment script for each component in its
+stack. The handover guard changes therefore also change the OpenSearch, OTel Demo
+and monitoring fingerprints. Two successful manual Jaeger runs update only their
+own keys. A schedule selects every changed or missing component fingerprint plus
+both Jaeger components; it does not use the manual stack/scope filter. The initial
+apply role and its finite Helm revision window do not authorize this broader or
+repeated work.
+
+From the root of a clean checkout at the proposed merged configuration SHA,
+inspect the actual selection with this read-only command. It uses the same fingerprint and
+selection functions as the reconciler and reads only the shared ConfigMap:
+
+```bash
+: "${config_sha:?Set the proposed merged configuration SHA}"
+python3 - "$config_sha" <<'PY'
+import json
+import subprocess
+import sys
+
+if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != sys.argv[1]:
+    raise SystemExit("Checkout does not match the proposed configuration SHA")
+if subprocess.run(["git", "diff", "--quiet", "HEAD"]).returncode:
+    raise SystemExit("Checkout has uncommitted changes")
+sys.path.insert(0, "scripts/demo")
+import deploy
+
+state = json.loads(subprocess.check_output([
+    "kubectl", "-n", "default", "get", "configmap", deploy.STATE, "-o", "json",
+], text=True))
+desired = {name: deploy.fingerprint(name) for name in deploy.COMPONENTS}
+selected = deploy.selected_components("schedule", "oci", "jaeger", "upgrade", state.get("data", {}), desired)
+print(json.dumps({"configuration": sys.argv[1], "state_resource_version": state["metadata"]["resourceVersion"],
+                  "selected_components": selected}, indent=2))
+PY
+```
+
+Retain the result and review every selected component, its recovery policy,
+effective permissions, revision allowance and rollback procedure. Rehearse the
+accepted selection with matching permissions before activation, and repeat this
+inspection if configuration or stored fingerprints change. Do not overwrite
+unapplied fingerprints to hide additional selections. The initial manual access
+approval is not approval to broaden permissions or remove the environment reviewer.
+
+While the old maintenance workflows are disabled and the new grant is limited to
+Jaeger, the independent operator owns maintenance and incident recovery through the
+separate administrator route. The new recovery and volume-expansion workflows
+remain outside this grant even though they share `demo-apply`. Record that interim
+owner until their replacement scope is accepted.
+
 ## If the handover fails
 
 Stop new automation first and retain diagnostics. Do not reactivate old workflows
 while the new path can still write. Restore application revisions and supplemental
 specs using the recorded scope, then verify health. See
 [release failure handling](releases.md#failure-handling).
+
+Restore the failed dispatch's application and supplemental resources first. After
+verification, restore only its key in `default/jaeger-demo-deployment-revisions`
+from that dispatch's pre-run capture: `oci-jaeger` or `otel-jaeger`. Use a merge
+patch containing only that entry under `data`; if the key was originally absent,
+use a null value to remove it. Read the current ConfigMap before patching and
+verify afterward that every other entry is unchanged. Never apply an entire old
+ConfigMap snapshot. In particular, an OTel-only rollback must preserve the earlier
+successful OCI fingerprint. An unchanged failed-component key needs no patch.
 
 The old key stays revoked. If returning operational ownership to core is necessary,
 verify a replacement scoped credential and the exact old configuration before
