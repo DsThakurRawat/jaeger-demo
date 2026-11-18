@@ -92,7 +92,7 @@ get_live_jaeger_image() {
 opensearch_api() {
   local method=$1
   local path=$2
-  kubectl -n "$NAMESPACE" exec "$POD" -c opensearch --
+  kubectl -n "$NAMESPACE" exec "$POD" -c opensearch -- \
     curl --fail --silent --show-error -X "$method" "http://127.0.0.1:9200/$path"
 }
 
@@ -500,7 +500,7 @@ EOF
 restored_api() {
   local pod=$1
   local path=$2
-  kubectl -n "$NAMESPACE" exec "$pod" -c opensearch --
+  kubectl -n "$NAMESPACE" exec "$pod" -c opensearch -- \
     curl --fail --silent --show-error "http://127.0.0.1:9200/$path"
 }
 
@@ -538,7 +538,7 @@ wait_for_restored_opensearch() {
 jaeger_api() {
   local pod=$1
   local path=$2
-  kubectl -n "$NAMESPACE" exec "$pod" -c opensearch --
+  kubectl -n "$NAMESPACE" exec "$pod" -c opensearch -- \
     curl --fail --silent --show-error "http://127.0.0.1:16686/$path"
 }
 
