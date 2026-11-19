@@ -94,7 +94,7 @@ def authenticate(store, operation):
         raise ReceiverError("The API reported a different service account than the installed role")
 
 
-def prepare_slot(store, bundle, adapter, read_sha, paths, now=protocol.utcnow):
+def prepare_slot(store, bundle, adapter, approvals, read_sha, paths, now=protocol.utcnow):
     instant = now()
     slot = protocol.daily_slot(instant)
     stamp = protocol.format_utc(slot)
@@ -112,6 +112,14 @@ def prepare_slot(store, bundle, adapter, read_sha, paths, now=protocol.utcnow):
         files = adapter.prepare(stamp, sha)
         if now() >= expires:
             raise ReceiverError("Preparation exceeded the daily admission window")
+
+        def before_index(candidate):
+            protocol.preparation_change(store, slot, expires, ENGINE, candidate, now())
+            digest = approvals.publish_approvals(files, stamp, candidate)
+            if not isinstance(digest, str) or not re.fullmatch("[0-9a-f]{64}", digest):
+                raise ReceiverError("The complete admission approval digest is required")
+            return digest
+
         receipt = bundle.publish(
             paths.store,
             stamp,
@@ -119,8 +127,12 @@ def prepare_slot(store, bundle, adapter, read_sha, paths, now=protocol.utcnow):
             files,
             signing_key=paths.keys / "signing-key.pem",
             recipient_key=paths.keys / "recipient-public.pem",
+            before_index=before_index,
         )
-    protocol.prepare(store, slot, expires, ENGINE, protocol.receipt_fields(receipt), now())
+    receipt = protocol.receipt_fields(receipt)
+    if approvals.verify_approvals(stamp, receipt) is not True:
+        raise ReceiverError("The in-cluster approvals differ from the signed daily bundle")
+    protocol.prepare(store, slot, expires, ENGINE, receipt, now())
     return receipt
 
 
@@ -330,9 +342,12 @@ def main():
         authenticate(store, op)
         paths = Paths()
         if op == "prepare":
+            import scheduled_approvals
             import scheduled_inputs
 
-            receipt = prepare_slot(store, bundle, adapter, scheduled_inputs.main_sha, paths)
+            receipt = prepare_slot(
+                store, bundle, adapter, scheduled_approvals, scheduled_inputs.main_sha, paths
+            )
             print(json.dumps({"prepared": receipt}, sort_keys=True))
             return 0
         check_mounts(paths)

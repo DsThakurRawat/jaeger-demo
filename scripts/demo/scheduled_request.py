@@ -180,8 +180,8 @@ def signal(store, obj, start):
     )
 
 
-def prepare(store, slot, expires, engine, receipt, now):
-    """Called by an independently authorized preparer after it freezes the day's bundle."""
+def preparation_change(store, slot, expires, engine, receipt, now):
+    """Validate the intended transition without publishing it or modifying the control record."""
     data = {**description(slot, expires, engine, receipt), "state": "ready", "requestedAt": ""}
     if now >= expires:
         raise RequestError("Refusing to prepare an expired daily slot")
@@ -189,8 +189,8 @@ def prepare(store, slot, expires, engine, receipt, now):
     if old is None:
         raise RequestError("The operator must bootstrap the named request record and its admission policy")
     if old.get("data") == {"schema": SCHEMA, "state": "empty"}:
-        store.patch(REQUEST, old, [{"op": "replace", "path": "/data", "value": data}])
-    elif old.get("data") != {
+        return old, data
+    if old.get("data") != {
         **data,
         "state": old.get("data", {}).get("state"),
         "requestedAt": old.get("data", {}).get("requestedAt"),
@@ -201,9 +201,16 @@ def prepare(store, slot, expires, engine, receipt, now):
             raise RequestError("An existing slot is newer, conflicting, running or awaiting recovery")
         if prior["state"] not in {"succeeded", "recovered"} and now < timestamp(prior["expiresAt"]):
             raise RequestError("The previous slot is still live")
+        return old, data
+    validate(old, slot, engine, receipt["configurationSHA"])
+    return None
+
+
+def prepare(store, slot, expires, engine, receipt, now):
+    change = preparation_change(store, slot, expires, engine, receipt, now)
+    if change:
+        old, data = change
         store.patch(REQUEST, old, [{"op": "replace", "path": "/data", "value": data}])
-    else:
-        validate(old, slot, engine, receipt["configurationSHA"])
 
 
 def request_and_wait(store, slot, sha, now=utcnow, sleep=time.sleep):
@@ -405,23 +412,9 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, epilog="For operator recovery, run recover --help."
     )
-    parser.add_argument("operation", choices=["request", "manual-acquire", "manual-release", "prepare"])
-    parser.add_argument(
-        "--receipt", type=Path, help="Independent preparer’s verified public bundle receipt"
-    )
-    parser.add_argument("--engine", choices=sorted(ENGINES), default="scripts-v1")
-    parser.add_argument("--slot", help="UTC date and time of the approved daily slot")
+    parser.add_argument("operation", choices=["request", "manual-acquire", "manual-release"])
     args = parser.parse_args()
     store = ConfigMaps()
-    if args.operation == "prepare":
-        if not args.receipt:
-            raise RequestError("The protected preparer requires a verified bundle receipt")
-        now = utcnow()
-        slot = timestamp(args.slot) if args.slot else daily_slot(now)
-        prepare(
-            store, slot, slot + timedelta(hours=2), args.engine, json.loads(args.receipt.read_bytes()), now
-        )
-        return
     if args.operation == "request":
         if (
             os.environ.get("GITHUB_EVENT_NAME") != "schedule"

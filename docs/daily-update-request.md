@@ -35,10 +35,10 @@ python3 scripts/demo/rehearsals/scheduled-request/access.py \
 
 After the approved guard is installed, repeat the render with `--phase verified-binding` on the intended operator context. That phase performs a nonpersistent API admission readback before emitting the binding.
 
-Run the following command from the trusted planner after producing a new immutable bundle under the previously approved release policy. The receipt file has exactly `configurationSHA` and `bundleSHA256`. The command reuses the fixed request object for the next UTC date and preserves an unresolved failure. The requester cannot prepare new inputs. Chart and image bytes, keys and private manifests stay out of this record.
+The authenticated preparer checks the current request and stages the named admission parameters from its original frozen inputs. It signs their aggregate digest in the private dated index. It reads the parameter records back and verifies them against that signed digest before publishing the ready request. The requester receives only the configuration SHA and bundle SHA-256. An operator rerunning the preparer uses the same service-account entry point as the CronJob.
 
 ```bash
-python3 scripts/demo/scheduled_request.py prepare --engine scripts-v1 --receipt "$public_receipt"
+python3 /opt/jaeger-demo/scripts/demo/scheduled_receiver.py prepare
 ```
 
 ## Concurrency and recovery

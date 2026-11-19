@@ -20,6 +20,7 @@ ROOT = HERE.parents[3]
 sys.path.insert(0, str(HERE.parent / "scheduled-request"))
 access = import_module("access")
 protocol = import_module("scheduled_request")
+fixture_approvals = import_module("fixture_approvals")
 
 NS = protocol.REQUEST[0]
 EXECUTOR = "jaeger-demo-executor"
@@ -88,13 +89,13 @@ def add_fixtures(obj):
         # Exercise imports from the original image before mounting the synthetic application.
         container["args"][1] = (
             "import sys\nsys.path.insert(0,'/opt/jaeger-demo/scripts/demo')\n"
-            "import scheduled_receiver, scheduled_bundle, scheduled_adapter, scheduled_inputs\n"
+            "import scheduled_receiver, scheduled_bundle, scheduled_adapter, scheduled_inputs, scheduled_approvals\n"
             + container["args"][1]
         )
         return
     pod["volumes"].append({"name": "fixture", "configMap": {"name": "fixture-app"}})
     container["volumeMounts"].append({"name": "fixture", "mountPath": "/fixture", "readOnly": True})
-    for module in ("scheduled_inputs.py", "scheduled_adapter.py"):
+    for module in ("scheduled_inputs.py", "scheduled_adapter.py", "scheduled_approvals.py"):
         container["volumeMounts"].append(
             {
                 "name": "fixture",
@@ -217,6 +218,7 @@ def rehearse(kube, image, work):
         "fixture-workload-recovery",
     ]
     guards = list(access.manifests(*principals))
+    guards.extend(fixture_approvals.resources(*protocol.REQUEST, principals[1]))
     for item in guards:
         if item["kind"] not in ("Namespace", "RoleBinding"):
             api("create", "-f", "-", doc=item)
@@ -256,6 +258,7 @@ def rehearse(kube, image, work):
         "data": {
             "slot": protocol.format_utc(slot),
             "outcome": "success",
+            "scheduled_approvals.py": (HERE / "fixture_approvals.py").read_text(),
             **{
                 f: (HERE / f).read_text()
                 for f in ("scheduled_inputs.py", "scheduled_adapter.py", "sitecustomize.py")

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import scheduled_receiver as receiver
 import scheduled_request as protocol
@@ -35,7 +35,15 @@ class ReceiverTests(unittest.TestCase):
         self.member = {"fixture-member": b"synthetic-private-content"}
         self.bundle = Mock(SlotNotFound=SlotNotFound)
         self.bundle.trusted_receipt.return_value = self.receipt
-        self.bundle.publish.return_value = self.receipt
+        self.approvals = Mock()
+        self.approvals.publish_approvals.return_value = "e" * 64
+        self.approvals.verify_approvals.return_value = True
+
+        def publish(*args, before_index, **kwargs):
+            before_index(self.receipt)
+            return self.receipt
+
+        self.bundle.publish.side_effect = publish
         self.bundle.load.return_value = self.member
         self.adapter = Mock()
         self.adapter.prepare.return_value = self.member
@@ -47,7 +55,7 @@ class ReceiverTests(unittest.TestCase):
 
     def prepare(self):
         return receiver.prepare_slot(
-            self.store, self.bundle, self.adapter, self.main_sha, self.paths, self.now
+            self.store, self.bundle, self.adapter, self.approvals, self.main_sha, self.paths, self.now
         )
 
     def signal(self):
@@ -71,6 +79,7 @@ class ReceiverTests(unittest.TestCase):
             self.member,
             signing_key=self.paths.keys / "signing-key.pem",
             recipient_key=self.paths.keys / "recipient-public.pem",
+            before_index=ANY,
         )
         self.bundle.trusted_receipt.side_effect = None
         old = self.store.read(protocol.REQUEST)
@@ -96,6 +105,67 @@ class ReceiverTests(unittest.TestCase):
         with self.assertRaisesRegex(receiver.ReceiverError, "Outside"):
             self.prepare()
         self.assertEqual(self.state(), "empty")
+
+    def test_partial_unsigned_projection_is_retried_and_signed_slot_resumes_without_private_inputs(self):
+        events = []
+        slots = {}
+
+        def trusted(folder, stamp, **kwargs):
+            events.append("lookup")
+            if stamp not in slots:
+                raise SlotNotFound()
+            return slots[stamp]
+
+        def durable(folder, stamp, sha, files, *, before_index, **kwargs):
+            events.append("blob")
+            self.assertEqual(before_index(self.receipt), "e" * 64)
+            events.append("index")
+            slots[stamp] = self.receipt
+            return self.receipt
+
+        def fail_first(files, stamp, receipt):
+            events.append("staging")
+            if events.count("staging") == 1:
+                raise RuntimeError("fixture partial write")
+            return "e" * 64
+
+        self.bundle.trusted_receipt.side_effect = trusted
+        self.bundle.publish.side_effect = durable
+        self.approvals.publish_approvals.side_effect = fail_first
+        with self.assertRaisesRegex(RuntimeError, "partial"):
+            self.prepare()
+        self.assertEqual((self.state(), slots, events), ("empty", {}, ["lookup", "blob", "staging"]))
+        self.approvals.verify_approvals.assert_not_called()
+        self.approvals.verify_approvals.return_value = False
+        with self.assertRaisesRegex(receiver.ReceiverError, "approvals differ"):
+            self.prepare()
+        self.assertEqual(self.state(), "empty")
+        self.assertEqual(slots, {self.stamp: self.receipt})
+        self.approvals.verify_approvals.return_value = True
+        self.prepare()
+        self.assertEqual(self.state(), "ready")
+        self.assertEqual(
+            events, ["lookup", "blob", "staging", "lookup", "blob", "staging", "index", "lookup"]
+        )
+        self.bundle.load.assert_not_called()
+        self.assertEqual(self.main_sha.call_count, 2)
+        self.approvals.verify_approvals.assert_called_with(self.stamp, self.receipt)
+
+    def test_unresolved_older_slot_or_invalid_approval_digest_cannot_be_republished(self):
+        self.bundle.trusted_receipt.side_effect = SlotNotFound()
+        self.approvals.publish_approvals.return_value = None
+        with self.assertRaisesRegex(receiver.ReceiverError, "digest"):
+            self.prepare()
+        self.assertEqual(self.state(), "empty")
+        self.bundle.trusted_receipt.side_effect = None
+        self.signal()
+        self.store.rows[protocol.REQUEST]["data"]["state"] = "failed"
+        self.time += protocol.timedelta(days=1)
+        self.bundle.trusted_receipt.side_effect = SlotNotFound()
+        self.approvals.publish_approvals.reset_mock()
+        with self.assertRaisesRegex(protocol.RequestError, "awaiting recovery"):
+            self.prepare()
+        self.approvals.publish_approvals.assert_not_called()
 
     def test_empty_missing_and_expired_requests_do_not_apply(self):
         self.assertEqual(self.poll(), "idle")

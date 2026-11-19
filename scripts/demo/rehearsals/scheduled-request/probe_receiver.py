@@ -7,6 +7,7 @@
 import argparse
 import base64
 import contextlib
+from importlib import import_module
 import json
 from ipaddress import ip_address
 import os
@@ -23,6 +24,10 @@ import probe_api
 import scheduled_bundle as custody
 import scheduled_receiver as receiver
 import scheduled_request as protocol
+
+
+sys.path.append(str(Path(__file__).resolve().parents[1] / "executor-runtime"))
+fixture_approvals = import_module("fixture_approvals")
 
 
 def subject(role):
@@ -68,7 +73,20 @@ def run_worker(op, root, kubectl):
 
         adapter = FixtureAdapter(root)
         if op == "prepare":
-            receiver.prepare_slot(control, custody, adapter, lambda: SHA, paths, now=now)
+
+            def after_part(_):
+                if (root / "interrupt-preparation").exists():
+                    os._exit(76)
+
+            receiver.prepare_slot(
+                control,
+                custody,
+                adapter,
+                fixture_approvals.FixtureApprovals(control, paths, after_part),
+                lambda: SHA,
+                paths,
+                now=now,
+            )
         else:
             receiver.check_mounts(paths)
             receiver.serve(control, custody, adapter, paths, now=now)
@@ -120,6 +138,7 @@ def run_cases(kube, root):
     api("create", "configmap", protocol.CHECKPOINT[1], "-n", "default", "--from-literal=fixture=fixed")
     api("annotate", "configmap", protocol.CHECKPOINT[1], "-n", "default", f"{protocol.PROTOCOL}=v1")
     resources = list(access.manifests(REQUESTER, subject("prepare"), subject("serve"), RECOVERY))
+    resources.extend(fixture_approvals.resources(*protocol.REQUEST, subject("prepare")))
     for obj in resources:
         if obj["kind"] != "RoleBinding":
             api("create", "-f", "-", doc=obj)
@@ -214,6 +233,24 @@ def run_cases(kube, root):
         else:
             raise AssertionError("Unexpected role accepted")
     (root / "clock").write_text(protocol.format_utc(slot))
+    interruption = root / "interrupt-preparation"
+    interruption.touch()
+    with launch("prepare") as p:
+        checked(
+            p.wait(timeout=30) == 76 and state() == "empty",
+            "crash after the first approval partition leaves the daily request unadvertised",
+        )
+    try:
+        custody.trusted_receipt(
+            root / "bundles",
+            protocol.format_utc(slot),
+            verification_key=root / "prepare/keys/verification-key.pem",
+        )
+    except custody.SlotNotFound:
+        cases.append("partial approval publication has no signed dated index")
+    else:
+        raise AssertionError("The interrupted preparer committed a partial index")
+    interruption.unlink()
     prepare()
     initial = sender.read(protocol.REQUEST)
     prepare()
@@ -221,6 +258,64 @@ def run_cases(kube, root):
         sender.read(protocol.REQUEST) == initial,
         "preparer restart reuses the signed dated receipt without another request write",
     )
+
+    def signal_guard_observes(accepted):
+        try:
+            sender.command(
+                "-n",
+                receiver.NAMESPACE,
+                "patch",
+                "configmap",
+                protocol.REQUEST[1],
+                "--type=merge",
+                "-p",
+                json.dumps({"data": {"state": "requested", "requestedAt": protocol.format_utc(slot)}}),
+                "--dry-run=server",
+            )
+        except protocol.RequestError as error:
+            if "Fixture approval is incomplete" not in str(error):
+                raise
+            return not accepted
+        return accepted
+
+    part = fixture_approvals.PARTS[-1]
+    original_row = json.loads(api("-n", receiver.NAMESPACE, "get", "configmap", part, "-o", "json"))["data"]
+    api(
+        "-n",
+        receiver.NAMESPACE,
+        "patch",
+        "configmap",
+        part,
+        "--type=merge",
+        "-p",
+        json.dumps({"data": {"bundleSHA256": "c" * 64}}),
+    )
+    wait_until(lambda: signal_guard_observes(False))
+    try:
+        protocol.signal(sender, initial, slot)
+    except protocol.RequestError as error:
+        checked(
+            "Fixture approval is incomplete" in str(error) and state() == "ready",
+            "native admission denies a signal when one independently prepared partition is stale",
+        )
+    else:
+        raise AssertionError("Native admission accepted a partial dated approval")
+    with launch("prepare") as p:
+        checked(
+            p.wait(timeout=30) != 0 and state() == "ready",
+            "a restarted preparer fails closed on changed approvals without republishing or decrypting",
+        )
+    api(
+        "-n",
+        receiver.NAMESPACE,
+        "patch",
+        "configmap",
+        part,
+        "--type=merge",
+        "-p",
+        json.dumps({"data": original_row}),
+    )
+    wait_until(lambda: signal_guard_observes(True))
     with service() as p:
         wait_until(lambda: (root / "readiness").exists())
         checked(
