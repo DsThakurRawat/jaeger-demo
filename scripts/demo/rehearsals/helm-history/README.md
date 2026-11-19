@@ -37,6 +37,10 @@ python3 rehearse-six-release-history.py \
 
 The script checks supported binary versions and rejects unrelated receipt outputs. It launches the API server and etcd on ephemeral IPv4 loopback ports and creates a temporary local administrator credential. Every Helm and kubectl operation selects the fixture’s explicit kubeconfig and context. Application operations impersonate the dedicated restricted identity. The policy requires both old and new identities on UPDATE and the stored identity on DELETE. On exit both processes stop and the temporary credentials, etcd database and synthetic release histories are removed. The receipt contains no kubeconfig or Secret values.
 
+## Actual OpenSearch charts
+
+The [storage chart rehearsal](storage-chart-rehearsal.md) extends this isolated API with both pinned charts, reviewed workload changes, content enforcement and a seeded PVC binding. Use the separate `--storage-charts` option to include it.
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

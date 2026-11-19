@@ -66,6 +66,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
+    parser.add_argument("--storage-charts", type=Path,
+                        help="Also exercise the two pinned storage charts from this archive directory")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -278,6 +280,16 @@ def main():
                 ],
                 "etcd",
             )
+            audit = []
+            if args.storage_charts:
+                audit_policy = root / "audit-policy.json"
+                audit_policy.write_text(json.dumps({
+                    "apiVersion": "audit.k8s.io/v1", "kind": "Policy",
+                    "omitStages": ["RequestReceived", "ResponseStarted"],
+                    "rules": [{"level": "Metadata"}],
+                }))
+                audit = ["--audit-policy-file", audit_policy, "--audit-log-path", root / "audit.log",
+                         "--audit-log-mode", "blocking"]
             api_proc = run_server(
                 [
                     apiserver,
@@ -308,6 +320,7 @@ def main():
                     "--service-account-issuer",
                     "https://fixture.invalid",
                     "--allow-privileged=false",
+                    *audit,
                 ],
                 "apiserver",
             )
@@ -511,6 +524,12 @@ def main():
             report["unrestrictedSecretReadsInReleaseNamespaces"] = True
             report["historyLimitUsed"] = 3
             report["kubernetesEnforcedAdmission"] = True
+            if args.storage_charts:
+                from storage_charts import rehearse
+
+                report["storageChartRehearsal"] = rehearse(
+                    args.storage_charts.resolve(), root, kube, release_cmd, WRITER
+                )
         report["cleanup"] = (
             "Both local servers stopped and temporary credentials, charts, histories and etcd data removed."
         )

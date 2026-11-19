@@ -1,0 +1,13 @@
+{
+  "verifiedAt": "2026-11-19T02:45:03.964129+00:00",
+  "productionAccess": false,
+  "environment": "local kind",
+  "storageProvisioner": "rancher.io/local-path",
+  "claimName": "opensearch-cluster-single-opensearch-cluster-single-0",
+  "PVCUIDAndPVPreserved": true,
+  "controllerBoundVolume": true,
+  "newPodUID": true,
+  "markerReadAfterReplacement": true,
+  "namespaceAndPVRemoved": true,
+  "application": "BusyBox storage fixture; OpenSearch engine and OCI CSI were not exercised"
+}
