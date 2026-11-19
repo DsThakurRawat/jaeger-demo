@@ -1,8 +1,12 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import copy
 from datetime import timedelta
+import io
+import json
+from unittest.mock import patch
 import unittest
 
 import scheduled_request as req
@@ -28,6 +32,10 @@ class Store:
             },
             "data": data,
         }
+
+    def command(self, *parts):
+        assert parts == ("auth", "whoami", "-o", "json")
+        return json.dumps({"status": {"userInfo": {"username": "human-recovery"}}})
 
     def read(self, key):
         return copy.deepcopy(self.rows.get(key))
@@ -138,6 +146,132 @@ class ScheduledRequestTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(req.RequestError, "reported failure"):
             req.request_and_wait(self.store, self.slot, self.sha, now=lambda: self.now)
+
+    def snapshot(self):
+        return tuple(
+            (self.store.read(ref)["metadata"]["uid"], self.store.read(ref)["metadata"]["resourceVersion"])
+            for ref in (req.REQUEST, req.CHECKPOINT)
+        )
+
+    def recover(self, reviewed, receipt=None, confirmed=True, operator="human-recovery"):
+        req.recover(
+            self.store, self.slot, "scripts-v1", receipt or self.receipt, reviewed, operator, confirmed
+        )
+
+    def test_recovery_requires_a_confirmed_matching_operation_and_preserves_the_failed_result(self):
+        self.signal()
+        with self.assertRaisesRegex(req.RequestError, "verify"):
+            self.execute(lambda _: False)
+        reviewed = self.snapshot()
+        bad_receipt = dict(self.receipt, bundleSHA256="a" * 64)
+        for kwargs, error in (
+            ({"confirmed": False}, "Confirm"),
+            ({"operator": "requester"}, "identity"),
+            ({"receipt": bad_receipt}, "Only the reviewed"),
+            ({"reviewed": (("wrong", reviewed[0][1]), reviewed[1])}, "changed since"),
+            ({"reviewed": (reviewed[0], (reviewed[1][0], "old"))}, "changed since"),
+        ):
+            with self.subTest(error=error), self.assertRaisesRegex(req.RequestError, error):
+                self.recover(**{"reviewed": reviewed, **kwargs})
+            self.assertEqual(self.snapshot(), reviewed)
+        self.recover(reviewed)
+        self.assertEqual(self.validate()["state"], "recovered")
+        self.assertNotIn(req.HOLDER, self.store.read(req.CHECKPOINT)["metadata"]["annotations"])
+        with self.assertRaisesRegex(req.RequestError, "reported failure"):
+            req.request_and_wait(self.store, self.slot, self.sha, now=lambda: self.expires)
+        with self.assertRaisesRegex(req.RequestError, "already claimed"):
+            self.execute()
+        with self.assertRaisesRegex(req.RequestError, "Only the reviewed"):
+            self.recover(self.snapshot())
+        later = self.slot + timedelta(days=1)
+        req.prepare(self.store, later, later + timedelta(hours=2), "scripts-v1", self.receipt, later)
+        self.assertEqual(self.store.read(req.REQUEST)["data"]["state"], "ready")
+
+    def test_operator_cli_requires_confirmation_and_uses_the_reviewed_records(self):
+        self.signal()
+        with self.assertRaisesRegex(req.RequestError, "verify"):
+            self.execute(lambda _: False)
+        request_ref, checkpoint_ref = self.snapshot()
+        args = [
+            "scheduled_request.py",
+            "recover",
+            "--operator",
+            "human-recovery",
+            "--slot",
+            req.format_utc(self.slot),
+            "--engine",
+            "scripts-v1",
+            "--receipt",
+            "test.json",
+            "--request-uid",
+            request_ref[0],
+            "--request-version",
+            request_ref[1],
+            "--checkpoint-uid",
+            checkpoint_ref[0],
+            "--checkpoint-version",
+            checkpoint_ref[1],
+        ]
+        with patch.object(req.sys, "argv", args), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as missing:
+                req.main()
+            self.assertEqual(missing.exception.code, 2)
+        self.assertEqual(self.snapshot(), (request_ref, checkpoint_ref))
+        with (
+            patch.object(req.sys, "argv", [*args, "--confirmed-stopped-and-reconciled"]),
+            patch.object(req, "ConfigMaps", return_value=self.store),
+            patch.object(req.Path, "read_bytes", return_value=json.dumps(self.receipt).encode()),
+        ):
+            req.main()
+        self.assertEqual(self.validate()["state"], "recovered")
+
+    def test_recovery_can_resume_a_released_lock_without_touching_a_new_writer(self):
+        self.signal()
+        with self.assertRaisesRegex(req.RequestError, "verify"):
+            self.execute(lambda _: False)
+        reviewed = self.snapshot()
+        with patch.object(req, "set_state", side_effect=req.RequestError("conflict")):
+            with self.assertRaisesRegex(req.RequestError, "conflict"):
+                self.recover(reviewed)
+        self.assertEqual(self.validate()["state"], "failed")
+        self.assertNotIn(req.HOLDER, self.store.read(req.CHECKPOINT)["metadata"]["annotations"])
+        with self.assertRaisesRegex(req.RequestError, "changed since"):
+            self.recover(reviewed)
+        req.acquire(self.store, "manual/2/1")
+        with self.assertRaisesRegex(req.RequestError, "lock owner"):
+            self.recover(self.snapshot())
+        self.assertEqual(
+            self.store.read(req.CHECKPOINT)["metadata"]["annotations"][req.HOLDER], "manual/2/1"
+        )
+        req.release(self.store, "manual/2/1")
+        self.recover(self.snapshot())
+        self.assertEqual(self.validate()["state"], "recovered")
+
+    def test_original_window_controls_new_signals_and_claims_but_existing_results_remain_observable(self):
+        self.signal()
+        late = self.expires + timedelta(hours=1)
+        with self.assertRaisesRegex(req.RequestError, "did not claim"):
+            req.request_and_wait(self.store, self.slot, self.sha, now=lambda: late)
+        for state in ("running", "verified"):
+            with self.subTest(state=state):
+                req.set_state(self.store, self.store.read(req.REQUEST), state)
+                with patch.object(req, "signal", side_effect=AssertionError("unexpected new signal")):
+                    result = req.request_and_wait(
+                        self.store,
+                        self.slot,
+                        self.sha,
+                        now=lambda: late,
+                        sleep=lambda _: req.set_state(
+                            self.store, self.store.read(req.REQUEST), "succeeded"
+                        ),
+                    )
+                    self.assertEqual(result, self.receipt)
+        self.assertEqual(
+            req.request_and_wait(self.store, self.slot, self.sha, now=lambda: late), self.receipt
+        )
+        req.set_state(self.store, self.store.read(req.REQUEST), "failed")
+        with self.assertRaisesRegex(req.RequestError, "reported failure"):
+            req.request_and_wait(self.store, self.slot, self.sha, now=lambda: late)
 
     def test_status_requires_lock_release_before_succeeded(self):
         self.signal()

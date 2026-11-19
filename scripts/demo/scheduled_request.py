@@ -19,7 +19,7 @@ PROTOCOL = "jaegertracing.io/deployment-lock-version"
 HOLDER = "jaegertracing.io/deployment-lock-holder"
 SCHEMA = "jaeger-demo/daily-request/v1"
 ENGINES = {"scripts-v1", "helmfile-v1"}
-STATES = {"ready", "requested", "running", "verified", "succeeded", "failed"}
+STATES = {"ready", "requested", "running", "verified", "succeeded", "failed", "recovered"}
 ACK_TIMEOUT = timedelta(minutes=5)
 MAX_LIFETIME = timedelta(hours=6)
 EXECUTION_TIMEOUT = timedelta(minutes=280)
@@ -199,7 +199,7 @@ def prepare(store, slot, expires, engine, receipt, now):
         validate(old, timestamp(prior["slot"]), prior["engine"], prior["configurationSHA"])
         if timestamp(prior["slot"]) >= slot or prior["state"] in {"running", "verified", "failed"}:
             raise RequestError("An existing slot is newer, conflicting, running or awaiting recovery")
-        if prior["state"] != "succeeded" and now < timestamp(prior["expiresAt"]):
+        if prior["state"] not in {"succeeded", "recovered"} and now < timestamp(prior["expiresAt"]):
             raise RequestError("The previous slot is still live")
         store.patch(REQUEST, old, [{"op": "replace", "path": "/data", "value": data}])
     else:
@@ -214,9 +214,9 @@ def request_and_wait(store, slot, sha, now=utcnow, sleep=time.sleep):
     signalled = data["requestedAt"]
     uid = obj["metadata"]["uid"]
     start = now()
-    if start < slot or start >= timestamp(data["expiresAt"]):
-        raise RequestError("The original scheduled run is outside its reviewed request window")
     if data["state"] == "ready":
+        if start < slot or start >= timestamp(data["expiresAt"]):
+            raise RequestError("The original scheduled run is outside its reviewed request window")
         try:
             signal(store, obj, start)
         except RequestError:
@@ -242,6 +242,8 @@ def request_and_wait(store, slot, sha, now=utcnow, sleep=time.sleep):
             return receipt_fields({key: data[key] for key in ("configurationSHA", "bundleSHA256")})
         if state == "failed":
             raise RequestError("The protected executor reported failure; inspect its operation record")
+        if state == "recovered":
+            raise RequestError("The protected executor reported failure and an operator reconciled it")
         if state == "ready":
             raise RequestError("The protected request returned to ready unexpectedly")
         elapsed = now() - start
@@ -274,10 +276,54 @@ def release(store, owner):
     obj = store.read(CHECKPOINT)
     if not obj or obj["metadata"].get("annotations", {}).get(HOLDER) != owner:
         raise RequestError("The current process does not own the production writer lock")
+    release_observed(store, obj, owner)
+
+
+def release_observed(store, obj, owner):
     path = "/metadata/annotations/" + pointer(HOLDER)
     store.patch(
         CHECKPOINT, obj, [{"op": "test", "path": path, "value": owner}, {"op": "remove", "path": path}]
     )
+
+
+def daily_owner(slot, obj):
+    return "daily/" + format_utc(slot) + "/" + obj["metadata"]["uid"]
+
+
+def recover(store, slot, engine, receipt, reviewed, operator, confirmed):
+    """Reconcile only the reviewed failed/verified operation, without running its bundle again."""
+    if not confirmed:
+        raise RequestError(
+            "Confirm the owner stopped and the live outcome and durable evidence were verified"
+        )
+    identity = json.loads(store.command("auth", "whoami", "-o", "json"))
+    if identity["status"]["userInfo"]["username"] != operator:
+        raise RequestError("The authenticated recovery operator differs from the reviewed identity")
+    receipt = receipt_fields(receipt)
+    obj = store.read(REQUEST)
+    data = validate(obj, slot, engine, receipt["configurationSHA"])
+    if data["bundleSHA256"] != receipt["bundleSHA256"] or data["state"] not in {"failed", "verified"}:
+        raise RequestError("Only the reviewed failed or durably verified operation can be reconciled")
+    checkpoint = store.read(CHECKPOINT)
+    if (
+        not checkpoint
+        or tuple(
+            (record["metadata"]["uid"], record["metadata"]["resourceVersion"])
+            for record in (obj, checkpoint)
+        )
+        != reviewed
+    ):
+        raise RequestError("The request or checkpoint changed since the operator's inspection")
+
+    owner = daily_owner(slot, obj)
+    annotations = checkpoint["metadata"].get("annotations", {})
+    if annotations.get(PROTOCOL) != "v1" or annotations.get(HOLDER) not in {None, owner}:
+        raise RequestError("The checkpoint protocol or lock owner differs from the reviewed operation")
+    if HOLDER in annotations:
+        release_observed(store, checkpoint, owner)
+    # If this CAS fails after release, re-inspect both records. An absent lock after
+    # a verified stop is safe to resume. A foreign owner is never cleared.
+    set_state(store, obj, "recovered" if data["state"] == "failed" else "succeeded")
 
 
 def execute(store, slot, sha, reviewed_receipt, verified_apply, now=utcnow, engine="scripts-v1"):
@@ -302,7 +348,7 @@ def execute(store, slot, sha, reviewed_receipt, verified_apply, now=utcnow, engi
         return obj
 
     obj = read_requested()
-    owner = "daily/" + format_utc(slot) + "/" + obj["metadata"]["uid"]
+    owner = daily_owner(slot, obj)
     acquire(store, owner)
     # After this point an ambiguous write leaves the lock held for operator recovery.
     current = read_requested()
@@ -330,8 +376,35 @@ def execute(store, slot, sha, reviewed_receipt, verified_apply, now=utcnow, engi
     finish("verified", "succeeded")
 
 
+def recovery_main():
+    parser = argparse.ArgumentParser(description=recover.__doc__)
+    parser.add_argument("--slot", required=True, type=timestamp)
+    parser.add_argument("--engine", choices=sorted(ENGINES), required=True)
+    parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--operator", required=True, help="Reviewed Kubernetes recovery username")
+    for record in ("request", "checkpoint"):
+        parser.add_argument("--" + record + "-uid", required=True)
+        parser.add_argument("--" + record + "-version", required=True)
+    parser.add_argument("--confirmed-stopped-and-reconciled", action="store_true", required=True)
+    args = parser.parse_args(sys.argv[2:])
+    recover(
+        ConfigMaps(),
+        args.slot,
+        args.engine,
+        json.loads(args.receipt.read_bytes()),
+        ((args.request_uid, args.request_version), (args.checkpoint_uid, args.checkpoint_version)),
+        args.operator,
+        args.confirmed_stopped_and_reconciled,
+    )
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    if sys.argv[1:2] == ["recover"]:
+        recovery_main()
+        return
+    parser = argparse.ArgumentParser(
+        description=__doc__, epilog="For operator recovery, run recover --help."
+    )
     parser.add_argument("operation", choices=["request", "manual-acquire", "manual-release", "prepare"])
     parser.add_argument(
         "--receipt", type=Path, help="Independent preparer’s verified public bundle receipt"

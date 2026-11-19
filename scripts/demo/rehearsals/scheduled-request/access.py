@@ -1,7 +1,7 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render the request record, three bindings, and fail-closed admission for review."""
+"""Render the request record, actor binding, and fail-closed admission for review."""
 
 import argparse
 import json
@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scheduled_request import REQUEST, SCHEMA
+from scheduled_request import CHECKPOINT, HOLDER, PROTOCOL, REQUEST, SCHEMA
 
 GROUP = "rbac.authorization.k8s.io"
 ADMISSION = "admissionregistration.k8s.io/v1"
@@ -19,12 +19,108 @@ ROLE = "access-daily-hosted-update"
 POLICY = "jaeger-reviewed-daily-request"
 
 
-def manifests(requester, preparer, executor):
-    identities = [requester, preparer, executor]
-    if len(set(identities)) != 3 or any(
+def recovery_guards(recovery):
+    # A recovery identity with separately reviewed checkpoint RBAC can only drop
+    # the daily holder for the matching failed/verified request. Manual owners and
+    # revision data stay protected even if it bypasses the operator CLI.
+    holder, protocol = json.dumps(HOLDER), json.dumps(PROTOCOL)
+    unchanged = []
+    for field in (
+        "data",
+        "binaryData",
+        "immutable",
+        "metadata.labels",
+        "metadata.finalizers",
+        "metadata.ownerReferences",
+    ):
+        unchanged.append(
+            f"(has(object.{field}) == has(oldObject.{field}) && "
+            f"(!has(object.{field}) || object.{field} == oldObject.{field}))"
+        )
+    lock_check = (
+        "params.data.state in ['failed','verified'] && "
+        + f"{holder} in variables.before && variables.before[{holder}] == 'daily/' + params.data.slot + '/' + string(params.metadata.uid) && "
+        + f"{protocol} in variables.before && variables.before[{protocol}] == 'v1' && !({holder} in variables.after) && "
+        + "variables.after.size() + 1 == variables.before.size() && variables.after.all(k, k in variables.before && variables.after[k] == variables.before[k]) && "
+        + " && ".join(unchanged)
+    )
+    unlocked = (
+        f"has(params.metadata.annotations) && {protocol} in params.metadata.annotations && "
+        f"params.metadata.annotations[{protocol}] == 'v1' && !({holder} in params.metadata.annotations)"
+    )
+    for suffix, target, parameter, expression, message in (
+        (
+            "lock",
+            CHECKPOINT,
+            REQUEST,
+            lock_check,
+            "Recovery may only remove the matching daily holder after failure or verification.",
+        ),
+        (
+            "result",
+            REQUEST,
+            CHECKPOINT,
+            unlocked,
+            "Recovery can finalize the request only after the checkpoint has been unlocked.",
+        ),
+    ):
+        name = f"{POLICY}-recovery-{suffix}"
+        spec = {
+            "failurePolicy": "Fail",
+            "paramKind": {"apiVersion": "v1", "kind": "ConfigMap"},
+            "matchConstraints": {
+                "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": target[0]}},
+                "resourceRules": [
+                    {
+                        "apiGroups": [""],
+                        "apiVersions": ["v1"],
+                        "operations": ["UPDATE"],
+                        "resources": ["configmaps"],
+                        "resourceNames": [target[1]],
+                    }
+                ],
+            },
+            "matchConditions": [
+                {
+                    "name": "recovery-record",
+                    "expression": f"request.userInfo.username == {json.dumps(recovery)} && request.namespace == {json.dumps(target[0])} && object.metadata.name == {json.dumps(target[1])}",
+                }
+            ],
+            "validations": [{"expression": expression, "message": message}],
+        }
+        if target == CHECKPOINT:
+            spec["variables"] = [
+                {"name": "before", "expression": "oldObject.metadata.annotations"},
+                {"name": "after", "expression": "object.metadata.annotations"},
+            ]
+        yield {
+            "apiVersion": ADMISSION,
+            "kind": "ValidatingAdmissionPolicy",
+            "metadata": {"name": name},
+            "spec": spec,
+        }
+        yield {
+            "apiVersion": ADMISSION,
+            "kind": "ValidatingAdmissionPolicyBinding",
+            "metadata": {"name": name},
+            "spec": {
+                "policyName": name,
+                "validationActions": ["Deny"],
+                "paramRef": {
+                    "namespace": parameter[0],
+                    "name": parameter[1],
+                    "parameterNotFoundAction": "Deny",
+                },
+            },
+        }
+
+
+def manifests(requester, preparer, executor, recovery):
+    identities = [requester, preparer, executor, recovery]
+    if len(set(identities)) != 4 or any(
         not v or "*" in v or len(v) > 512 or not v.isprintable() for v in identities
     ):
-        raise ValueError("Three distinct exact authenticated Kubernetes usernames are required")
+        raise ValueError("Four distinct exact authenticated Kubernetes usernames are required")
     ns, name = REQUEST
     nsmeta = {"namespace": ns, "name": ROLE}
     yield {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns}}
@@ -52,11 +148,11 @@ def manifests(requester, preparer, executor):
             ],
             "variables": [
                 {"name": k, "expression": "request.userInfo.username == " + json.dumps(v)}
-                for k, v in zip(("requester", "preparer", "executor"), identities)
+                for k, v in zip(("requester", "preparer", "executor", "recovery"), identities)
             ],
             "validations": [
                 {
-                    "expression": "variables.requester || variables.preparer || variables.executor",
+                    "expression": "variables.requester || variables.preparer || variables.executor || variables.recovery",
                     "message": "Only a bound daily update actor may change the request.",
                 },
                 {
@@ -86,9 +182,11 @@ def manifests(requester, preparer, executor):
                 {
                     "expression": """(variables.requester && oldObject.data.state == 'ready' && object.data.state == 'requested') ||
 (variables.preparer && object.data.state == 'ready' && (oldObject.data.state == 'empty' ||
-(oldObject.data.state in ['succeeded','ready','requested'] && timestamp(object.data.slot) > timestamp(oldObject.data.slot)))) ||
+(oldObject.data.state in ['succeeded','recovered','ready','requested'] && timestamp(object.data.slot) > timestamp(oldObject.data.slot)))) ||
 (variables.executor && ((oldObject.data.state == 'requested' && object.data.state == 'running') ||
 (oldObject.data.state == 'running' && object.data.state in ['failed','verified']) ||
+(oldObject.data.state == 'verified' && object.data.state == 'succeeded'))) ||
+(variables.recovery && ((oldObject.data.state == 'failed' && object.data.state == 'recovered') ||
 (oldObject.data.state == 'verified' && object.data.state == 'succeeded')))""",
                     "message": "This authenticated actor cannot perform the requested state transition.",
                 },
@@ -101,6 +199,7 @@ def manifests(requester, preparer, executor):
         "metadata": {"name": POLICY},
         "spec": {"policyName": POLICY, "validationActions": ["Deny"]},
     }
+    yield from recovery_guards(recovery)
     yield {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -165,11 +264,11 @@ def verify_barrier(call):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    for actor in ("requester", "preparer", "executor"):
+    for actor in ("requester", "preparer", "executor", "recovery"):
         parser.add_argument("--" + actor, required=True)
     parser.add_argument("--phase", choices=["guard", "verified-binding"], default="guard")
     args = parser.parse_args()
-    resources = list(manifests(args.requester, args.preparer, args.executor))
+    resources = list(manifests(args.requester, args.preparer, args.executor, args.recovery))
     bindings = args.phase == "verified-binding"
     if bindings:
         verify_barrier(

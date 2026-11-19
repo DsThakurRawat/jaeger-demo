@@ -17,7 +17,12 @@ import yaml
 import access
 import scheduled_request as request
 
-USERS = ["fixture-scheduled-requester", "fixture-trusted-preparer", "fixture-trusted-executor"]
+USERS = [
+    "fixture-scheduled-requester",
+    "fixture-trusted-preparer",
+    "fixture-trusted-executor",
+    "fixture-recovery",
+]
 MANUAL = "fixture-manual"
 CONTEXT = "kind-jaeger-request-rehearsal"
 
@@ -58,6 +63,18 @@ def run_cases(kube):
         kube, "-n", "default", "get", "configmap", request.CHECKPOINT[1], "--ignore-not-found", "-o", "name"
     ).strip():
         raise RuntimeError("Fixture checkpoint already exists")
+    create(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": request.CHECKPOINT[1],
+                "namespace": "default",
+                "annotations": {request.PROTOCOL: "v1"},
+            },
+            "data": {"fixture": "fixed"},
+        }
+    )
     resources = list(access.manifests(*USERS))
     for obj in resources:
         if obj["kind"] != "RoleBinding":
@@ -72,19 +89,7 @@ def run_cases(kube):
     for obj in resources:
         if obj["kind"] == "RoleBinding":
             create(obj)
-    create(
-        {
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": request.CHECKPOINT[1],
-                "namespace": "default",
-                "annotations": {request.PROTOCOL: "v1"},
-            },
-            "data": {"fixture": "fixed"},
-        }
-    )
-    for user in (USERS[2], MANUAL):
+    for user in (USERS[2], USERS[3], MANUAL):
         name = "lock-" + user
         create(
             {
@@ -124,7 +129,7 @@ def run_cases(kube):
                 raise AssertionError(label + " unexpectedly allowed")
         cases.append(label)
 
-    sender, preparer, executor, manual = [FixtureActor(kube, u) for u in [*USERS, MANUAL]]
+    sender, preparer, executor, recovery, manual = [FixtureActor(kube, u) for u in [*USERS, MANUAL]]
     slot = request.timestamp("2026-11-18T13:00:00Z")
     expires = slot + request.timedelta(hours=2)
     receipt = {"configurationSHA": "a" * 40, "bundleSHA256": "b" * 64}
@@ -242,6 +247,98 @@ def run_cases(kube):
     with check("preparer cannot replace an unresolved failure", "recovery"):
         later = tomorrow + request.timedelta(days=1)
         request.prepare(preparer, later, later + request.timedelta(hours=2), "scripts-v1", receipt, later)
+    failed = recovery.read(request.REQUEST)
+    checkpoint = recovery.read(request.CHECKPOINT)
+
+    def snapshot(*objects):
+        return tuple((o["metadata"]["uid"], o["metadata"]["resourceVersion"]) for o in objects)
+
+    reviewed = snapshot(failed, checkpoint)
+
+    def recover(refs=reviewed, operator=USERS[3], confirmed=True):
+        request.recover(recovery, tomorrow, "scripts-v1", receipt, refs, operator, confirmed)
+
+    for actor, name in ((sender, "requester"), (preparer, "preparer"), (executor, "executor")):
+        with check(name + " cannot reconcile failed request", "cannot perform"):
+            request.set_state(actor, failed, "recovered")
+    with check("recovery cannot mark failure successful while its lock is held", "denied request"):
+        request.set_state(recovery, failed, "succeeded")
+    with check(
+        "recovery cannot finalize with the lock still held", "after the checkpoint has been unlocked"
+    ):
+        request.set_state(recovery, failed, "recovered")
+    lock_path = "/metadata/annotations/" + request.pointer(request.HOLDER)
+    with check("recovery cannot alter checkpoint revisions while releasing", "only remove the matching"):
+        recovery.patch(
+            request.CHECKPOINT,
+            checkpoint,
+            [
+                {"op": "remove", "path": lock_path},
+                {"op": "replace", "path": "/data/fixture", "value": "changed"},
+            ],
+        )
+    with check("recovery requires explicit verification of the stopped process and outcome", "Confirm"):
+        recover(confirmed=False)
+    with check("recovery requires the reviewed live username", "identity"):
+        recover(operator=USERS[0])
+    with check("recovery rejects a stale checkpoint version", "changed since"):
+        recover((reviewed[0], (reviewed[1][0], "1")))
+    with check("recovery rejects a different request UID", "changed since"):
+        recover((("another-uid", reviewed[0][1]), reviewed[1]))
+    with check("recovery removes matching lock and records a recovered failure"):
+        recover()
+        if (
+            recovery.read(request.REQUEST)["data"]["state"] != "recovered"
+            or request.HOLDER in recovery.read(request.CHECKPOINT)["metadata"]["annotations"]
+        ):
+            raise AssertionError("Recovery did not complete")
+    with check("recovery cannot turn a reconciled failure into success", "cannot perform"):
+        request.set_state(recovery, recovery.read(request.REQUEST), "succeeded")
+    with check("replay after recovery still reports the original failure", "reported failure"):
+        request.request_and_wait(sender, tomorrow, sha, lambda: later, unexpected)
+    with check("preparer advances to the next day after operator recovery"):
+        request.prepare(preparer, later, later + request.timedelta(hours=2), "scripts-v1", receipt, later)
+    with check("recovery cannot signal a new slot", "Only the independent preparer"):
+        request.signal(recovery, recovery.read(request.REQUEST), later)
+    with check("requester cannot start a new signal after expiry", "window"):
+        request.request_and_wait(sender, later, sha, lambda: later + request.MAX_LIFETIME, unexpected)
+    request.signal(sender, sender.read(request.REQUEST), later)
+    with check("expired unclaimed request remains ineligible", "did not claim"):
+        request.request_and_wait(sender, later, sha, lambda: later + request.MAX_LIFETIME, unexpected)
+    obj = executor.read(request.REQUEST)
+    request.acquire(executor, request.daily_owner(later, obj))
+    request.set_state(executor, obj, "running")
+    late = later + request.MAX_LIFETIME
+
+    def finish_late(_):
+        running = executor.read(request.REQUEST)
+        with check("a claimed request stays observable after expiry"):
+            if running["data"]["state"] != "running":
+                raise AssertionError("Expected original running request")
+        request.set_state(executor, running, "verified")
+        verified_obj = executor.read(request.REQUEST)
+        with check("operator finalizes interrupted verified outcome without another apply"):
+            request.recover(
+                recovery,
+                later,
+                "scripts-v1",
+                receipt,
+                snapshot(verified_obj, recovery.read(request.CHECKPOINT)),
+                USERS[3],
+                True,
+            )
+
+    with check("late observer receives the original verified deployment receipt"):
+        if request.request_and_wait(sender, later, sha, lambda: late, finish_late) != receipt:
+            raise AssertionError("Unexpected verified receipt")
+    with check("completed rerun succeeds after expiry without another signal"):
+        request.request_and_wait(sender, later, sha, lambda: late, unexpected)
+    request.acquire(manual, "manual/3/1")
+    with check(
+        "recovery cannot release a foreign manual owner through the API", "only remove the matching"
+    ):
+        request.release(recovery, "manual/3/1")
+    request.release(manual, "manual/3/1")
     return {
         "kubernetes": version,
         "passed": True,
