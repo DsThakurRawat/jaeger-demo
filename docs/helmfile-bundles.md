@@ -261,6 +261,8 @@ collector limits its own list requests to PartialObjectMetadataList and its
 individual GETs to the named scope. This distinction belongs in the production
 access review.
 
+PR CI runs the native frozen-transaction rehearsal on its disposable kind node. The test exercises an approved Secret-only change, no-op apply, a failed equal-render release, changed-input rejection and refusal to reinstall an absent release.
+
 The private Helm history fixture accepts `--verify-live-observation`. It uses
 a separate read-only identity and real Helm release Secrets on the loopback
 API server. It verifies status churn, field and Secret value drift, missing
