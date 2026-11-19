@@ -49,8 +49,11 @@ During preparation, the pod reads the exact public `jaeger-demo/main` commit. It
 Render the candidate offline. Keep the image digest, configuration commit, exact object list, permission evidence and private key custody destination with the change record. The renderer emits a suspended CronJob and a Deployment at zero replicas. The bootstrap Job is the sole pod launched by applying this manifest. It has no API token and initializes the two directories on the new claim.
 
 ```bash
-python3 ops/executor/workloads.py --image "$release_image" --storage-class oci-bv > workloads.json
+python3 ops/executor/workloads.py --image "$release_image" --storage-class oci-bv \
+  --cluster-uid "$verified_kube_system_uid" > workloads.json
 ```
+
+Verify the kube-system UID against the intended cluster in your trusted OKE operator context. Both workload roles check it before reading release state.
 
 The storage request is one new 50 GiB ReadWriteOnce PVC. OKE can provision a billable block volume when the bootstrap Job first mounts it. The receiver and preparer share the volume on the same worker. Each requests 100m CPU, 256 MiB memory and 256 MiB ephemeral storage. Required pod affinity places the preparer on the receiver’s node. Inspect current node pod slots, CSI attachment capacity, allocatable requests, reclaim policy, encryption and headroom for monitoring hook Jobs and rollout surges before asking to install. The operations pods accept no inbound connections. The rendered NetworkPolicy allows egress needed for DNS, the Kubernetes API, artifacts, registry and health endpoints. It imposes no destination allowlist. Restrict access to creating or modifying pods and Jobs in this namespace, since that access could expose the key mounts. [OCI Block Volume provisioning](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengcreatingpersistentvolumeclaim_topic-Provisioning_PVCs_on_BV.htm) · [Kubernetes volume access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
 

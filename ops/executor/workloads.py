@@ -6,6 +6,7 @@
 import argparse
 import json
 import re
+from uuid import UUID
 
 NS = "jaeger-demo-operations"
 PREFIX = "jaeger-demo-"
@@ -25,7 +26,7 @@ def resource(version, kind, name, **fields):
     return {"apiVersion": version, "kind": kind, "metadata": meta, **fields}
 
 
-def pod(image, mode):
+def pod(image, mode, cluster_uid):
     init = mode == "init"
     name = PREFIX + "bundle-init" if init else ACCOUNT[mode]
     volumes = [{"name": "private", "persistentVolumeClaim": {"claimName": CLAIM}},
@@ -44,6 +45,7 @@ def pod(image, mode):
                              "    Path('/var/lib/jaeger-private',name).mkdir(mode=0o700,exist_ok=True)"]
     else:
         spec["serviceAccountName"] = name
+        container["env"] = [{"name": "SCHEDULED_CLUSTER_UID", "value": cluster_uid}]
         keys = ["verification-key.pem"] + (["decryption-key.pem"] if mode == "serve" else ["recipient-public.pem", "signing-key.pem"])
         volumes.append({"name": "keys", "secret": {"secretName": name + "-keys", "defaultMode": 0o440,
                         "items": [{"key": k, "path": k} for k in keys]}})
@@ -60,7 +62,9 @@ def pod(image, mode):
     return {"metadata": {"labels": {"app": name}}, "spec": spec}
 
 
-def render(image, storage_class):
+def render(image, storage_class, cluster_uid):
+    if str(UUID(cluster_uid)) != cluster_uid:
+        raise ValueError("Use the canonical kube-system UID from the intended cluster")
     if not IMAGE.fullmatch(image) or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?", storage_class):
         raise ValueError("Use the published executor image digest and an explicit StorageClass name")
     yield resource("v1", "Namespace", NS)
@@ -72,18 +76,19 @@ def render(image, storage_class):
     yield resource("v1", "PersistentVolumeClaim", CLAIM, spec={"accessModes": ["ReadWriteOnce"],
                    "storageClassName": storage_class, "resources": {"requests": {"storage": "50Gi"}}})
     yield resource("batch/v1", "Job", PREFIX + "bundle-init", spec={"backoffLimit": 1, "activeDeadlineSeconds": 600,
-                   "template": pod(image, "init")})
+                   "template": pod(image, "init", cluster_uid)})
     yield resource("apps/v1", "Deployment", ACCOUNT["serve"], spec={"replicas": 0, "strategy": {"type": "Recreate"},
-                   "selector": {"matchLabels": {"app": ACCOUNT["serve"]}}, "template": pod(image, "serve")})
+                   "selector": {"matchLabels": {"app": ACCOUNT["serve"]}}, "template": pod(image, "serve", cluster_uid)})
     yield resource("batch/v1", "CronJob", ACCOUNT["prepare"], spec={"schedule": "20 12 * * *", "timeZone": "Etc/UTC",
                    "suspend": True, "concurrencyPolicy": "Forbid", "startingDeadlineSeconds": 900,
                    "successfulJobsHistoryLimit": 2, "failedJobsHistoryLimit": 3,
-                   "jobTemplate": {"spec": {"backoffLimit": 0, "activeDeadlineSeconds": 2400, "template": pod(image, "prepare")}}})
+                   "jobTemplate": {"spec": {"backoffLimit": 0, "activeDeadlineSeconds": 2400, "template": pod(image, "prepare", cluster_uid)}}})
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--storage-class", required=True)
+    parser.add_argument("--cluster-uid", required=True, help="Independently verified kube-system namespace UID")
     args = parser.parse_args()
-    print(json.dumps({"apiVersion": "v1", "kind": "List", "items": list(render(args.image, args.storage_class))}, indent=2))
+    print(json.dumps({"apiVersion": "v1", "kind": "List", "items": list(render(args.image, args.storage_class, args.cluster_uid))}, indent=2))

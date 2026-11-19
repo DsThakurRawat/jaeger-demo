@@ -14,15 +14,18 @@ SPEC.loader.exec_module(workloads)
 IMAGE = "ghcr.io/jaegertracing/jaeger-demo-executor@sha256:" + "a" * 64
 
 
+CLUSTER_UID = "11111111-1111-4444-aaaa-bbbbbbbbbbbb"
+
+
 class InstallTests(unittest.TestCase):
     def setUp(self):
-        self.objects = list(workloads.render(IMAGE, "oci-bv"))
+        self.objects = list(workloads.render(IMAGE, "oci-bv", CLUSTER_UID))
         self.by_kind = {v["kind"]: v for v in self.objects}
 
     def test_rejects_unpublished_references_and_tags(self):
         for ref in ("jaeger-demo/executor:latest", IMAGE.replace("ghcr.io", "localhost"), IMAGE[:-1]):
             with self.assertRaises(ValueError):
-                list(workloads.render(ref, "oci-bv"))
+                list(workloads.render(ref, "oci-bv", CLUSTER_UID))
 
     def test_initial_install_has_one_uncredentialed_job_and_both_activations_off(self):
         self.assertTrue(self.by_kind["CronJob"]["spec"]["suspend"])
@@ -35,11 +38,12 @@ class InstallTests(unittest.TestCase):
     def test_identity_keys_and_writable_paths_match_the_worker_role(self):
         paths = Paths()
         for mode in ACCOUNTS:
-            spec = workloads.pod(IMAGE, mode)["spec"]
+            spec = workloads.pod(IMAGE, mode, CLUSTER_UID)["spec"]
             self.assertEqual(spec["serviceAccountName"], ACCOUNTS[mode])
             self.assertTrue(spec["automountServiceAccountToken"])
             container, = spec["containers"]
             self.assertEqual(container["image"], IMAGE)
+            self.assertEqual(container["env"], [{"name": "SCHEDULED_CLUSTER_UID", "value": CLUSTER_UID}])
             self.assertTrue(container["securityContext"]["readOnlyRootFilesystem"])
             self.assertFalse(container["securityContext"]["allowPrivilegeEscalation"])
             by_path = {v["mountPath"]: v for v in container["volumeMounts"]}
