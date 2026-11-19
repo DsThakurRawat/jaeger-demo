@@ -15,6 +15,8 @@ The daily workflow uses the `demo-scheduled` credential to read and patch one Co
 
 The control record contains the schema, engine, UTC slot and expiry, the public two-field bundle receipt, state and signal time. The receiver accepts a signal only within five minutes of its timestamp and before the prepared expiry. The default preparer creates a two-hour admission window, and the protocol bounds any window to six hours. A rerun uses the original GitHub creation date. One signal can result in at most one receiver claim. While the record still names that slot, a late rerun observes its in-flight operation or reports the recorded result after expiry. After the preparer advances the record to a later date, consult the original run and durable receipt for the older result. Expired unclaimed requests still fail. [Admission and bindings](../scripts/demo/rehearsals/scheduled-request/access.py)
 
+The signed bundle preparer and receiver run under distinct in-cluster service accounts. [Installation, approval gates and operations](in-cluster-executor.md)
+
 ## Set up once
 
 1. Review the four distinct authenticated Kubernetes usernames, independent runner identities and release custody. The scheduled job needs only its existing OCI cluster connection and the named ConfigMap role. The preparer and executor must run outside the requester's process and credential environment. Restrict private bundle access, retention and decryption to the independently authorized infrastructure.

@@ -190,3 +190,5 @@ Verified manual adoption unlocks guarded automation. Final cutover acceptance
 requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
+
+The in-cluster runtime has its own image release, inactive installation manifest and activation procedure. The release receipt records the image digest separately from the daily configuration SHA and component versions. [Executor image release and installation](in-cluster-executor.md#release-and-installation)

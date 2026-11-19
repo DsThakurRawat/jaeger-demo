@@ -1,0 +1,44 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+name: Publish the demo executor image
+on:
+  workflow_dispatch:
+    inputs:
+      configuration_sha:
+        description: Full reviewed main commit to publish
+        required: true
+        type: string
+permissions: {}
+jobs:
+  publish:
+    if: github.repository == 'jaegertracing/jaeger-demo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Verify the release commit
+      env:
+        EXPECTED_SHA: ${{ inputs.configuration_sha }}
+      run: test "$EXPECTED_SHA" = "$GITHUB_SHA"
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Publish the reviewed Linux AMD64 build
+      env:
+        PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        PACKAGE: ghcr.io/jaegertracing/jaeger-demo-executor
+      run: |
+        set -euo pipefail
+        printf '%s' "$PACKAGE_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        trap 'docker logout ghcr.io >/dev/null' EXIT
+        unset PACKAGE_TOKEN
+        docker buildx create --driver docker-container --name executor-builder --use
+        docker buildx build --platform linux/amd64 -f ops/executor/Containerfile \
+          --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+          --label "org.opencontainers.image.revision=$GITHUB_SHA" --tag "$PACKAGE:$GITHUB_SHA" \
+          --metadata-file "$RUNNER_TEMP/published-image.json" --push .
+        digest=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/published-image.json")
+        docker buildx imagetools inspect "$PACKAGE@$digest" >/dev/null
+        printf 'Reviewed commit %s\n\nInstallation image %s@%s\n' "$GITHUB_SHA" "$PACKAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"

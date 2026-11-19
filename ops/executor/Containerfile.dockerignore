@@ -1,0 +1,7 @@
+**/.git
+**/.tools
+**/__pycache__
+**/*.pyc
+**/*_test.py
+scripts/demo/rehearsals
+examples/**/helm-charts
