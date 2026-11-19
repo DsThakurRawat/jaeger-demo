@@ -23,7 +23,7 @@ class ManifestLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
 ManifestLoader.add_constructor("tag:yaml.org,2002:value", ManifestLoader.construct_scalar)
 
 
-def schema_node(node, custom=False):
+def schema_node(node, custom=False, structural=True):
     """Convert OpenAPI schema nodes to draft-4, keeping arbitrary user data opaque."""
     if custom:
         supported = {"additionalProperties", "allOf", "anyOf", "default", "description", "enum", "example",
@@ -44,20 +44,20 @@ def schema_node(node, custom=False):
     if "properties" in node:
         props = {}
         for name, prop in node["properties"].items():
-            value = schema_node(prop, custom)
+            value = schema_node(prop, custom, structural)
             # Kubernetes native typed decoding treats null on optional fields as omitted.
             if not custom and name not in node.get("required", []):
                 value = {"anyOf": [value, {"type": "null"}]}
             props[name] = value
         out["properties"] = props
-        if not node.get("x-kubernetes-preserve-unknown-fields"):
+        if structural and not node.get("x-kubernetes-preserve-unknown-fields"):
             out.setdefault("additionalProperties", False)
     for keyword in ("items", "additionalProperties", "not"):
         if isinstance(node.get(keyword), dict):
-            out[keyword] = schema_node(node[keyword], custom)
+            out[keyword] = schema_node(node[keyword], custom, structural and keyword != "not")
     for keyword in ("oneOf", "allOf", "anyOf"):
         if keyword in node:
-            out[keyword] = [schema_node(item, custom) for item in node[keyword]]
+            out[keyword] = [schema_node(item, custom, structural=False) for item in node[keyword]]
     return out
 
 

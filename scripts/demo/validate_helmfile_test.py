@@ -65,6 +65,16 @@ spec:
         self.assertNotIn("additionalProperties", schema_node(free, custom=True))
         self.assertNotIn("anyOf", schema_node(obj, custom=True)["properties"]["labels"])
 
+    def test_composition_constraints_allow_other_structurally_valid_properties(self):
+        fields = {"a": {"type": "string"}, "b": {"type": "string"}}
+        partial = {"properties": {"a": {"minLength": 1}}}
+        for keyword in ("allOf", "anyOf", "oneOf", "not"):
+            with self.subTest(keyword=keyword):
+                constraint = partial if keyword == "not" else [partial]
+                converted = schema_node({"type": "object", "properties": fields, keyword: constraint}, custom=True)
+                self.assertFalse(converted["additionalProperties"])
+                self.assertEqual(converted[keyword], constraint)
+
     def test_reject_duplicate_or_external_custom_schema(self):
         self.manifest.write_text(self.crd + "---\n" + self.crd)
         with self.assertRaisesRegex(ValueError, "Duplicate served schema"):
