@@ -99,6 +99,14 @@ contain internal values. Kubernetes Secret bodies, cluster-scoped security
 resources, monitoring operator pods and hooks are excluded from these
 parameters.
 
+The five public Ingresses permit content-neutral updates. The preparer compares
+the complete Ingress spec, labels and annotations. This preserves hosts, paths,
+backends, TLS Secrets, issuers, the OCI root redirect and provider settings.
+Native admission enforces the same boundary at execution. To intentionally
+change a public route, review and establish its new declarative and live
+configuration through the operator-managed path. Verify the served routes,
+redirects and certificate before preparing a new daily slot.
+
 Service routing, OpenSearch storage identity, the workload service account,
 injected credentials, volumes and pod privileges stay bound to the existing
 configuration. The cluster-reading OTel Collector agent additionally requires

@@ -109,6 +109,14 @@ def safe_transition(live, target):
         ),
         "Approval would change workload ownership",
     )
+    if live["kind"] == "Ingress":
+        # Operators own these five public routes. Controller metadata can change
+        # redirects, certificate issuance and external DNS independently of spec.
+        require(
+            live["spec"] == target["spec"]
+            and all((meta.get(k) or {}) == (new_meta.get(k) or {}) for k in ("annotations", "labels")),
+            "Public Ingress routing, TLS or controller metadata changes require an operator",
+        )
     if live["kind"] == "Service":
         fields = (
             "clusterIP",
