@@ -1,0 +1,18 @@
+{
+  "image": "ghcr.io/jaegertracing/jaeger-demo-executor@sha256:e5199617ab0e735739feedf95f838967940acd135a2852eed038eec4295b16fa",
+  "cases": [
+    "installation starts with zero receivers and the scheduled preparer suspended",
+    "bootstrap loads the candidate image modules and initializes the bound PVC",
+    "jaeger-demo-preparer has no Kubernetes API Secret read grant",
+    "jaeger-demo-executor has no Kubernetes API Secret read grant",
+    "requester has no Kubernetes API Secret read grant",
+    "executor reports ready on its independently authenticated service account",
+    "dated success verifies separate key projections, mount modes and signed encrypted receipt",
+    "replacement executor sees the original verified result without a second apply",
+    "dated failure verifies separate key projections, mount modes and signed encrypted receipt",
+    "both workloads kept the same PVC and the CronJob remains suspended"
+  ],
+  "kubernetes": "v1.36.1",
+  "productionAccess": false,
+  "applicationAdapter": "fixture-only read-only adapter and fixed configuration"
+}
