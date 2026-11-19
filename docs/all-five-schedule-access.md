@@ -74,6 +74,34 @@ Use the actual current, candidate **and rollback** manifests and hooks to author
 
 Kubernetes RBAC `resourceNames` can select existing objects for named actions. It cannot restrict a top-level CREATE to a name prefix. Role/ClusterRole changes and bindings trigger additional privilege-escalation checks. Some monitoring roles have permissions the deployer should never receive directly. A protected executor can perform those reviewed transactions. If granting named `bind` or `escalate` to do this in-cluster, pair it with independent, fail-closed content and subject enforcement and test rollback to the prior approved definitions. Validate guarded CREATE, PATCH/UPDATE, DELETE and subresource operations with real admission requests. RBAC authorization checks alone cannot demonstrate the guard. [Kubernetes authorization](https://kubernetes.io/docs/reference/access-authn-authz/rbac/), [validating admission policy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/), [OKE controller support](https://docs.oracle.com/en-us/iaas/Content/ContEng/Reference/contengadmissioncontrollers.htm)
 
+## Monitoring rollback target
+
+Helm runs the hooks stored in the rollback target. A separately authorized
+operator must first upgrade monitoring with the pinned Jobs and verify the release
+before recording it as a rollback target. Revisions 5 and 6 retain their tag-only
+pre-rollback CRD Job even after a pinned revision succeeds. A digest-only policy
+would reject rollback to either one.
+
+Before that first upgrade, rehearse a repair using the prior functional inputs
+and the pinned hooks in a new revision. A direct rollback to an older revision
+requires separate review of its stored hooks and how they would execute.
+
+Renovate tracks all three image digests under the seven-day release age and
+maintainer review rules. The chart defaults to BusyBox `latest`. At initial
+pinning, `latest` and `1.38.0` resolved to the same image index. The numeric
+tag lets Renovate propose version and digest updates for BusyBox.
+
+Renovate discovers the selected kubectl and webhook-certgen digests. Its Docker
+datasource lacks release timestamps for registry.k8s.io and GHCR, which can
+leave digest updates pending. For a manual update, cite the publisher or registry
+record that ties the exact image index digest to its publication time in the PR.
+Wait seven days from that time. Keep the current pin if the date cannot be verified.
+
+Review tag changes with their source. The chart test fails when its default
+BusyBox reference or webhook-certgen tag changes. The chart derives its kubectl
+tag from the Kubernetes version. When the cluster version changes, update the
+test target and review the kubectl tag and digest together.
+
 ## Rehearsal and activation
 
 1. Compare the recorded six Helm revisions to live release and retained manifests. At this checkpoint the revisions were 25, 14, 14, 14, 11 and 6 for OCI Jaeger, OTel Jaeger, OpenSearch, Dashboards, OTel application and monitoring. An upgrade plus rollback could require 26/27, 15/16, 15/16, 15/16, 12/13 and 7/8 respectively. Pruning may delete older retained records. Two Jaeger upgrades use `--atomic`. The other four releases need explicit failure inspection and targeted rollback. A successful OpenSearch engine upgrade followed by a failed Dashboards upgrade needs component-level recovery. Helm rollback does not downgrade migrated storage or restore custom-resource data.

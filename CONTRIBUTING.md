@@ -18,7 +18,7 @@ make them look newly contributed.
 
 ## Local checks
 
-Install Bash, Python 3, Git, jq, Helm, ShellCheck and actionlint. Keep production
+Install Bash, Python 3 with PyYAML, Git, jq, Helm, ShellCheck and actionlint. Keep production
 kubeconfig and cloud credentials out of the test environment. Obtain shunit2:
 
 ```bash

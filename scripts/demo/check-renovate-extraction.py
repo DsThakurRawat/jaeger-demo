@@ -6,6 +6,7 @@
 """Regression check against Renovate's actual extraction, not its regex syntax."""
 
 import json
+import re
 import sys
 
 
@@ -25,6 +26,13 @@ expected = {
     ("examples/otel-demo/load-generator/requirements.txt", "requests"),
     ("scripts/demo/jaeger-chart.sh", "https://github.com/jaegertracing/helm-charts.git"),
 }
+monitoring_hooks = {
+    "docker.io/library/busybox",
+    "registry.k8s.io/kubectl",
+    "ghcr.io/jkroepke/kube-webhook-certgen",
+}
+monitoring_values = "examples/oci/monitoring-values.yaml"
+expected.update((monitoring_values, image) for image in monitoring_hooks)
 found = set()
 with open(sys.argv[1], encoding="utf-8") as source:
     for line in source:
@@ -32,7 +40,13 @@ with open(sys.argv[1], encoding="utf-8") as source:
         if entry.get("msg") == "Extracted dependencies":
             for files in entry["packageFiles"].values():
                 for package in files:
-                    found.update((package["packageFile"], dep["depName"]) for dep in package["deps"])
+                    for dep in package["deps"]:
+                        file, image = package["packageFile"], dep["depName"]
+                        if file == monitoring_values and image in monitoring_hooks:
+                            if dep.get("datasource") != "docker" or not re.fullmatch(
+                                    r"sha256:[0-9a-f]{64}", dep.get("currentDigest", "")):
+                                raise SystemExit(f"Renovate did not extract the Docker digest for {image}")
+                        found.add((file, image))
 missing = expected - found
 if missing:
     raise SystemExit("Renovate did not discover hosted demo dependencies: " + repr(sorted(missing)))
