@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import scheduled_adapter as a
 
@@ -83,7 +84,7 @@ class SimulatedCluster:
     def baseline(self, key, current, rollback, candidate, extras, selected_images):
         return {a.identity(o, a.RELEASES[key][0]): {"uid": "fixture", "state": self.state[key]} for o in candidate + extras}
 
-    def health(self, stack, *, tracking):
+    def health(self, stack, *, tracking, read=None):
         if self.fail_health_when and self.fail_health_when in self.seen:
             raise a.AdapterError("unhealthy")
         self.seen.append(("health", stack))
@@ -100,7 +101,8 @@ class SimulatedCluster:
         self.seen.append(("lock", True))
 
     def apply(self):
-        return a.apply(self.files, slot=SLOT, configuration_sha=COMMIT, assert_locked=self.lock)
+        return a.apply(self.files, slot=SLOT, configuration_sha=COMMIT, assert_locked=self.lock,
+                       execution_deadline=a.time.monotonic() + 1000)
 
 
 class AdapterTests(unittest.TestCase):
@@ -194,6 +196,96 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(a.AdapterError, "PVC"):
             c.apply()
         self.assertNotIn("upgrade", dict(c.seen))
+
+    def test_new_oci_catalog_then_traces_then_spm_converge_before_checkpoint(self):
+        real_check = a.stack_health.check
+        c = SimulatedCluster(self)
+        served_ui = json.dumps(json.loads((a.ROOT / "examples/oci/ui-config.json").read_text()))
+        now = datetime.now(timezone.utc)
+        attempts = []
+        elapsed = 0
+
+        def advance(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+
+        def fetch(url, *, timeout):
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, 15)
+            if url in a.stack_health.PAGES["oci"]:
+                return a.stack_health.PAGES["oci"][url][0].encode()
+            if url.endswith("/grafana/api/health"):
+                return b'{"database":"ok"}'
+            if url.endswith("/jaeger/"):
+                return ("Jaeger UI; const JAEGER_CONFIG = " + served_ui + ";").encode()
+            if url.endswith("/api/v3/services"):
+                attempts.append(elapsed)
+                return b'{}' if len(attempts) == 1 else b'{"services":["frontend"]}'
+            if "/api/v3/traces?" in url:
+                if len(attempts) == 2:
+                    return b""
+                span = {"traceId":"ff", "startTimeUnixNano":str(int(now.timestamp() * 1e9))}
+                batch = {"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"frontend"}}]},
+                         "scopeSpans":[{"spans":[span]}]}
+                return json.dumps({"result":{"resourceSpans":[batch]}}).encode()
+            if "/api/metrics/" in url:
+                point = {"timestamp":(now - timedelta(minutes=2)).isoformat(),
+                         "gaugeValue":{"doubleValue": "0" if len(attempts) == 3 else "1"}}
+                return json.dumps({"metrics":[{"metricPoints":[point]}]}).encode()
+            self.fail(url)
+
+        def check(stack, *, tracking, read=None):
+            if ("verified", "oci-jaeger") in c.seen and ("checkpoint", "oci-jaeger") not in c.seen:
+                self.assertEqual(stack, "oci")
+                return real_check(stack, read, tracking=tracking)
+            return c.health(stack, tracking=tracking)
+
+        with patch.object(a.stack_health, "check", side_effect=check), \
+             patch.object(a.stack_health, "fetch", side_effect=fetch), \
+             patch.object(a.time, "sleep", side_effect=advance), \
+             patch.object(a.time, "monotonic", side_effect=lambda: elapsed):
+            self.assertTrue(c.apply())
+        self.assertEqual(attempts, [0, 10, 20, 30])
+        self.assertIn(("checkpoint", "oci-jaeger"), c.seen)
+        self.assertIn(("upgrade", "opensearch"), c.seen)
+
+    def test_service_timeout_honors_both_deadlines_and_caps_each_request(self):
+        for budget, expected in ((13, 13), (1000, 300)):
+            with self.subTest(budget=budget):
+                elapsed = 0
+                waits = []
+                def sleep(seconds):
+                    nonlocal elapsed
+                    waits.append(seconds)
+                    elapsed += seconds
+                def pending(stack, *, read, tracking):
+                    read("fixture-url")
+                    raise a.stack_health.TrafficPending("frontend missing")
+                with patch.object(a.stack_health, "check", side_effect=pending), \
+                     patch.object(a.stack_health, "fetch") as fetch, \
+                     patch.object(a.time, "monotonic", side_effect=lambda: elapsed), \
+                     patch.object(a.time, "sleep", side_effect=sleep):
+                    lock = Mock()
+                    with self.assertRaisesRegex(a.AdapterError, "oci verification deadline reached: frontend missing"):
+                        a.post_rollout_health("oci", {}, lock, budget)
+                self.assertEqual(elapsed, expected)
+                self.assertEqual(lock.call_count, len(waits))
+                self.assertEqual(fetch.call_count, len(waits))
+                self.assertEqual(fetch.call_args.kwargs["timeout"], 3 if budget == 13 else 10)
+
+    def test_health_retry_stops_on_lost_lock_and_definitive_failures(self):
+        pending = a.stack_health.TrafficPending("frontend missing")
+        lock = Mock(side_effect=[None, a.AdapterError("lost lock")])
+        with patch.object(a.stack_health, "check", side_effect=pending) as check, patch.object(a.time, "sleep"):
+            with self.assertRaisesRegex(a.AdapterError, "lost lock"):
+                a.post_rollout_health("oci", {}, lock, a.time.monotonic() + 40)
+            self.assertEqual(check.call_count, 1)
+        for error in (ValueError("bad latency"), OSError("transport")):
+            with patch.object(a.stack_health, "check", side_effect=error), patch.object(a.time, "sleep") as sleeper:
+                with self.assertRaises(type(error)) as raised:
+                    a.post_rollout_health("oci", {}, lambda: None, a.time.monotonic() + 40)
+                self.assertIs(raised.exception, error)
+                sleeper.assert_not_called()
 
     def test_failed_storage_does_not_checkpoint_or_trigger_otel_jaeger(self):
         c = SimulatedCluster(self)

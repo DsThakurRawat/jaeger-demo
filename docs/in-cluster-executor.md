@@ -21,6 +21,16 @@ Run the preparer between 11:00 and 15:00 UTC for the 13:00 UTC slot. If an authe
 
 The receiver polls the fixed control record every ten seconds. A valid signal must match the reviewed engine, the eligible UTC slot and the signed receipt found independently in custody. The code passes only authenticated, decrypted member bytes to the fixed application adapter. Each mutation must check the original request UID, receipt, state and lock holder. After all five checks succeed, the receiver writes its durable verification record, updates the request, releases the lock and reports success. A failed check leaves a failure record and the lock.
 
+After a rollout, Jaeger can report Ready before the generator sends traffic. The
+executor polls every ten seconds for its service, a recent matching span and
+a completed SPM bucket with calls. It uses up to five minutes or the time
+remaining in the claimed deployment, whichever expires first. Each attempt
+rechecks the writer lock. A failed route or HTTP request, malformed response,
+or invalid latency during observed traffic fails verification immediately.
+The initial health check before any rollout still runs once. A failed
+post-rollout check leaves the component checkpoint untouched and stops later
+components.
+
 ## Operations and recovery
 
 Use `python3 /opt/jaeger-demo/scripts/demo/scheduled_receiver.py ready` for the readiness probe. It checks the last successful control observation, or the elapsed time of an active operation. A terminating receiver stops polling on SIGTERM. If it already claimed a bundle but has not started application, it records failure before any application mutation. An already running operation can finish during the Pod termination grace period. A ready receiver can be observing a blocked claim. Its state-change log identifies `inspect-running`, `inspect-verified` or `inspect-failed`. An unreadable control record removes readiness. Receiver-generated logs and outcome files contain public operation metadata only.

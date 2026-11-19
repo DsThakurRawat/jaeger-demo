@@ -46,7 +46,7 @@ class FixtureAdapter:
     def prepare(self, slot, configuration_sha):
         return {p: (p + slot + configuration_sha).encode() for p in custody.MEMBERS}
 
-    def apply(self, files, *, slot, configuration_sha, assert_locked):
+    def apply(self, files, *, slot, configuration_sha, assert_locked, execution_deadline):
         assert_locked()
         if files != self.prepare(slot, configuration_sha):
             raise AssertionError("Decrypted fixture contents differ")

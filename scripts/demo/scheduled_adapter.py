@@ -830,7 +830,33 @@ def rollout(key):
         check_monitoring_workloads(wait=True)
 
 
-def apply(files, *, slot, configuration_sha, assert_locked):
+def post_rollout_health(stack, tracking, assert_locked, execution_deadline):
+    # A replacement Jaeger can become Ready before its generator produces traffic.
+    deadline = min(execution_deadline, time.monotonic() + 300)
+    last_pending = "public health checks are incomplete"
+
+    def remaining():
+        seconds = deadline - time.monotonic()
+        need(seconds > 0, f"{stack} verification deadline reached: {last_pending}")
+        return seconds
+
+    def read(url):
+        return stack_health.fetch(url, timeout=min(15, remaining()))
+
+    while True:
+        remaining()
+        assert_locked()
+        try:
+            stack_health.check(stack, read=read, tracking=tracking)
+        except stack_health.TrafficPending as pending:
+            last_pending = str(pending)
+            time.sleep(min(10, remaining()))
+        else:
+            remaining()
+            return
+
+
+def apply(files, *, slot, configuration_sha, assert_locked, execution_deadline):
     assert_locked()
     plan = validate_plan(files, slot, configuration_sha)
     need(check_context() == plan["context"] and tuple(checkpoint()) == (plan["checkpointUID"], plan["previous"])
@@ -886,7 +912,7 @@ def apply(files, *, slot, configuration_sha, assert_locked):
         if key.endswith("-jaeger"):
             tracking[key] = json.loads(json.loads(values)["uiconfig"])["tracking"]
         stack = "oci" if key.startswith("oci-") else "otel"
-        stack_health.check(stack, tracking=tracking[stack + "-jaeger"])
+        post_rollout_health(stack, tracking[stack + "-jaeger"], assert_locked, execution_deadline)
         assert_locked()
         patch_state(part, plan["fingerprints"][part], (plan["checkpointUID"], previous), assert_locked)
         previous[part] = plan["fingerprints"][part]

@@ -250,7 +250,8 @@ def poll(store, bundle, adapter, paths, now=protocol.utcnow, active=lambda: None
                 if stopping():
                     raise ReceiverError("Receiver is draining before application")
                 if (
-                    adapter.apply(files, slot=stamp, configuration_sha=sha, assert_locked=assert_locked)
+                    adapter.apply(files, slot=stamp, configuration_sha=sha, assert_locked=assert_locked,
+                                  execution_deadline=deadline)
                     is not True
                 ):
                     raise ReceiverError("The fixed application adapter did not verify all five components")

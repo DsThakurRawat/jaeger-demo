@@ -192,7 +192,9 @@ class ReceiverTests(unittest.TestCase):
     def test_decrypt_and_verify_only_inside_original_claim_and_persist_public_outcomes(self):
         self.signal()
 
-        def apply(files, *, slot, configuration_sha, assert_locked):
+        def apply(files, *, slot, configuration_sha, assert_locked, execution_deadline):
+            self.assertGreater(execution_deadline, receiver.time.monotonic())
+            self.assertLessEqual(execution_deadline, receiver.time.monotonic() + receiver.APPLICATION_BUDGET.total_seconds())
             self.assertEqual((files, slot, configuration_sha), (self.member, self.stamp, self.sha))
             self.assertEqual(self.state(), "running")
             assert_locked()

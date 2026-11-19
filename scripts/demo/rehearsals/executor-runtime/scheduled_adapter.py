@@ -35,7 +35,7 @@ def prepare(slot, configuration_sha):
     return frozen(slot, configuration_sha)
 
 
-def apply(files, *, slot, configuration_sha, assert_locked):
+def apply(files, *, slot, configuration_sha, assert_locked, execution_deadline):
     assert_locked()
     assert key_names() == {"verification-key.pem", "decryption-key.pem"}
     assert "ro" in mount_flags(BUNDLES) and "rw" in mount_flags(OUTCOMES) and "ro" in mount_flags(KEYS)
