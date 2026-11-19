@@ -5,6 +5,8 @@
 
 For the Helmfile candidate, run `make validate` before submitting a configuration change. It compares the six application releases to the script-era inputs and checks both application and supplemental resources against the target Kubernetes and chart schemas. The dependency check pairs script and Helmfile chart updates during the transition. Production continues to run the extracted workflow until operator acceptance. [Application validation](helmfile-applications.md) · [Adoption rehearsal](helmfile-companions.md)
 
+The [private Helmfile bundle contract](helmfile-bundles.md) describes the offline planner and executor handoff under development.
+
 A deployment release is a configuration commit plus the chart and tool versions,
 Jaeger and HotROD image references and digests, and verification evidence.
 `jaegertracing/jaeger` publishes the product images. This repository deploys them;
