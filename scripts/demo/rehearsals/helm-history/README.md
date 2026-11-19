@@ -81,6 +81,11 @@ monitoring chart, then reads them back through Kubernetes storage. The
 Grafana Role's empty `rules` array returns as null. The preparer accepts
 that representation of zero permissions and compares every populated rule,
 binding subject, role reference and aggregation rule against the chart.
+An impersonated identity with only named GET and PATCH also reapplies all ten
+unchanged RBAC definitions under Helm's field manager. This includes the
+nonempty operator ClusterRole and its binding. No ordinary bind or escalate
+grant is needed for these no-op updates. Operator-managed changes remain
+subject to the separate admission and authorization rules.
 
 The same API fixture exercised both initial Jaeger recovery modes. With automatic rollback disabled, an incompatible upgrade left revision 7 failed. An explicit fixture operator rollback established revision 8. A later incompatible upgrade with automatic rollback enabled recorded failure at 9 and restored the release at 10. Independent adapter tests cover selecting that mode from both stored image references and verifying Ready Pod digests.
 

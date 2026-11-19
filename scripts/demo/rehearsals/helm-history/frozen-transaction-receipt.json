@@ -1,6 +1,6 @@
 {
-  "startedAt": "2026-11-19T13:34:54.674337+00:00",
-  "finishedAt": "2026-11-19T13:35:10.816250+00:00",
+  "startedAt": "2026-11-19T13:37:52.940060+00:00",
+  "finishedAt": "2026-11-19T13:38:09.469300+00:00",
   "productionAccess": false,
   "endpoint": "ephemeral 127.0.0.1",
   "helm": "v4.3.2+g8346aaa",
@@ -35,6 +35,18 @@
           "NoneType"
         ]
       }
+    },
+    "namedRbacPatchWithoutBindOrEscalate": {
+      "rbac.authorization.k8s.io/v1:ClusterRole:-:prometheus-grafana-clusterrole": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRole:-:prometheus-kube-state-metrics": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRole:-:prometheus-kube-prometheus-operator": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRole:-:prometheus-kube-prometheus-prometheus": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRoleBinding:-:prometheus-grafana-clusterrolebinding": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRoleBinding:-:prometheus-kube-state-metrics": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRoleBinding:-:prometheus-kube-prometheus-operator": "accepted",
+      "rbac.authorization.k8s.io/v1:ClusterRoleBinding:-:prometheus-kube-prometheus-prometheus": "accepted",
+      "rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": "accepted",
+      "rbac.authorization.k8s.io/v1:RoleBinding:default:prometheus-grafana": "accepted"
     },
     "operatorCRStatus": {
       "resources": 2,

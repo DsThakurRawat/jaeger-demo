@@ -123,12 +123,14 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         assert a.history("oci-monitoring")[0][0]["revision"] == 6
     # Exercise schema/defaulting for each actual non-hook RBAC body.
     observed = {}
+    ordinary_rbac = []
     for obj in rendered:
         if obj["kind"] not in ("Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding"):
             continue
         if a.HELM_HOOK in (obj["metadata"].get("annotations") or {}):
             continue
-        stored = json.loads(kube(["create", "-o", "json", "-f", "-"], body=json.dumps(obj)).stdout)
+        stored = json.loads(kube(["apply", "--server-side", "--field-manager=helm", "-o", "json", "-f", "-"],
+                                 body=json.dumps(obj)).stdout)
         # Fetch what API storage returns later, as the real preparer does.
         persisted = json.loads(kube(["get", obj["kind"], obj["metadata"]["name"], "-n",
                                      obj["metadata"].get("namespace", "default"), "-o", "json"]).stdout)
@@ -138,8 +140,28 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
                            if obj.get(k) != persisted.get(k)}
         a.check_live_rbac(obj, persisted)
         assert bool(stored["metadata"]["uid"])
+        ordinary_rbac.append(obj)
     shapes = {k: v for k, v in observed.items() if v}
     assert shapes == {"rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": {"rules": ["list", "NoneType"]}}
+    narrow = "fixture-ordinary-rbac-reader-writer"
+    for scope in ("Role", "ClusterRole"):
+        names = [o for o in ordinary_rbac if o["kind"].startswith("Cluster") == (scope == "ClusterRole")]
+        meta = {"name": narrow}
+        if scope == "Role":
+            meta["namespace"] = "default"
+        rules = [{"apiGroups": [group], "resources": [o["kind"].lower() + "s"],
+                  "verbs": ["get", "patch"], "resourceNames": [o["metadata"]["name"]]} for o in names]
+        apply({"apiVersion": group + "/v1", "kind": scope, "metadata": meta, "rules": rules})
+        apply({"apiVersion": group + "/v1", "kind": scope + "Binding", "metadata": meta,
+               "roleRef": {"apiGroup": group, "kind": scope, "name": narrow},
+               "subjects": [{"kind":"User", "apiGroup":group, "name":narrow}]})
+    attempts = {}
+    for obj in ordinary_rbac:
+        key = a.identity(obj, "default")
+        granted = kube(["--as", narrow, "--as-group", "system:authenticated", "apply", "--server-side", "--field-manager=helm",
+                        "--validate=false", "-f", "-"], body=json.dumps(obj), check=False)
+        assert granted.returncode == 0, "An ordinary unchanged monitoring role or binding was denied: " + key
+        attempts[key] = "accepted"
     # The controller is absent in envtest. Explicitly supply current/stale
     # status on the actual chart CRs, then call the adapter as a named reader.
     status_user = "fixture-monitoring-status-reader"
@@ -176,6 +198,7 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
             raise AssertionError("An unavailable Prometheus passed the paired workload check")
     return {"reader": user, "secretPatchDenied": True, "chartSHA256": a.sha(package), "renderedObjects": len(rendered),
             "comparedOrdinaryRBAC": len(observed), "apiStorageNormalization": shapes,
+            "namedRbacPatchWithoutBindOrEscalate": attempts,
             "operatorCRStatus": {"resources": 2, "identity": status_user, "verbs": ["get"],
                                  "readyBothPassed": True, "unavailableBlocked": True, "statusSeededByFixture": True},
             "hookObjects": len(first["hooks"]), "seededCRDs": len(crds), "grafanaLookupMatchedPrivateFixture": True,
