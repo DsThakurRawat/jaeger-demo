@@ -235,7 +235,12 @@ The hash includes defaulted specifications, data, labels, annotations, ownership
 deletion timestamps and Service/PVC bindings. It excludes top-level status and
 the metadata fields resourceVersion, managedFields, generation and creationTimestamp.
 Access errors stop collection. Per-stack health calls independently check public
-routes, fresh traces and finite SPM. Each selected Jaeger and HotROD reference
+routes, fresh traces and finite SPM. For each selected Jaeger release, the public UI
+must serve the tracking settings from its successful Helm record. After a failed
+head the observer uses the most recent successful revision. The existing
+`recordSHA256` binds these settings to the approved observation. A stack whose
+Jaeger release is outside the selection uses the checkout's UI configuration.
+Each selected Jaeger and HotROD reference
 must match the named Deployment, the active Ready Pods and a registry-verified
 Linux AMD64 digest or index. The observer confirms Pod ownership through the
 ReplicaSet and Deployment UIDs.

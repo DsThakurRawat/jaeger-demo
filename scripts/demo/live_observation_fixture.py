@@ -50,14 +50,17 @@ def exercise(root, config, kubectl, kube, helm, chart, apply):
     name = "history-observer"
     rbac = "rbac.authorization.k8s.io"
     subject = {"apiGroup": rbac, "kind": "User", "name": name}
-    def grant(cluster, rules):
+    def grant(cluster, rules, *, namespace="default"):
         kind = "ClusterRole" if cluster else "Role"
-        meta = {"name": name} if cluster else {"name": name, "namespace": "default"}
+        meta = {"name": name} if cluster else {"name": name, "namespace": namespace}
         apply({"apiVersion": rbac + "/v1", "kind": kind, "metadata": meta, "rules": rules})
         apply({"apiVersion": rbac + "/v1", "kind": kind + "Binding", "metadata": meta,
                "roleRef": {"apiGroup": rbac, "kind": kind, "name": name}, "subjects": [subject]})
     grant(True, [{"apiGroups": [""], "resources": ["namespaces"], "resourceNames": ["kube-system"], "verbs": ["get"]}])
     names = ["fixture-sensitive"] + [f"sh.helm.release.v1.prometheus.v{n}" for n in (4, 5, 6, 7, 8)]
+    grant(False, [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]},
+                  {"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"],
+                   "resourceNames": [f"sh.helm.release.v1.jaeger.v{n}" for n in (7, 8)]}], namespace="jaeger")
     grant(False, [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]},
                   {"apiGroups": [""], "resources": ["secrets"], "resourceNames": names, "verbs": ["get"]},
                   {"apiGroups": ["apps"], "resources": ["deployments"], "resourceNames": [name, "jaeger"], "verbs": ["get"]},
@@ -91,8 +94,20 @@ def exercise(root, config, kubectl, kube, helm, chart, apply):
         except ValueError:
             return True
         raise AssertionError("Expected the observation to stop")
+    # Helm stores --set-file inputs in the release config. The failed revision
+    # deliberately requests a different UI setting than the deployed revision.
+    ui = root / "fixture-ui.json"
+    for marker in ("stable", "incompatible"):
+        ui.write_text(json.dumps({"tracking": {"gaID": marker}}))
+        run = helm(["upgrade", "jaeger", chart, "--history-max", "10", "--set-string", "marker=" + marker,
+                    "--set-file", "uiconfig=" + str(ui)], "jaeger", check=marker == "stable")
+        assert (run.returncode == 0) == (marker == "stable")
     registry, expected_image = ready_image_fixture(kube)
     with reader(private, "fixture", kubectl) as get:
+        tracking = {}
+        latest, successful = history(get, "jaeger/jaeger", 7, tracking_by_namespace=tracking)
+        assert (latest["revision"], latest["status"], successful["revision"]) == (8, "failed", 7)
+        assert tracking == {"jaeger": {"gaID": "stable"}}
         assert live_image(get, registry, "default", "jaeger") == expected_image
         first, caps = observe(scope, get, fixture_health)
         assert value not in canonical(first).decode() and "stringData" not in canonical(first).decode()
@@ -131,5 +146,5 @@ def exercise(root, config, kubectl, kube, helm, chart, apply):
             "secretValueDrift": True, "missingObject": True, "helmRevisions": [6, 7, 8], "rollbackRevision": 6,
             "olderRollbackRejected": True, "missingInterveningRecordRejected": True,
             "differentClusterRejected": True, "unrelatedNamedSecretReadDenied": True,
-            "readyPodOwnerChain": True, "registry": "synthetic immutable image digests",
+            "successfulHelmUITracking": True, "readyPodOwnerChain": True, "registry": "synthetic immutable image digests",
             "healthProbe": "private fixture callback", "externalAccess": False}

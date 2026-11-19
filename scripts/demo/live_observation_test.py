@@ -5,7 +5,7 @@ import base64
 import copy
 import gzip
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call, patch
 
 import live_observation as o
 
@@ -62,6 +62,44 @@ class ReadOnlyTests(unittest.TestCase):
         for changed in ({"version": True}, {"info": {"status": "failed"}}, {"name": "other"}, {"namespace": "jaeger"}):
             with self.assertRaisesRegex(ValueError, "payload"):
                 read(dict(release, **changed))
+
+    def test_observer_checks_each_ui_against_its_successful_helm_record(self):
+        by_namespace = {"default": {"gaID": "approved-oci"}, "jaeger": {"gaID": "approved-otel"}}
+        revisions = {"default": {1: ("deployed", "uid1", "1")},
+                     "jaeger": {2: ("failed", "uid2", "2"), 1: ("superseded", "uid1", "1")}}
+        scope = {"releases": ["default/jaeger", "jaeger/jaeger"], "objects": [], "imageStacks": ["oci", "otel"]}
+        def get(path):
+            if path == "/api/v1/namespaces/kube-system":
+                return {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "kube-system", "uid": "cluster"}}
+            ns, rev = path.split("/")[4], int(path.rsplit(".v", 1)[1])
+            phase, uid, rv = revisions[ns][rev]
+            tracking = by_namespace[ns] if rev == 1 else {"gaID": "failed-candidate"}
+            payload = {"namespace": ns, "name": "jaeger", "version": rev, "info": {"status": phase},
+                       "chart": {"metadata": {"name": "jaeger", "version": "1"}},
+                       "config": {"uiconfig": o.canonical({"tracking": tracking}).decode()}}
+            labels = {"owner": "helm", "name": "jaeger", "version": str(rev), "status": phase}
+            metadata = {"namespace": ns, "name": path.rsplit("/", 1)[1], "labels": labels, "uid": uid, "resourceVersion": rv}
+            return {"kind": "Secret", "apiVersion": "v1", "type": "helm.sh/release.v1", "metadata": metadata,
+                    "data": {"release": base64.b64encode(base64.b64encode(o.canonical(payload))).decode()}}
+        hosted_check = o.hosted_check
+        with (patch.object(o, "ledger", side_effect=lambda get, ns, name: revisions[ns]),
+              patch.object(o, "discover", return_value=({}, {"kubernetesVersion": "v1.36.1"})),
+              patch.object(o, "live_image", return_value={}), patch.object(o, "hosted_check") as check):
+            result, _ = o.observe(scope, get)
+            self.assertTrue(result["healthy"])
+            self.assertEqual(check.call_args_list, [call("oci", tracking=by_namespace["default"]),
+                                                   call("otel", tracking=by_namespace["jaeger"])])
+            self.assertNotIn(b"approved-oci", o.canonical(result))
+            self.assertNotIn(b"approved-otel", o.canonical(result))
+            def wrong_ui(_):
+                return b'Jaeger UI; const JAEGER_CONFIG = {"tracking":{"gaID":"failed-candidate"}};'
+            check.side_effect = lambda stack, **kwargs: hosted_check(stack, wrong_ui, **kwargs)
+            with self.assertRaisesRegex(ValueError, "tracking configuration differs"):
+                o.observe(scope, get)
+            by_namespace["default"] = None
+            with self.assertRaisesRegex(ValueError, "tracking configuration"):
+                o.observe(scope, get)
+            self.assertEqual(check.call_count, 3)
 
     def test_runtime_image_requires_ready_replica_and_true_owner_chain(self):
         image = o.REPOS["jaeger"] + ":" + "a" * 40

@@ -172,7 +172,7 @@ def ledger(get, ns, name):
     return revisions
 
 
-def record(get, ns, name, revision, identity):
+def record(get, ns, name, revision, identity, *, tracking_by_namespace=None):
     obj = get(f"/api/v1/namespaces/{ns}/secrets/sh.helm.release.v1.{name}.v{revision}")
     require(obj and (obj["apiVersion"], obj["kind"], obj["type"]) == ("v1", "Secret", "helm.sh/release.v1")
             and history_identity(ns, name, obj["metadata"]) == (revision, identity), "Missing or changed Helm record")
@@ -187,11 +187,16 @@ def record(get, ns, name, revision, identity):
             (ns, name, revision, identity[0]) and type(payload["version"]) is int
             and payload["chart"]["metadata"]["name"] and payload["chart"]["metadata"]["version"],
             "Helm record payload disagrees with its identity or status")
+    if tracking_by_namespace is not None and name == "jaeger" and identity[0] in {"deployed", "superseded"}:
+        ui_config = read_json(payload["config"]["uiconfig"])
+        require(isinstance(ui_config, dict) and isinstance(ui_config.get("tracking"), dict),
+                "Successful Jaeger release lacks its UI tracking configuration")
+        tracking_by_namespace[ns] = ui_config["tracking"]
     # Hash all decoded release bytes, including hooks, manifests, chart files and values.
     return {"status": identity[0], "revision": revision, "recordSHA256": digest(raw)}
 
 
-def history(get, release, rollback):
+def history(get, release, rollback, *, tracking_by_namespace=None):
     ns, name = release.split("/")
     revisions = ledger(get, ns, name)
     if not revisions:
@@ -204,7 +209,7 @@ def history(get, release, rollback):
     target, current = None, None
     for rev in range(latest, 0, -1):
         require(rev in revisions, "Gap before Helm rollback target")
-        item = record(get, ns, name, rev, revisions[rev])
+        item = record(get, ns, name, rev, revisions[rev], tracking_by_namespace=tracking_by_namespace)
         if rev == latest:
             current = item
         if item["status"] in {"deployed", "superseded"}:
@@ -284,13 +289,13 @@ def live_image(get, resolve_image, ns, component):
     return {"reference": reference, "sourceCommit": src["sourceCommit"], "digest": src["digest"]}
 
 
-def functional_health(stacks):
+def functional_health(stacks, *, tracking_by_namespace=None):
     for stack in stacks:
-        hosted_check(stack)
+        hosted_check(stack, tracking=(tracking_by_namespace or {}).get(STACKS[stack]))
     return True
 
 
-def observe(scope, get, check_health=functional_health, resolve_image=registry_image):
+def observe(scope, get, check_health=None, resolve_image=registry_image):
     """Pass only scope identities, optionally omitting cluster/rollback expectations during planning."""
     require(set(scope) <= {"cluster", "releases", "objects", "imageStacks", "rollbackRevisions"}, "Unexpected observation inputs")
     releases, objects, image_stacks = (scope[k] for k in ("releases", "objects", "imageStacks"))
@@ -311,12 +316,16 @@ def observe(scope, get, check_health=functional_health, resolve_image=registry_i
               "releases": {}, "rollbackTargets": {}, "images": {}}
     for identity in objects:
         result["objects"][identity] = object_state(identity, get(item_path(identity, routes)))
+    tracking_by_namespace = {}
     for release in releases:
-        result["releases"][release], result["rollbackTargets"][release] = history(get, release, rollbacks and rollbacks[release])
+        result["releases"][release], result["rollbackTargets"][release] = history(
+            get, release, rollbacks and rollbacks[release], tracking_by_namespace=tracking_by_namespace)
     for stack in image_stacks:
         result["images"][stack] = {name: live_image(get, resolve_image, STACKS[stack], name) for name in REPOS}
     stacks = sorted({"oci" if release.startswith("default/") else "otel" for release in releases})
-    require(check_health(stacks) is True, "Fresh functional health check failed")
+    healthy = (functional_health(stacks, tracking_by_namespace=tracking_by_namespace)
+               if check_health is None else check_health(stacks))
+    require(healthy is True, "Fresh functional health check failed")
     result["healthy"] = True
     return result, caps
 
