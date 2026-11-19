@@ -100,6 +100,16 @@ RBAC and actual server-defaulted objects using `--wait=hookOnly`; it has no
 Pod controllers, production certificates or external endpoints.
 [Two-stack Helm PATCH receipt](jaeger-patch-methods.json)
 
+The same fixture seeds Ready Deployment and ReplicaSet status on both real
+chart configurations. With named chart reads and the scheduler's existing
+workload access, Helm's watcher was denied namespace-wide collection reads.
+The legacy wait passed both ready workloads and timed out after the fixture
+withdrew readiness. The separate monitoring fixture checks both actual
+Prometheus Operator workload CRs using only named GET, then changes one
+status to unavailable. These API rehearsals supply controller status and
+leave Pod scheduling, network traffic and the installed operator's live
+status for cluster commissioning.
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

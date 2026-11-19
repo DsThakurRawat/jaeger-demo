@@ -1,6 +1,6 @@
 {
-  "startedAt": "2026-11-19T13:25:19.155773+00:00",
-  "finishedAt": "2026-11-19T13:25:37.553136+00:00",
+  "startedAt": "2026-11-19T13:32:34.217434+00:00",
+  "finishedAt": "2026-11-19T13:33:06.736449+00:00",
   "productionAccess": false,
   "endpoint": "ephemeral 127.0.0.1",
   "helm": "v4.3.2+g8346aaa",
@@ -63,7 +63,27 @@
           "deployments",
           "serviceaccounts",
           "services"
-        ]
+        ],
+        "readiness": {
+          "readyWatcher": {
+            "succeeded": false,
+            "denied": [
+              "list serviceaccounts",
+              "list services",
+              "watch serviceaccounts",
+              "watch services"
+            ]
+          },
+          "readyLegacy": {
+            "succeeded": true,
+            "denied": []
+          },
+          "unreadyLegacy": {
+            "succeeded": false,
+            "denied": []
+          },
+          "fixture": "actual chart and stored objects; API fixture supplies Ready or unready Deployment/ReplicaSet status"
+        }
       },
       "fixture-oci-csa": {
         "releaseObjects": 10,
@@ -160,7 +180,29 @@
           "deployments",
           "serviceaccounts",
           "services"
-        ]
+        ],
+        "readiness": {
+          "readyWatcher": {
+            "succeeded": false,
+            "denied": [
+              "list configmaps",
+              "list cronjobs",
+              "list services",
+              "watch configmaps",
+              "watch cronjobs",
+              "watch services"
+            ]
+          },
+          "readyLegacy": {
+            "succeeded": true,
+            "denied": []
+          },
+          "unreadyLegacy": {
+            "succeeded": false,
+            "denied": []
+          },
+          "fixture": "actual chart and stored objects; API fixture supplies Ready or unready Deployment/ReplicaSet status"
+        }
       },
       "fixture-otel-csa": {
         "releaseObjects": 12,

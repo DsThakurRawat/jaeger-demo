@@ -152,3 +152,18 @@ CronJob. Installation therefore requires named PATCH access across these
 existing chart objects and independent admission that checks the actual
 content. A successful Helm dry-run alone does not exercise this permission.
 [API audit and live field comparison](../scripts/demo/rehearsals/helm-history/jaeger-patch-methods.json)
+
+The scheduled executor uses Helm's `--wait=legacy`. Its native workload
+checks use named reads and the existing namespace ReplicaSet lookup. Helm's
+watcher requested namespace-wide watches on Services, ServiceAccounts,
+ConfigMaps and CronJobs in the two-stack rehearsal. Both stacks passed the
+legacy wait with ready replicas and failed it with unready replicas.
+
+For a monitoring change, the executor also reads the named Alertmanager and
+Prometheus custom resources before writing and after the Grafana rollout. Each
+must report `Available=True` and `Reconciled=True` at its current generation.
+All expected replicas across all shards must be updated and available. After
+an upgrade the executor allows up to five minutes for reconciliation. The
+existing public route, Grafana, trace, SPM and storage checks still gate each
+component's checkpoint.
+[Prometheus Operator status fields](https://prometheus-operator.dev/docs/api-reference/api/)

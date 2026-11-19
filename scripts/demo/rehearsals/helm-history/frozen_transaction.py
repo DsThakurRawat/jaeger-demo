@@ -140,7 +140,43 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         assert bool(stored["metadata"]["uid"])
     shapes = {k: v for k, v in observed.items() if v}
     assert shapes == {"rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": {"rules": ["list", "NoneType"]}}
+    # The controller is absent in envtest. Explicitly supply current/stale
+    # status on the actual chart CRs, then call the adapter as a named reader.
+    status_user = "fixture-monitoring-status-reader"
+    rules = []
+    workloads = [o for o in rendered if o["kind"] in ("Alertmanager", "Prometheus")]
+    assert len(workloads) == 2
+    for obj in workloads:
+        live = json.loads(kube(["create", "-f", "-", "-o", "json"], body=json.dumps(obj)).stdout)
+        resource = {"Alertmanager": "alertmanagers", "Prometheus": "prometheuses"}[obj["kind"]]
+        name = obj["metadata"]["name"]
+        count = live["spec"].get("replicas", 1) * live["spec"].get("shards", 1)
+        conditions = [{"type": kind, "status": "True", "observedGeneration": live["metadata"]["generation"],
+                       "lastTransitionTime": "2026-11-19T13:00:00Z"} for kind in ("Reconciled", "Available")]
+        state = {"replicas": count, "availableReplicas": count, "updatedReplicas": count, "conditions": conditions}
+        kube(["patch", resource, name, "-n", "default", "--subresource=status", "--type=merge",
+              "--patch-file=/dev/stdin"], body=json.dumps({"status": state}))
+        rules.append({"apiGroups": ["monitoring.coreos.com"], "resources": [resource], "verbs": ["get"], "resourceNames": [name]})
+    meta = {"name": status_user, "namespace": "default"}
+    apply({"apiVersion": group + "/v1", "kind": "Role", "metadata": meta, "rules": rules})
+    apply({"apiVersion": group + "/v1", "kind": "RoleBinding", "metadata": meta,
+           "roleRef": {"apiGroup": group, "kind": "Role", "name": status_user},
+           "subjects": [{"apiGroup": group, "kind": "User", "name": status_user}]})
+    cfg["users"][0]["user"]["as"] = status_user
+    private.write_text(json.dumps(cfg))
+    with patch.dict(os.environ, {"KUBECONFIG": str(private), "PATH": str(Path(kubectl).parent) + os.pathsep + os.environ["PATH"]}):
+        a.check_monitoring_workloads(wait=False)
+        kube(["patch", "prometheuses", "prometheus-kube-prometheus-prometheus", "-n", "default",
+              "--subresource=status", "--type=merge", "--patch-file=/dev/stdin"], body='{"status":{"availableReplicas":0}}')
+        try:
+            a.check_monitoring_workloads(wait=False)
+        except a.AdapterError:
+            pass
+        else:
+            raise AssertionError("An unavailable Prometheus passed the paired workload check")
     return {"reader": user, "secretPatchDenied": True, "chartSHA256": a.sha(package), "renderedObjects": len(rendered),
             "comparedOrdinaryRBAC": len(observed), "apiStorageNormalization": shapes,
+            "operatorCRStatus": {"resources": 2, "identity": status_user, "verbs": ["get"],
+                                 "readyBothPassed": True, "unavailableBlocked": True, "statusSeededByFixture": True},
             "hookObjects": len(first["hooks"]), "seededCRDs": len(crds), "grafanaLookupMatchedPrivateFixture": True,
             "unchangedHelmRevision": 6, "frozenPostRendererPassed": True}

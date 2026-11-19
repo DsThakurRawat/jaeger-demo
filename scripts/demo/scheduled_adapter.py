@@ -361,7 +361,7 @@ def helm_transaction(key, chart, values, *, expected=None, dry=True, atomic=Fals
         (path / "values.json").write_bytes(values)
         env = dict(os.environ, HELM_DRIVER="secret", HELM_PLUGINS=str(Path(__file__).parent / "helm-plugins"))
         args = ["helm", "upgrade", name, str(path / "chart.tgz"), "--namespace", ns, "--values", str(path / "values.json"),
-                "--install=false", "--create-namespace=false", "--reset-values", "--skip-crds", "--server-side=auto", "--wait=watcher",
+                "--install=false", "--create-namespace=false", "--reset-values", "--skip-crds", "--server-side=auto", "--wait=legacy",
                 "--history-max=10", "--timeout", str(timeout) + "s", "--rollback-on-failure=" + str(atomic).lower(), "-o", "json"]
         if dry:
             args.append("--dry-run=server")
@@ -791,6 +791,31 @@ def rollback_policy(key, release):
     return pinned, observed
 
 
+def monitoring_workload_current(obj):
+    spec, status = obj["spec"], obj.get("status", {})
+    count = spec.get("replicas", 1) * spec.get("shards", 1)
+    generation = obj["metadata"]["generation"]
+    return (count > 0 and not spec.get("paused") and not status.get("paused")
+            and all(status.get(field) == count for field in ("replicas", "availableReplicas", "updatedReplicas"))
+            and status.get("unavailableReplicas", 0) == 0
+            and {"Available", "Reconciled"} <= {
+                condition["type"] for condition in status.get("conditions", [])
+                if condition.get("status") == "True" and condition.get("observedGeneration") == generation})
+
+
+def check_monitoring_workloads(*, wait):
+    # The operator's two workload CRs have a real status subresource. Legacy
+    # Helm checks native controllers with named reads; check these explicitly.
+    deadline = time.monotonic() + (300 if wait else 0)
+    while True:
+        if all(monitoring_workload_current(get_object(
+                f"monitoring.coreos.com/v1:{kind}:default:prometheus-kube-prometheus-{kind.lower()}"))
+               for kind in ("Alertmanager", "Prometheus")):
+            return
+        need(time.monotonic() < deadline, "Monitoring workloads are not available and reconciled at their current generation")
+        time.sleep(2)
+
+
 def rollout(key):
     ns = RELEASES[key][0]
     checks = {"oci-monitoring": ["deployment/prometheus-grafana"], "oci-jaeger": ["deployment/jaeger", "deployment/jaeger-hotrod", "deployment/trace-generator"],
@@ -799,6 +824,8 @@ def rollout(key):
               "otel-demo": ["daemonset/otel-collector-agent", "deployment/frontend", "deployment/load-generator"]}
     for name in checks[key]:
         kube("-n", ns, "rollout", "status", name, "--timeout=10m", timeout=610)
+    if key == "oci-monitoring":
+        check_monitoring_workloads(wait=True)
 
 
 def apply(files, *, slot, configuration_sha, assert_locked):
@@ -811,6 +838,8 @@ def apply(files, *, slot, configuration_sha, assert_locked):
         preconditions(files, key, plan, dry=component(key) in plan["selected"])
         if key.endswith("-jaeger") and key in plan["selected"]:
             check_jaeger_patch_access(RELEASES[key][0], json.loads(files["renders/" + key + ".json"]))
+    if "oci-monitoring" in plan["selected"]:
+        check_monitoring_workloads(wait=False)
     tracking = dict(plan["priorTracking"])
     for stack in ("oci", "otel"):
         stack_health.check(stack, tracking=tracking[stack + "-jaeger"])

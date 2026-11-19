@@ -51,6 +51,7 @@ class SimulatedCluster:
         bind("helm_transaction", self.transaction)
         bind("baseline", self.baseline)
         bind("check_jaeger_patch_access", lambda ns, candidate: self.seen.append(("patch-access", ns)))
+        bind("check_monitoring_workloads", lambda *, wait: self.seen.append(("monitoring-ready", wait)))
         bind("patch_supplemental", lambda o, prior, locked: self.seen.append(("patch", o["kind"])))
         bind("rollback_policy", lambda k, r: (False, {}))
         bind("ready_images", lambda key, sources: self.seen.append(("ready-images", key)))
@@ -144,6 +145,28 @@ class AdapterTests(unittest.TestCase):
                               ({"rules": []}, {"rules": ""})):
             with self.subTest(before=before, after=after), self.assertRaisesRegex(a.AdapterError, "Live RBAC"):
                 a.check_live_rbac(before, after)
+
+    def test_monitoring_workloads_require_all_replicas_and_current_generation_conditions(self):
+        cr = {"spec": {"replicas": 2, "shards": 2}, "metadata": {"generation": 3},
+              "status": {"replicas": 4, "updatedReplicas": 4, "availableReplicas": 4,
+                         "conditions": [{"type": kind, "status": "True", "observedGeneration": 3}
+                                        for kind in ("Reconciled", "Available")]}}
+        self.assertTrue(a.monitoring_workload_current(cr))
+        for field, value in (("conditions", []), ("availableReplicas", 3), ("unavailableReplicas", 1),
+                             ("updatedReplicas", 3), ("paused", True)):
+            with self.subTest(field=field):
+                self.assertFalse(a.monitoring_workload_current(dict(cr, status=dict(cr["status"], **{field: value}))))
+        with patch.object(a, "get_object", return_value=cr) as read:
+            a.check_monitoring_workloads(wait=False)
+        self.assertEqual([x.args[0] for x in read.call_args_list], [
+            "monitoring.coreos.com/v1:Alertmanager:default:prometheus-kube-prometheus-alertmanager",
+            "monitoring.coreos.com/v1:Prometheus:default:prometheus-kube-prometheus-prometheus"])
+        cr["status"]["conditions"][0]["observedGeneration"] = 2
+        with patch.object(a, "get_object", return_value=cr):
+            with self.assertRaisesRegex(a.AdapterError, "current generation"):
+                a.check_monitoring_workloads(wait=False)
+            with patch.object(a.time, "monotonic", side_effect=[1, 400]), self.assertRaises(a.AdapterError):
+                a.check_monitoring_workloads(wait=True)
 
     def test_inherits_recorded_apply_method_and_rejects_drift_before_any_write(self):
         for previous, expected in (({}, "csa"), ({"apply_method": ""}, "csa"),

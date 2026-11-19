@@ -67,11 +67,13 @@ def exercise(root, cfg, kube, apply, chart_checkout):
                        "--server-side=" + str(method == "ssa").lower()], body=a.encode(baseline), env=env)
             as_user = ["--kube-as-user", user, "--kube-as-group", "system:authenticated"]
             meta = {"namespace": ns, "name": user}
+            def replace_role(rules):
+                apply({"apiVersion": GROUP + "/v1", "kind": "Role", "metadata": meta, "rules": rules})
             def set_role(extra):
                 rules = [{"apiGroups":["*"],"resources":["*"],"verbs":["get","list","watch"]},
                          {"apiGroups":[""],"resources":["secrets"],"verbs":["create","update","delete"]},
                          {"apiGroups":["apps"],"resources":["deployments"],"resourceNames":["jaeger","jaeger-hotrod"],"verbs":["patch"]}]
-                apply({"apiVersion":GROUP+"/v1","kind":"Role","metadata":meta,"rules":rules + extra})
+                replace_role(rules + extra)
             set_role([])
             apply({"apiVersion":GROUP+"/v1","kind":"RoleBinding","metadata":meta,
                    "roleRef":{"apiGroup":GROUP,"kind":"Role","name":user},"subjects":[{"kind":"User","apiGroup":GROUP,"name":user}]})
@@ -148,6 +150,8 @@ def exercise(root, cfg, kube, apply, chart_checkout):
             print(ns, json.dumps(row), flush=True)
             if method == "ssa":
                 assert not passed and denied and len(patches) == len(candidate)
+                from jaeger_wait_modes import check
+                row["readiness"] = check(kube, ns, user, replace_role, extra, args, env, audit, values)
             else:
                 # CSA computes three-way patches, including managed/defaulted
                 # metadata; measure its behavior rather than assume two PATCHes.
