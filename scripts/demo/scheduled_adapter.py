@@ -44,7 +44,7 @@ VALUES = {
     "opensearch": "otel-demo/opensearch-values.yaml", "opensearch-dashboards": "otel-demo/opensearch-dashboard-values.yaml",
     "otel-jaeger": "otel-demo/jaeger-values.yaml", "otel-demo": "otel-demo/otel-demo-values.yaml",
 }
-CLUSTER = {"ClusterRole", "ClusterRoleBinding", "ValidatingWebhookConfiguration", "MutatingWebhookConfiguration", "CustomResourceDefinition"}
+CLUSTER = {"Namespace", "ClusterRole", "ClusterRoleBinding", "ValidatingWebhookConfiguration", "MutatingWebhookConfiguration", "CustomResourceDefinition"}
 PROTECTED = CLUSTER | {"Role", "RoleBinding", "Secret", "ServiceAccount", "Prometheus", "Alertmanager"}
 HELM_HOOK = "helm.sh/hook"
 HEX64 = re.compile(r"[0-9a-f]{64}")

@@ -424,13 +424,37 @@ class AdapterTests(unittest.TestCase):
         self.assertNotEqual(a.index([plain], "default"), a.index([annotated({"owner": "changed"})], "default"))
 
     def test_context_must_match_independent_target_cluster_and_pinned_tools(self):
-        with patch.object(a, "command", return_value=b"v4.3.2"), patch.object(a, "get_object", return_value={"metadata":{"uid":"right"}}), \
-             patch.object(a, "kube", return_value=b'{"gitVersion":"v1.36.1"}'):
+        namespace = obj("Namespace", "kube-system")
+        namespace["metadata"]["uid"] = "right"
+        response = namespace
+
+        def read(*args, body=None):
+            if args == ("get", "--raw=/version"):
+                return b'{"gitVersion":"v1.36.1"}'
+            self.assertEqual(args, ("get", "-f", "-", "-o", "json"))
+            self.assertEqual(json.loads(body), obj("Namespace", "kube-system"))
+            return a.encode(response)
+
+        with patch.object(a, "command", return_value=b"v4.3.2"), patch.object(a, "kube", side_effect=read):
             for uid in ("", "wrong"):
                 with patch.dict(os.environ, {"SCHEDULED_CLUSTER_UID": uid}), self.assertRaisesRegex(a.AdapterError, "target"):
                     a.check_context()
             with patch.dict(os.environ, {"SCHEDULED_CLUSTER_UID": "right"}):
-                self.assertEqual(a.check_context()["clusterUID"], "right")
+                for response in (namespace, {"apiVersion": "v1", "kind": "List", "items": [namespace]}):
+                    self.assertEqual(a.check_context(), {"clusterUID": "right", "kubernetes": "v1.36.1"})
+                for changes in ({"name": "different"}, {"deletionTimestamp": "2026-11-19T13:00:00Z"}):
+                    with patch.dict(namespace["metadata"], changes), self.assertRaisesRegex(a.AdapterError, "active named object"):
+                        a.check_context()
+
+    def test_cluster_scope_remains_limited_to_reviewed_resources(self):
+        with self.assertRaisesRegex(a.AdapterError, "Ambiguous resource scope"):
+            a.identity(obj("ConfigMap", "no-namespace"), "-")
+        namespace = obj("Namespace", "kube-system")
+        with self.assertRaisesRegex(a.AdapterError, "outside reviewed access inventory"):
+            a.inventory("oci-monitoring", [namespace], [])
+        modified = dict(namespace, metadata={"name": "kube-system", "labels": {"owner": "chart"}})
+        with self.assertRaisesRegex(a.AdapterError, "Privileged manifest differs"):
+            a.validate_change("oci-monitoring", [namespace], [modified], {})
 
     def test_command_bounds_memory_time_and_failure_diagnostics(self):
         with patch.object(a, "LIMIT", 100), self.assertRaisesRegex(a.AdapterError, "Oversized"):
