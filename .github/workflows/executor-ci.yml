@@ -45,3 +45,38 @@ jobs:
         echo "EXERCISE_IMAGE=$image" >> "$GITHUB_ENV"
     - name: Verify the installed receiver in disposable pods
       run: bash scripts/demo/rehearsals/executor-runtime/run.sh
+
+  chart-admission:
+    name: Monitoring hooks and Helm history
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+      with:
+        version: v4.3.2
+    - name: Install the YAML and crypto dependencies used in the rehearsal
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML cryptography
+    - name: Download the pinned local API, etcd and monitoring chart
+      working-directory: ${{ runner.temp }}
+      run: |
+        curl -fsSLo envtest.tgz https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v1.36.0/envtest-v1.36.0-linux-amd64.tar.gz
+        echo 'd84f910bcefa3f6ab0205a49a7255672150c73b14bca3c36ac627db65040edf0  envtest.tgz' | sha256sum --check
+        tar -xzf envtest.tgz
+        chart=$(jq -er '.charts | keys[] | select(startswith("kube-prometheus-stack-"))' "$GITHUB_WORKSPACE/ops/executor/chart-archives.json")
+        version=${chart#kube-prometheus-stack-}
+        helm pull kube-prometheus-stack --version "${version%.tgz}" --repo https://prometheus-community.github.io/helm-charts
+        jq -er --arg chart "$chart" '.charts[$chart] + "  " + $chart' "$GITHUB_WORKSPACE/ops/executor/chart-archives.json" | sha256sum --check
+        echo "MONITORING_CHART=$RUNNER_TEMP/$chart" >> "$GITHUB_ENV"
+    - name: Verify create and delete for twelve exact hook objects and deny unapproved changes
+      run: |
+        python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
+          --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/hook-result.json" \
+          --monitoring-hook-access "$MONITORING_CHART"
+    - name: Verify the full monitoring render, frozen upgrade and rollback under restricted identities
+      run: |
+        python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
+          --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/helm-result.json" \
+          --frozen-transaction --monitoring-lookup "$MONITORING_CHART"

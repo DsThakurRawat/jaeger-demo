@@ -70,6 +70,7 @@ def main():
                         help="Also exercise the two pinned storage charts from this archive directory")
     parser.add_argument("--frozen-transaction", action="store_true", help="Exercise the scripts-v1 signed-render Helm transaction")
     parser.add_argument("--monitoring-lookup", type=Path, help="Verify full chart dry-run and real Grafana Secret lookup")
+    parser.add_argument("--monitoring-hook-access", type=Path, help="Verify RBAC/admission using the twelve pinned monitoring hooks")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -525,6 +526,9 @@ def main():
             )
             report["unrestrictedSecretReadsInReleaseNamespaces"] = True
             report["historyLimitUsed"] = 3
+            if args.monitoring_hook_access:
+                from monitoring_hook_access import exercise as exercise_hook_access
+                report["monitoringHookAccess"] = exercise_hook_access(args.monitoring_hook_access, kubectl, cfg, kube)
             if args.frozen_transaction:
                 from frozen_transaction import exercise
                 report["frozenTransaction"] = exercise(root, cfg, kubectl, chart, WRITER)

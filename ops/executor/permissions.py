@@ -157,8 +157,8 @@ def literal(x):
     return json.dumps(x, allow_nan=False)
 
 
-def exact_state(obj, fields, meta):
-    allowed = sorted(set(fields) | {"apiVersion", "kind", "metadata", "status"})
+def exact_state(obj, fields, meta, external_fields=()):
+    allowed = sorted(set(fields) | set(external_fields) | {"apiVersion", "kind", "metadata", "status"})
     parts = ["dyn(s).all(k, k in " + literal(allowed) + ")",
              "dyn(s.metadata).all(k, k in " + literal(sorted(set(meta) | SYSTEM_META)) + ")"]
     for k in fields:
