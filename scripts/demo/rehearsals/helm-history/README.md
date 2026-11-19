@@ -41,10 +41,6 @@ The script checks supported binary versions and rejects unrelated receipt output
 
 The [storage chart rehearsal](storage-chart-rehearsal.md) extends this isolated API with both pinned charts, reviewed workload changes, content enforcement and a seeded PVC binding. Use the separate `--storage-charts` option to include it.
 
-## Production boundary
-
-All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.
-
 ## Scheduled adapter rehearsal
 
 Render all six application packages with the existing public script inputs.
@@ -68,3 +64,7 @@ Add `--frozen-transaction` to the private history rehearsal to run the signed
 post-renderer with a restricted writer. Add `--monitoring-lookup /path/to/kube-prometheus-stack-82.10.4.tgz`
 to seed the chart CRDs and a synthetic Grafana Secret, then exercise its actual
 server-side dry-run using a read-only local identity.
+
+## Production boundary
+
+All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.
