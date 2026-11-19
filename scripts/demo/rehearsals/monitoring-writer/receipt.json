@@ -1,0 +1,191 @@
+{
+  "startedAt": "2026-11-19T02:43:05.518905+00:00",
+  "passed": true,
+  "driverSHA256": "3f24489ad1a12298b1ff30b21b02d39deb867500a6a5138531ab8ee13a8ed533",
+  "packageSHA256": "d03358a9243d140bbb1ae109aeb84d9210bfbbdf911c2787518dcc3f92e6c379",
+  "reviewedContentSHA256": "e82c0f9b61666adcccb20cea759f90478f726bc7932a3eca42e274ed39e75dd2",
+  "seedCRDsSHA256": "533412f8fa328a3d772901f1c7b17d95ceeb671e9c3b428dd3cd44613132222d",
+  "hookImages": [
+    "docker.io/busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4",
+    "ghcr.io/jkroepke/kube-webhook-certgen:1.7.8@sha256:e024de71cd416a44edef241519efd7489bf963425578fcb89aa5542b6950c91f",
+    "registry.k8s.io/kubectl:v1.36.1@sha256:d08f476d04d0e30f426f06bc6ff6c38913aaa4591943046b77e2f74a72d3611c"
+  ],
+  "helmCaller": "independent-local-fixture-executor",
+  "productionAccess": false,
+  "deploysFullMonitoringStack": false,
+  "stages": [
+    {
+      "action": "install",
+      "revision": 1,
+      "helmStatus": "deployed",
+      "newlyCompletedHookJobs": [
+        "prometheus-crds-upgrade",
+        "prometheus-kube-prometheus-admission-create",
+        "prometheus-kube-prometheus-admission-patch"
+      ],
+      "absentHookResourcesAfterTransaction": 12,
+      "hookRuns": {
+        "prometheus-crds-upgrade": {
+          "start": "2026-11-18T21:43:16.339906-05:00",
+          "end": "2026-11-18T21:43:24.139653-05:00"
+        },
+        "prometheus-kube-prometheus-admission-create": {
+          "start": "2026-11-18T21:43:10.49718-05:00",
+          "end": "2026-11-18T21:43:16.229099-05:00"
+        },
+        "prometheus-kube-prometheus-admission-patch": {
+          "start": "2026-11-18T21:43:26.172471-05:00",
+          "end": "2026-11-18T21:43:29.213802-05:00"
+        }
+      },
+      "jobControllerEvents": {
+        "prometheus-crds-upgrade": [
+          "Completed",
+          "SuccessfulCreate"
+        ],
+        "prometheus-kube-prometheus-admission-create": [
+          "Completed",
+          "SuccessfulCreate"
+        ],
+        "prometheus-kube-prometheus-admission-patch": [
+          "Completed",
+          "SuccessfulCreate"
+        ]
+      },
+      "matchingEstablishedCRDs": 10,
+      "unchangedApplicationSecretPayloadsAndUIDs": 3,
+      "grafanaFixtureMarker": "baseline",
+      "webhookCABundlesMatchAdmissionSecret": 3,
+      "admissionSecretUIDAndDataUnchanged": true
+    },
+    {
+      "action": "upgrade",
+      "revision": 2,
+      "helmStatus": "deployed",
+      "newlyCompletedHookJobs": [
+        "prometheus-crds-upgrade",
+        "prometheus-kube-prometheus-admission-create",
+        "prometheus-kube-prometheus-admission-patch"
+      ],
+      "absentHookResourcesAfterTransaction": 12,
+      "hookRuns": {
+        "prometheus-crds-upgrade": {
+          "start": "2026-11-18T21:43:35.38325-05:00",
+          "end": "2026-11-18T21:43:38.441917-05:00"
+        },
+        "prometheus-kube-prometheus-admission-create": {
+          "start": "2026-11-18T21:43:32.688003-05:00",
+          "end": "2026-11-18T21:43:35.272935-05:00"
+        },
+        "prometheus-kube-prometheus-admission-patch": {
+          "start": "2026-11-18T21:43:40.479394-05:00",
+          "end": "2026-11-18T21:43:43.282724-05:00"
+        }
+      },
+      "jobControllerEvents": {
+        "prometheus-crds-upgrade": [
+          "Completed",
+          "SuccessfulCreate"
+        ],
+        "prometheus-kube-prometheus-admission-create": [
+          "Completed",
+          "SuccessfulCreate"
+        ],
+        "prometheus-kube-prometheus-admission-patch": [
+          "Completed",
+          "SuccessfulCreate"
+        ]
+      },
+      "matchingEstablishedCRDs": 10,
+      "unchangedApplicationSecretPayloadsAndUIDs": 3,
+      "grafanaFixtureMarker": "candidate",
+      "webhookCABundlesMatchAdmissionSecret": 3,
+      "admissionSecretUIDAndDataUnchanged": true
+    },
+    {
+      "action": "rollback",
+      "revision": 3,
+      "helmStatus": "deployed",
+      "newlyCompletedHookJobs": [
+        "prometheus-crds-upgrade"
+      ],
+      "absentHookResourcesAfterTransaction": 12,
+      "hookRuns": {
+        "prometheus-crds-upgrade": {
+          "start": "2026-11-18T21:43:46.161487-05:00",
+          "end": "2026-11-18T21:43:50.262552-05:00"
+        }
+      },
+      "jobControllerEvents": {
+        "prometheus-crds-upgrade": [
+          "Completed",
+          "SuccessfulCreate"
+        ]
+      },
+      "matchingEstablishedCRDs": 10,
+      "unchangedApplicationSecretPayloadsAndUIDs": 3,
+      "grafanaFixtureMarker": "baseline",
+      "webhookCABundlesMatchAdmissionSecret": 3,
+      "admissionSecretUIDAndDataUnchanged": true
+    }
+  ],
+  "currentStage": "verify fixture rollback",
+  "helm": "v4.3.2+g8346aaa",
+  "kubernetes": "v1.36.1",
+  "nodeArchitecture": "arm64",
+  "initiallyAbsentHookResources": 12,
+  "requester": {
+    "directAccessDenials": [
+      "release Secret read",
+      "release Secret list",
+      "unrelated Secret read",
+      "Pod reads",
+      "new request creation",
+      "chart Job deletion",
+      "restricting policy changes",
+      "monitoring webhook changes",
+      "operator changes",
+      "Role changes"
+    ],
+    "upgrade": {
+      "sourceRevision": 1,
+      "expectedRevision": 2,
+      "rollbackTarget": null,
+      "storedInputDigestsMatched": true,
+      "changedInputsDenied": true,
+      "extraInputDenied": true,
+      "duplicateSignalDenied": true,
+      "duplicateClaimDenied": true
+    },
+    "rollback": {
+      "sourceRevision": 2,
+      "expectedRevision": 3,
+      "rollbackTarget": "1",
+      "storedInputDigestsMatched": true,
+      "changedInputsDenied": true,
+      "extraInputDenied": true,
+      "duplicateSignalDenied": true,
+      "duplicateClaimDenied": true
+    }
+  },
+  "history": [
+    {
+      "revision": 1,
+      "status": "superseded"
+    },
+    {
+      "revision": 2,
+      "status": "superseded"
+    },
+    {
+      "revision": 3,
+      "status": "deployed"
+    }
+  ],
+  "limits": [
+    "Fixture after local admin seeded existing CRDs. Admission webhook serving and full chart are outside this test.",
+    "The independent fixture executor uses local administrator credentials. The source of a production executor, its least-privilege permissions and the full chart are separate.",
+    "All three transactions used the same reviewed pinned chart with a synthetic marker; real production rollback inputs differ."
+  ],
+  "finishedAt": "2026-11-19T02:43:51.679425+00:00"
+}

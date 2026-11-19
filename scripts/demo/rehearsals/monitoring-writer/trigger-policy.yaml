@@ -1,0 +1,76 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-executor-fixture
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: demo-executor-fixture
+  name: scheduled-requester
+automountServiceAccountToken: false
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: fixture-reviewed-monitoring-request
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        resources: [configmaps]
+        operations: [UPDATE]
+  matchConditions:
+    - name: dedicated-requester
+      expression: "request.userInfo.username == 'system:serviceaccount:demo-executor-fixture:scheduled-requester'"
+  validations:
+    - expression: >-
+        request.namespace == 'demo-executor-fixture' &&
+        object.metadata.name in ['monitoring-upgrade', 'monitoring-rollback'] &&
+        size(object.data) == size(oldObject.data) &&
+        oldObject.data.requested == 'false' && object.data.requested == 'true' &&
+        oldObject.data.all(k, k in object.data && (k == 'requested' || oldObject.data[k] == object.data[k])) &&
+        !has(object.binaryData) &&
+        !has(object.immutable) &&
+        !has(object.metadata.finalizers) &&
+        !has(object.metadata.ownerReferences) &&
+        !has(object.metadata.labels) &&
+        !has(object.metadata.annotations)
+      message: The requester may only signal an existing reviewed operation once.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: fixture-reviewed-monitoring-request
+spec:
+  policyName: fixture-reviewed-monitoring-request
+  validationActions: [Deny]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: demo-executor-fixture
+  name: signal-reviewed-monitoring-request
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [monitoring-upgrade, monitoring-rollback]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: demo-executor-fixture
+  name: signal-reviewed-monitoring-request
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: signal-reviewed-monitoring-request
+subjects:
+  - kind: ServiceAccount
+    namespace: demo-executor-fixture
+    name: scheduled-requester
