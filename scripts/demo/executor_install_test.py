@@ -35,6 +35,18 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.by_kind["PersistentVolumeClaim"]["spec"]["storageClassName"], "oci-bv")
         self.assertFalse({"RoleBinding", "ClusterRoleBinding", "Secret", "Service"} & self.by_kind.keys())
 
+    def test_egress_matches_runtime_services_without_node_metadata_http(self):
+        policy = self.by_kind["NetworkPolicy"]["spec"]
+        self.assertEqual(set(policy["policyTypes"]), {"Ingress", "Egress"})
+        self.assertEqual(policy["ingress"], [])
+        target_ports = {}
+        for rule in policy["egress"]:
+            peers = rule.get("to")
+            target = peers[0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] if peers else "any"
+            target_ports.setdefault(target, set()).update((p["protocol"], p["port"]) for p in rule["ports"])
+        self.assertEqual(target_ports, {"any": {("UDP", 53), ("TCP", 53), ("TCP", 443), ("TCP", 6443)},
+                         "opensearch": {("TCP", 9200)}, "jaeger": {("TCP", 4318), ("TCP", 16686)}})
+
     def test_identity_keys_and_writable_paths_match_the_worker_role(self):
         paths = Paths()
         for mode in ACCOUNTS:

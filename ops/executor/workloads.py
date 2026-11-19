@@ -73,7 +73,15 @@ def render(image, storage_class, cluster_uid):
         yield resource("v1", "ServiceAccount", name, automountServiceAccountToken=False)
     yield resource("networking.k8s.io/v1", "NetworkPolicy", PREFIX + "private",
                    spec={"podSelector": {"matchExpressions": [{"key": "app", "operator": "In",
-                         "values": [*ACCOUNT.values(), PREFIX + "bundle-init"]}]}, "policyTypes": ["Ingress"], "ingress": []})
+                         "values": [*ACCOUNT.values(), PREFIX + "bundle-init"]}]},
+                         "policyTypes": ["Ingress", "Egress"], "ingress": [], "egress": [
+                             {"ports": [{"protocol": proto, "port": 53} for proto in ("UDP", "TCP")]},
+                             {"ports": [{"protocol": "TCP", "port": port} for port in (443, 6443)]},
+                             {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "opensearch"}}}],
+                              "ports": [{"protocol": "TCP", "port": 9200}]},
+                             {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "jaeger"}}}],
+                              "ports": [{"protocol": "TCP", "port": port} for port in (4318, 16686)]},
+                         ]})
     yield resource("v1", "PersistentVolumeClaim", CLAIM, spec={"accessModes": ["ReadWriteOnce"],
                    "storageClassName": storage_class, "resources": {"requests": {"storage": "50Gi"}}})
     yield resource("batch/v1", "Job", PREFIX + "bundle-init", spec={"backoffLimit": 1, "activeDeadlineSeconds": 600,
