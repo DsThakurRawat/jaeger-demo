@@ -86,7 +86,7 @@ def tag_commit(repo, tag, digest, labels, lookup):
     return commit
 
 
-def registry_image(repo, tag, frozen=None):
+def registry_image(repo, tag, frozen=None, *, reference_digest=None):
     require(repo in REPOS.values() and TAG.fullmatch(tag), "Unexpected snapshot repository or tag")
     token_query = urlencode({"service": "registry.docker.io", "scope": f"repository:{repo}:pull"})
     token = json.loads(fetch("https://auth.docker.io/token?" + token_query)[0])["token"]
@@ -102,7 +102,8 @@ def registry_image(repo, tag, frozen=None):
         require(obj.get("schemaVersion") == 2 and obj.get("mediaType") in INDEX | MANIFEST, "Unexpected manifest type")
         return obj, digest
 
-    image, digest = manifest(frozen["digest"] if frozen else tag)
+    require(reference_digest is None or DIGEST.fullmatch(reference_digest), "Invalid supplied image digest")
+    image, digest = manifest(frozen["digest"] if frozen else reference_digest or tag)
     platform_digest = digest
     if image["mediaType"] in INDEX:
         linux = [m for m in image["manifests"] if m.get("platform", {}).get("os") == "linux"
@@ -127,6 +128,8 @@ def registry_image(repo, tag, frozen=None):
                 "Frozen revision differs from image configuration")
     else:
         commit = tag_commit(repo, tag, digest, labels, manifest)
+        if reference_digest and COMMIT.fullmatch(tag) and not labels.get("org.opencontainers.image.revision"):
+            require(manifest(tag)[1] == digest, "Pinned image digest differs from its claimed commit tag")
     return {"repository": repo, "tag": tag, "sourceCommit": commit, "digest": digest,
             "platformManifest": platform_digest, "reference": f"docker.io/{repo}:{tag}@{digest}"}
 

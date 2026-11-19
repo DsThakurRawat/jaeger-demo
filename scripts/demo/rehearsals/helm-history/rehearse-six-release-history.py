@@ -77,6 +77,7 @@ def main():
                         help="Use a fresh API exclusively for the per-slot workload admission rehearsal")
     parser.add_argument("--six-chart-approvals", nargs=2, type=Path, metavar=("CHARTS", "JAEGER_CHART_CHECKOUT"),
                         help="Exercise actual public chart renders and broad native approval partitions on a fresh API")
+    parser.add_argument("--verify-live-observation", action="store_true", help="Exercise the Helmfile read-only observer")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -575,6 +576,10 @@ def main():
                 report["storageChartRehearsal"] = rehearse(
                     args.storage_charts.resolve(), root, kube, release_cmd, WRITER
                 )
+            if args.verify_live_observation:
+                sys.path.insert(0, str(HERE.parents[1]))
+                from live_observation_fixture import exercise
+                report["liveObservation"] = exercise(root, cfg, kubectl, kube, release_cmd, chart, apply)
         report["cleanup"] = (
             "Both local servers stopped and temporary credentials, charts, histories and etcd data removed."
         )

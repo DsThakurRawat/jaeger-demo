@@ -87,6 +87,21 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(p.registry_image(p.REPOS["jaeger"], tag, frozen=img), img)
             self.assertFalse(any(url.endswith("/" + tag) for url, _ in requests))
 
+    def test_pinned_live_reference_uses_immutable_bytes_and_verifies_unlabelled_commit_tag(self):
+        tag = "a" * 40
+        cfg, child, index = registry_fixture()
+        def response(data):
+            return data, {"Docker-Content-Digest": digest(data)}
+        replies = [(raw({"token": "fixture"}), {}), response(index), response(child), (cfg, {})]
+        with patch.object(p, "fetch", side_effect=[*replies, response(index)]) as fetch:
+            src = p.registry_image(p.REPOS["jaeger"], tag, reference_digest=digest(index))
+            self.assertEqual(src["digest"], digest(index))
+            self.assertTrue(fetch.call_args_list[1].args[0].endswith(digest(index)))
+            self.assertTrue(fetch.call_args_list[-1].args[0].endswith(tag))
+        with patch.object(p, "fetch", side_effect=[*replies, response(child)]):
+            with self.assertRaisesRegex(ValueError, "claimed commit"):
+                p.registry_image(p.REPOS["jaeger"], tag, reference_digest=digest(index))
+
     def test_rejects_registry_digest_or_platform_mismatch(self):
         cfg, child, index = registry_fixture()
         tag = "a" * 40

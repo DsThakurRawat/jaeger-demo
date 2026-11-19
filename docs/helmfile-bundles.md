@@ -137,3 +137,70 @@ python3 scripts/demo/helmfile_tools.py run -- python3 \
 
 The rehearsal renders on the client, uses a synthetic observer, generates an
 ephemeral encryption key, and removes its working files when the test exits.
+
+## Acquiring the live baseline
+
+Use the read-only observer with the reviewed Kubernetes context. During planning,
+provide a JSON object with three arrays. `releases` contains the resolved release
+IDs, `objects` contains the exact rendered identities and operational guard
+objects, and `imageStacks` contains `oci` or `otel` for each selected Jaeger
+application. An identity has the form `apiVersion:Kind:namespace:name`, with
+`-` for a cluster-scoped object. The observer resolves the REST resource and its
+scope through server discovery. The capabilities file contains the Kubernetes
+version and the same group/version and kind set used by Helm. A failure to
+discover any advertised group stops the observation.
+
+```sh
+umask 077
+python3 scripts/demo/live_observation.py --scope "$PRIVATE/scope.json" \
+  --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  --render-context "$PRIVATE/render-context.json" > "$PRIVATE/live.json"
+```
+
+Check the command's exit status before reading either output. Use the baseline’s
+`cluster` (the `kube-system` Namespace UID) and `rollbackTargets` when sealing
+the bundle. The apply adapter is `live_observation.live_reader(kubeconfig, context)`.
+Construct it under the same cross-writer lock used for apply. Its input from
+`adoption_bundle.consume` includes the expected cluster UID and named rollback
+revisions. Drift or a failed health/read check stops consumption. The API serves
+each resource independently. External changes concurrent with the final reads
+can still occur outside the deployment lock.
+
+The observer retains full object bodies in process memory. The output contains
+a UID and SHA-256 for each named object, or JSON null when the GET returned 404.
+The hash includes defaulted specifications, data, labels, annotations, ownership,
+deletion timestamps and Service/PVC bindings. It excludes top-level status and
+the metadata fields resourceVersion, managedFields, generation and creationTimestamp.
+Access errors stop collection. Per-stack health calls independently check public
+routes, fresh traces and finite SPM. Each selected Jaeger and HotROD reference
+must match the named Deployment, the active Ready Pods and a registry-verified
+Linux AMD64 digest or index. The observer confirms Pod ownership through the
+ReplicaSet and Deployment UIDs.
+
+For each Helm release, a label-filtered, metadata-only query discovers revision
+identities. The observer GETs the latest Secret and each intervening revision
+down to the highest deployed or superseded release, the target Helm uses for
+atomic recovery. Each record must agree with its Secret name, namespace, owner,
+revision label and status. The observer hashes the **complete decoded stored
+release**, including chart files, values, manifests and hook definitions. A
+pending latest revision, missing intervening revision, changing ledger, or
+different requested target stops acquisition. The first install of a companion
+release can observe empty history and a null rollback target.
+
+The reader needs API discovery, a named GET of the `kube-system` Namespace,
+and named GET access for every selected object. It also needs Secret list access
+per release namespace and GET access on the exact Helm history Secret names.
+For Jaeger applications, grant GET on the two named Deployments, list on Pods
+and GET on their controlling ReplicaSets. Allow outbound reads to the public
+registry, its source tag service and the hosted health endpoints. Kubernetes
+RBAC permits a holder of Secret list access to request full Secret values. The
+collector limits its own list requests to PartialObjectMetadataList and its
+individual GETs to the named scope. This distinction belongs in the production
+access review.
+
+The private Helm history fixture accepts `--verify-live-observation`. It uses
+a separate read-only identity and real Helm release Secrets on the loopback
+API server. It verifies status churn, field and Secret value drift, missing
+objects, failed Helm revisions, intervening gaps and rollback selection. The
+fixture injects its own health callback. Registry and Pod-owner checks have
+independent deterministic test fixtures. [Local fixture instructions](../scripts/demo/rehearsals/helm-history/README.md)
