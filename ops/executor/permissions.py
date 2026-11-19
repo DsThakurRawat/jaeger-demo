@@ -276,7 +276,10 @@ def routine_snapshot(name):
     return "("+" && ".join(comparison)+")", variables
 
 
-def regular(review=None):
+def regular(review=None, *, daily=False):
+    if daily:
+        import approval_policies as daily_policies
+        eligible = daily_policies.t.allowed()
     overrides = {(i["namespace"], i["group"], i["resource"], i["name"]) for i in review["changes"]} if review else set()
     groups = defaultdict(set)
     grants = defaultdict(list)
@@ -302,8 +305,23 @@ def regular(review=None):
                 snapshot_expr, variables = routine_snapshot(tag)
                 expr = "("+same+") || "+snapshot_expr
             condition = REQUEST_NS+" == "+json.dumps(prefix)+" && request.name in "+json.dumps(sorted(selected))
-            guards += policies("jaeger-demo-"+tag+"-"+ident,group,target,["UPDATE"],expr,
-                               "Unreviewed change to hosted workload contents",condition=condition,variables=variables)
+            label="jaeger-demo-"+tag+"-"+ident
+            mutable = {name for name in selected if daily and (ns,group,target,name) in eligible}
+            if mutable:
+                # Request and holder are independent parameters on separate installed policies.
+                guards += policies(label+"-run",group,target,["UPDATE"],"true",
+                                   "A daily request must be running",condition=condition)
+                # Every meaningful daily write, including a legitimate snapshot image,
+                # must match exactly what this independent slot authorized.
+                expression = same
+                expression = "("+expression+") || (request.name in "+json.dumps(sorted(mutable))+" && "+daily_policies.exact_variant()+")"
+                vars_ = [{"name":"id","expression":json.dumps((group or "core")+"/"+target+"/")+" + request.name"}]
+                pair = policies(label,group,target,["UPDATE"],expression,"Unreviewed change to hosted workload contents",
+                                condition=condition,variables=vars_,running=False)
+                guards += daily_policies.typed_binding(pair,ns)
+            else:
+                guards += policies(label,group,target,["UPDATE"],expr,
+                                   "Unreviewed change to hosted workload contents",condition=condition,variables=variables)
     guards += lock_policy(lock_scopes) + checkpoint_guard()
     grants["default"].append(rule("", "configmaps", ["patch"],[CHECKPOINT]))
     roles = []
@@ -359,11 +377,21 @@ def workload(review):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("reads", "history-guard", "history-grants", "workload-guards", "workload-grants", "routine-guards", "routine-grants"))
+    parser.add_argument("stage", choices=("reads", "history-guard", "history-grants", "workload-guards", "workload-grants", "routine-guards", "routine-grants",
+                        "daily-guards", "daily-grants", "approval-schema", "approval-seeds", "approval-guards", "approval-grants"))
     parser.add_argument("--review", type=Path)
     parser.add_argument("--output", type=Path, required=True, help="A new local manifest; existing output is preserved")
     args = parser.parse_args()
-    if args.stage.startswith("workload"):
+    if args.stage.startswith("approval") or args.stage.startswith("daily"):
+        if args.review:
+            parser.error("The daily parameter protocol uses independently staged records")
+        if args.stage.startswith("approval"):
+            import approval_policies
+            items = approval_policies.stages(args.stage)
+        else:
+            guards, roles = regular(daily=True)
+            items = guards if args.stage == "daily-guards" else roles
+    elif args.stage.startswith("workload"):
         if not args.review or args.review.stat().st_size > 4 * 1024 * 1024:
             parser.error("Supply a bounded operator-reviewed server-admitted state file")
         guards, roles = workload(json.loads(args.review.read_bytes()))

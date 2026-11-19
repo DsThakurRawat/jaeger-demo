@@ -24,6 +24,94 @@ The optional offline state-review file contains `slot`, `configurationSHA`, `bun
 
 The [native API rehearsal](../ops/executor/rehearsals/permissions.py) uses two short-lived ServiceAccount tokens on a fresh loopback Kubernetes API. It exercises both snapshot stacks, slot-bound restarts, holder/fingerprint transitions, preserved chart data, an exact approved ordinary Deployment change and the Secret history boundary. The native policy and raw Kubernetes grants require no cloud administrator token in either runtime. Confirm the actual OKE version, API support, existing aggregate grants, rollout API accesses and all protected chart/rollback contents before production activation.
 
+## Daily parameters for reviewed changes
+
+The installed daily path accepts the existing six Helm releases across all five
+components. For each selected release the independent preparer reads the
+specific live UID, the frozen history hashes and the reviewed render. When a
+chart manifest differs, it submits the proposed operation with server-side
+dry-run. The Kubernetes API runs its usual defaulting and admission. The
+preparer records the existing and returned states for that UID in one of five
+private DailyWorkloadApproval resources. Unchanged chart objects retain the
+ordinary no-change path. Trace-generator changes use the exact same JSON Patch
+builder as the writer. Application images are bound to the exact admitted digest
+in the dated projection.
+
+For Helm 4.3.2 server-side apply, the preparer sends an existing-object
+apply-patch with manager `helm`, force disabled, strict field validation and
+`dryRun=All`. It uses the projected service-account certificate and token at
+the fixed Kubernetes API endpoint. For client-side apply, the installed
+`/usr/local/bin/jaeger-helm-preview` computes the three-way strategic patch
+with the versions used by Helm, then Kubernetes validates the patch in dry-run.
+Custom resources use Helm's two-way JSON merge behavior for upgrades performed
+without changing ownership. Both modes preserve the stored Helm apply method.
+The local program accepts objects over stdin and suppresses private error
+details. Its Go dependencies are pinned in `ops/executor/preview/go.mod` and
+verified with `go.sum`.
+
+Install stages in this order on a deployment approved for the service accounts.
+The operator creates the CRD with `approval-schema`, waits for its Established
+condition, seeds the five fixed names with `approval-seeds`, then installs
+`approval-guards`, `daily-guards` and the separate history and hook guards.
+Verify the bindings and their rejection cases before installing the
+`approval-grants`, `daily-grants`, read, hook and history roles. The
+`daily-guards` stage includes the ordinary content guards. It replaces
+`routine-guards` for this installation. Existing installations must reconcile
+the rendered policies and bindings by name and verify that no stale overlapping
+policy blocks the new path. Each stage is rendered locally by
+`python3 ops/executor/permissions.py STAGE --output NEW_FILE`.
+The daily operation reuses the same CRD, admission policies and roles for each
+slot.
+
+The preparer can read and patch only the five named private projection
+resources in the operations namespace. Its listed workload patch rights
+require Kubernetes `request.dryRun`. The API denies an actual update. It cannot
+create or delete workloads. The executor may change an existing named ordinary
+object from one exact staged variant to another while holding the protected
+daily lock. UID, mutable metadata and object fields must match. Changes to
+controller-updated status do not authorize a change on the status subresource.
+The snapshot, ordinary and checkpoint guards run alongside the independent
+controls for Helm history and monitoring hooks.
+
+The preparer authenticates every projection UID and complete spec using an
+aggregate SHA-256 in the private signed daily index. Staging completes before
+the signed index and the ready request appear. Startup can verify a finished
+index through API reads alone. A failed partial stage can be replaced before
+advertisement. The ready, requested and running transitions each require every
+native parameter to match the control object's UID, date, configuration commit
+and sealed bundle digest. A running or failed slot blocks replacement. An
+expired, unclaimed slot can be superseded after the trusted preparer checks
+expiry. The requester needs access only to its existing request ConfigMap.
+Each private partition is limited to 100 changed identities and 640 KiB of
+spec. A larger change needs operator handling before any daily mutation.
+Keep read access private because chart configuration and pod metadata can
+contain internal values. Kubernetes Secret bodies, cluster-scoped security
+resources, monitoring operator pods and hooks are excluded from these
+parameters.
+
+Service routing, OpenSearch storage identity, the workload service account,
+injected credentials, volumes and pod privileges stay bound to the existing
+configuration. The cluster-reading OTel Collector agent additionally requires
+the same pod settings and commands with same-repository digest-pinned image
+changes. An attempted change across one of these boundaries aborts
+preparation. A previously failed release uses Helm's actual existing original
+manifest for preparing a new upgrade. A failure that needs a different
+admitted rollback state returns to operator recovery under the existing
+verified-history procedure.
+
+The disposable loopback rehearsal is in
+`ops/executor/rehearsals/approvals.py`. Supply a fresh Kubernetes API server
+with RBAC and ValidatingAdmissionPolicy enabled, a localhost kubeconfig context
+named `fixture`, Helm 4.3.2 and the locally built `jaeger-helm-preview` on
+PATH. It mints separate short-lived preparer and executor tokens and exercises
+the matrix's actual ConfigMap names for all five components. Its two real Helm
+Deployment transactions use a synthetic chart in each existing Jaeger
+namespace, one CSA and one SSA. The check compares the stored upgrade with the
+independent preview and verifies the original UID and contents after real
+rollback. The rehearsal also checks denial of partial and altered projections,
+out-of-scope Pod and ReplicaSet reads, workload writes by the preparer, and
+unapproved ordinary mutations.
+
 ## Monitoring hook identities
 
 `monitoring_hooks.py` verifies the public monitoring chart archive against the repository checksum, renders the twelve hook objects and asks the explicitly selected API server to default each object using a nonpersistent CREATE. Run this from the reviewed checkout and an independently verified operator context while the hook objects are absent. The two output files hold the candidate rules and grants for inspection.
