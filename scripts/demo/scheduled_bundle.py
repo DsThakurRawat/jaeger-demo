@@ -169,9 +169,10 @@ def signed_slot(fd, slot, verifier):
         signature = bytes.fromhex(stored["signature"])
         require(raw == canonical({"claim": claim, "signature": signature.hex()}), "Invalid signed slot encoding")
         verifier.verify(signature, canonical(claim))
-        require(set(claim) == {"format", "slot", "configurationSHA", "recipient", "inputCommitment", "bundleSHA256"}
+        base = {"format", "slot", "configurationSHA", "recipient", "inputCommitment", "bundleSHA256"}
+        require(set(claim) in (base, base | {"approvalSHA256"})
                 and claim["format"] == FORMAT and claim["slot"] == slot
-                and all(re.fullmatch("[0-9a-f]{64}", claim[k]) for k in ("recipient", "inputCommitment")),
+                and all(re.fullmatch("[0-9a-f]{64}", claim[k]) for k in set(claim) & {"recipient", "inputCommitment", "approvalSHA256"}),
                 "Signed slot scope differs")
         receipt(claim)
         return claim
@@ -193,6 +194,16 @@ def trusted_receipt(store, slot, *, verification_key):
         claim = signed_slot(fd, slot, verifier)
         blob(fd, claim)  # An incomplete/corrupt store is never treated as an unpublished slot.
         return receipt(claim)
+
+
+def approval_commitment(store, slot, expected_receipt, *, verification_key):
+    """Return the privately signed digest of the complete admitted parameter projection."""
+    verifier = key_file(verification_key, ed25519.Ed25519PublicKey)
+    with open_store(store) as fd:
+        claim = signed_slot(fd, slot, verifier)
+        require(receipt(claim) == receipt_fields(expected_receipt) and "approvalSHA256" in claim,
+                "Daily receipt has no matching signed approval commitment")
+        return claim["approvalSHA256"]
 
 
 def write_once(fd, name, content):
@@ -244,7 +255,11 @@ def publish(store, slot, configuration_sha, files, *, signing_key, recipient_key
         # Once the dated index is visible, the preparer can resume without decrypting or
         # re-resolving. Finish independent in-cluster publication before that commit point.
         if before_index is not None:
-            before_index(receipt(claim))
+            approvals = before_index(receipt(claim))
+            if approvals is not None:
+                require(isinstance(approvals, str) and re.fullmatch("[0-9a-f]{64}", approvals),
+                        "Invalid approval commitment from publisher")
+                claim["approvalSHA256"] = approvals
         signed = canonical({"claim": claim, "signature": signer.sign(canonical(claim)).hex()})
         write_once(fd, slot_name(slot), signed)
         return receipt(claim)

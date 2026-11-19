@@ -192,9 +192,15 @@ class CustodyTests(unittest.TestCase):
             publish(failed)
         with self.assertRaises(b.SlotNotFound):
             b.trusted_receipt(self.store, self.slot, **self.verify)
-        result = publish(operations.append)
+        def approved(value):
+            operations.append(value)
+            return "a" * 64
+        result = publish(approved)
         self.assertEqual(publish(failed), result)
         self.assertEqual(operations, [result])
+        self.assertEqual(b.approval_commitment(self.store, self.slot, result, **self.verify), "a" * 64)
+        with self.assertRaises(b.CustodyError):
+            b.approval_commitment(self.store, self.slot, dict(result,bundleSHA256="f"*64), **self.verify)
 
     def test_fixed_members_no_traversal_or_unbounded_expansion(self):
         for wrong in ({}, dict(self.files, **{"../other": b"x"}), dict(self.files, **{"plan.json": b""})):
