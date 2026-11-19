@@ -44,6 +44,12 @@ The candidate runtime targets Linux AMD64 on OKE. Pull request CI builds it in a
 
 During preparation, the pod reads the exact public `jaeger-demo/main` commit. It treats configuration blobs as data and checks compatibility against the code in the installed image. Chart versions must match the reviewed archive checksums. The Jaeger chart comes from a pinned Git commit with four checked dependency archives. Both snapshot references bind the independent core commit tag, registry index digest and Linux AMD64 manifest digest. A runtime-code change requires a matching image release. A chart bump requires its version and archive checksum in the same reviewed change. [Public input acquisition](../scripts/demo/scheduled_inputs.py) · [Chart archive checksums](../ops/executor/chart-archives.json)
 
+### Updating a dependency
+
+For a Renovate chart update, use the repository and chart listed in `scheduled_inputs.CHARTS`. Fetch the candidate version from the publisher. Compare the downloaded archive's SHA-256 with the publisher's digest in its Helm repository index. Include the new versioned filename and digest in `ops/executor/chart-archives.json` in the same PR as the version change. A Jaeger chart Git pin change also requires comparing the upstream `Chart.lock` and the checksums of its packaged dependencies. The acquisition code rejects missing, extra and changed archives. Retain the seven-day release-age review and the rendered diff. [Dependency review](releases.md) · [Public input and checksum checks](../scripts/demo/scheduled_inputs.py)
+
+For a Helm, kubectl, Python or Go runtime change, update the version, appropriate platform checksums or image index digest, compatibility checks, and release rehearsal together. Validate the actual Linux AMD64 build and kind job on the reviewed commit. Publish a new image by digest, pause new requests, allow an active transaction to finish, then review the replacement deployment digest. Retain the prior image and custody keys until an operator has verified the replacement against a signed slot. Changing the runtime image in production requires installation approval.
+
 ### Installation approval
 
 Render the candidate offline. Keep the image digest, configuration commit, exact object list, permission evidence and private key custody destination with the change record. The renderer emits a suspended CronJob and a Deployment at zero replicas. The bootstrap Job is the sole pod launched by applying this manifest. It has no API token and initializes the two directories on the new claim.
