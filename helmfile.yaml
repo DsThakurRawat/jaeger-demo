@@ -1,0 +1,109 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+repositories:
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: opensearch
+    url: https://opensearch-project.github.io/helm-charts
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+
+helmDefaults:
+  wait: true
+  createNamespace: false
+  historyMax: 10
+
+releases:
+  - name: prometheus
+    namespace: default
+    labels: {stack: oci, component: monitoring}
+    chart: prometheus-community/kube-prometheus-stack
+    version: "82.10.4"
+    timeout: 1200
+    values:
+      - examples/oci/monitoring-values.yaml
+      - crds:
+          upgradeJob:
+            enabled: true
+            forceConflicts: true
+
+  - name: jaeger
+    namespace: default
+    labels: {stack: oci, component: jaeger}
+    chart: ./.tools/helm-charts/charts/jaeger
+    needs:
+      - default/prometheus
+    timeout: 600
+    atomic: true
+    values:
+      - examples/oci/jaeger-values.yaml
+      - provisionDataStore:
+          cassandra: false
+        allInOne:
+          enabled: true
+        storage:
+          type: memory
+      - helmfile/jaeger-images.yaml.gotmpl
+    set:
+      - name: userconfig
+        file: examples/oci/config.yaml
+      - name: uiconfig
+        file: examples/oci/ui-config.json
+
+  - name: opensearch
+    namespace: opensearch
+    labels: {stack: otel, component: opensearch}
+    chart: opensearch/opensearch
+    version: "3.7.0"
+    timeout: 600
+    values:
+      - examples/otel-demo/opensearch-values.yaml
+
+  - name: opensearch-dashboards
+    namespace: opensearch
+    labels: {stack: otel, component: opensearch}
+    chart: opensearch/opensearch-dashboards
+    version: "3.7.0"
+    needs:
+      - opensearch/opensearch
+    timeout: 3600
+    values:
+      - examples/otel-demo/opensearch-dashboard-values.yaml
+
+  - name: jaeger
+    namespace: jaeger
+    labels: {stack: otel, component: jaeger}
+    chart: ./.tools/helm-charts/charts/jaeger
+    needs:
+      - opensearch/opensearch
+    timeout: 600
+    atomic: true
+    values:
+      - examples/otel-demo/jaeger-values.yaml
+      - allInOne:
+          enabled: true
+        storage:
+          type: elasticsearch
+          elasticsearch:
+            anonymous: true
+            usePassword: false
+            host: opensearch-cluster-single.opensearch.svc.cluster.local
+            port: 9200
+      - helmfile/jaeger-images.yaml.gotmpl
+    set:
+      - name: userconfig
+        file: examples/otel-demo/jaeger-config.yaml
+      - name: uiconfig
+        file: examples/oci/ui-config.json
+
+  - name: otel-demo
+    namespace: otel-demo
+    labels: {stack: otel, component: otel-demo}
+    chart: open-telemetry/opentelemetry-demo
+    version: "0.40.9"
+    needs:
+      - jaeger/jaeger
+    timeout: 900
+    values:
+      - examples/otel-demo/otel-demo-values.yaml
