@@ -4,11 +4,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+import deploy
 import scheduled_inputs as inputs
 
 
@@ -20,6 +23,34 @@ class InputTests(unittest.TestCase):
         self.assertEqual(env["KUBECONFIG"], os.devnull)
         self.assertEqual(env["GIT_ALLOW_PROTOCOL"], "https")
         self.assertFalse(set(env) & {"GITHUB_TOKEN", "SSH_AUTH_SOCK", "HELM_DRIVER", "GIT_CONFIG_COUNT", "DOCKERHUB_CURL"})
+
+    def test_local_main_fetch_supplies_all_five_fingerprints_without_running_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tmp = Path(folder)
+            repo = tmp / "reviewed-main"
+            repo.mkdir()
+            paths = set(inputs.GUARDED) | {inputs.LOCK}
+            for stack, _, names in deploy.COMPONENTS.values():
+                base = Path("examples", "oci" if stack == "oci" else "otel-demo")
+                paths.update(base / name for name in names)
+            for name in paths:
+                dest = repo / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(inputs.ROOT / name, dest)
+            (repo / "unrelated-workflow.sh").write_text("exit 123")
+            env = inputs.public_env(tmp)
+            env["GIT_ALLOW_PROTOCOL"] = "file"  # A local-only source replaces public GitHub in this test.
+            git = ["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+            for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "Synthetic reviewed tree"]):
+                subprocess.run(git + args, env=env, check=True, capture_output=True)
+            with patch.object(inputs, "CONFIG", str(repo)):
+                revision = inputs.head(str(repo), env)
+                exported = inputs.config_data(tmp, revision, env)
+            inputs.verify_runtime(exported)
+            self.assertFalse((exported / "unrelated-workflow.sh").exists())
+            self.assertFalse((exported / ".git").exists())
+            for component in deploy.COMPONENTS:
+                self.assertEqual(deploy.fingerprint(component), deploy.fingerprint(component, exported))
 
     def test_ref_must_match_before_reading_any_blob(self):
         with patch.object(inputs, "fetch_tree", return_value=([], "1"*40)), patch.object(inputs, "public_command") as command:
