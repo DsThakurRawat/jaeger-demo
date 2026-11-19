@@ -20,7 +20,7 @@ jobs:
   chart-admission:
     name: Monitoring hooks and Helm history
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
@@ -30,17 +30,28 @@ jobs:
         version: v4.3.2
     - name: Install the YAML and crypto dependencies used in the rehearsal
       run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML cryptography
-    - name: Download the pinned local API, etcd and monitoring chart
+    - name: Download the pinned local API and etcd
       working-directory: ${{ runner.temp }}
       run: |
         curl -fsSLo envtest.tgz https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v1.36.0/envtest-v1.36.0-linux-amd64.tar.gz
         echo 'd84f910bcefa3f6ab0205a49a7255672150c73b14bca3c36ac627db65040edf0  envtest.tgz' | sha256sum --check
         tar -xzf envtest.tgz
-        chart=$(jq -er '.charts | keys[] | select(startswith("kube-prometheus-stack-"))' "$GITHUB_WORKSPACE/ops/executor/chart-archives.json")
-        version=${chart#kube-prometheus-stack-}
-        helm pull kube-prometheus-stack --version "${version%.tgz}" --repo https://prometheus-community.github.io/helm-charts
-        jq -er --arg chart "$chart" '.charts[$chart] + "  " + $chart' "$GITHUB_WORKSPACE/ops/executor/chart-archives.json" | sha256sum --check
-        echo "MONITORING_CHART=$RUNNER_TEMP/$chart" >> "$GITHUB_ENV"
+    - name: Fetch the reviewed chart sources and verify their digests
+      env:
+        PYTHONPATH: scripts/demo
+      run: |
+        python3 - <<'PYTHON'
+        import os
+        from pathlib import Path
+        import scheduled_inputs
+
+        staging = Path(os.environ["RUNNER_TEMP"]) / "chart-sources"
+        staging.mkdir()
+        scheduled_inputs.charts_for(Path.cwd(), staging, scheduled_inputs.public_env(staging))
+        monitoring, = (staging / "charts").glob("kube-prometheus-stack-*.tgz")
+        with open(os.environ["GITHUB_ENV"], "a") as env_file:
+            print(f"MONITORING_CHART={monitoring}", file=env_file)
+        PYTHON
     - name: Verify create and delete for twelve exact hook objects and deny unapproved changes
       run: |
         python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
@@ -60,3 +71,8 @@ jobs:
         (cd ops/executor/preview && go mod verify && go test -mod=readonly ./... && go build -mod=readonly -o "$RUNNER_TEMP/preview-bin/jaeger-helm-preview" .)
         PATH="$RUNNER_TEMP/preview-bin:$PATH" python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
           --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/typed-admission.json" --typed-approval-rehearsal
+    - name: Stage and verify all six real charts under native admission
+      run: |
+        PATH="$RUNNER_TEMP/preview-bin:$PATH" python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
+          --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/six-chart-approvals.json" \
+          --six-chart-approvals "$RUNNER_TEMP/chart-sources/charts" "$RUNNER_TEMP/chart-sources/upstream"
