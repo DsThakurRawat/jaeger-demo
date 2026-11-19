@@ -53,7 +53,11 @@ def run(cfg, scratch, kube, packages, chart_root):
     chart_source = chart_root / "charts/jaeger"
     assert not any(path.is_symlink() for path in chart_source.rglob("*"))
     assert not subprocess.check_output(["git", "-C", chart_root, "status", "--porcelain", "--", "charts/jaeger"])
-    scheduled_inputs.checked_archives(list(packages.glob("*.tgz")), locks["charts"])
+    packaged = {
+        release: packages / f"{name}-{scheduled_inputs.pin(a.ROOT, variable)}.tgz"
+        for release, variable, name, _ in scheduled_inputs.CHARTS
+    }
+    scheduled_inputs.checked_archives(list(packaged.values()), locks["charts"])
     scheduled_inputs.checked_archives(list((chart_source / "charts").iterdir()), locks["jaegerDependencies"])
     actual_ids = set()
     images = fixture_images()
@@ -119,21 +123,14 @@ def run(cfg, scratch, kube, packages, chart_root):
     seen_refs = {}
     capacity = {}
     crds = a.docs(
-        a.command(["helm", "show", "crds", packages / "kube-prometheus-stack-82.10.4.tgz"], env=env)
+        a.command(["helm", "show", "crds", packaged["default/prometheus"]], env=env)
     )
     for crd in crds:
         kube(["apply", "--server-side", "-f", "-"], body=a.encode(crd).decode())
         actual_ids.add(a.identity(crd, "default"))
     kube(["wait", "crd", "--all", "--for=condition=Established", "--timeout=40s"])
     for key, (ns, name, _) in a.RELEASES.items():
-        if key.endswith("-jaeger"):
-            pkg = local
-        else:
-            (pkg,) = [
-                x
-                for x in packages.glob("*.tgz")
-                if re.fullmatch(re.escape(a.CHARTS[key]) + r"-[0-9.]+\.tgz", x.name)
-            ]
+        pkg = local if key.endswith("-jaeger") else packaged[f"{ns}/{name}"]
         charts[ns + "/" + name] = pkg.read_bytes()
         metadata = yaml.safe_load(a.command(["helm", "show", "chart", pkg], env=env))
         values = a.values_for(key, a.ROOT, images)
