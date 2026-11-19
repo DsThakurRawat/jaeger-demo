@@ -259,7 +259,9 @@ def live_image(get, resolve_image, ns, component):
         meta = pod["metadata"]
         if meta.get("deletionTimestamp"):
             continue
-        require((pod["apiVersion"], pod["kind"], meta["namespace"]) == ("v1", "Pod", ns)
+        # The typed PodList already identifies the item type. Its embedded Pods
+        # can omit TypeMeta on the wire. Reject any conflicting supplied value.
+        require(pod.get("apiVersion", "v1") in ("", "v1") and pod.get("kind", "Pod") in ("", "Pod") and meta["namespace"] == ns
                 and meta["uid"] not in uids and all(meta["labels"].get(k) == v for k, v in labels.items()),
                 "Unexpected or duplicate selected Pod")
         uids.add(meta["uid"])

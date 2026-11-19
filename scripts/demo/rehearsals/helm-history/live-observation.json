@@ -1,0 +1,37 @@
+{
+  "startedAt": "2026-11-19T03:20:05.574650+00:00",
+  "finishedAt": "2026-11-19T03:20:16.760695+00:00",
+  "endpoint": "ephemeral 127.0.0.1",
+  "productionAccess": false,
+  "apiServer": "Kubernetes v1.36.0",
+  "kubectl": "v1.36.0",
+  "helm": "v4.3.2+g8346aaa",
+  "etcd": "etcd Version: 3.6.8",
+  "harnessSHA256": "41777bbfd49c2eb3455315c55dec672f052500360d9354737415a4c38cf877aa",
+  "liveObservation": {
+    "observer": "history-observer",
+    "writeDenied": true,
+    "statusOnlyStable": true,
+    "specDrift": true,
+    "secretValueDrift": true,
+    "missingObject": true,
+    "helmRevisions": [
+      6,
+      7,
+      8
+    ],
+    "rollbackRevision": 6,
+    "olderRollbackRejected": true,
+    "missingInterveningRecordRejected": true,
+    "differentClusterRejected": true,
+    "unrelatedNamedSecretReadDenied": true,
+    "readyPodOwnerChain": true,
+    "registry": "synthetic immutable image digests",
+    "healthProbe": "private fixture callback",
+    "externalAccess": false
+  },
+  "cleanup": "Both local servers stopped and temporary credentials, charts, histories and etcd data removed.",
+  "passed": true,
+  "observerSHA256": "b9b785c540542f147d17e3fe9d58043742db6c809825e16fde8c6c291601adef",
+  "fixtureSHA256": "5e19cb172822b39ed330d0aca21dcf603f160290c4c9217a25f77df278fb11a2"
+}

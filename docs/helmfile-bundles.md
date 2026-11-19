@@ -221,5 +221,5 @@ The private Helm history fixture accepts `--verify-live-observation`. It uses
 a separate read-only identity and real Helm release Secrets on the loopback
 API server. It verifies status churn, field and Secret value drift, missing
 objects, failed Helm revisions, intervening gaps and rollback selection. The
-fixture injects its own health callback. Registry and Pod-owner checks have
-independent deterministic test fixtures. [Local fixture instructions](../scripts/demo/rehearsals/helm-history/README.md)
+fixture injects its own health callback. The test sets a Pod status on the private API and verifies its Deployment
+ownership chain against synthetic registry digests. [Local fixture instructions](../scripts/demo/rehearsals/helm-history/README.md)

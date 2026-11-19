@@ -155,6 +155,10 @@ Add `--verify-live-observation` when running from a checkout with PyYAML and
 cryptography installed to exercise the Helmfile observer. The harness grants a
 second fixture user read access, then uses the fixture administrator to change
 status, configuration and synthetic Helm history. A successful receipt records
-the observed changes under `liveObservation`. The private API fixture has no
+the observed changes under `liveObservation`. The read-only observer also checks
+a synthetic image digest through real Deployment, ReplicaSet and Pod objects.
+[Recorded local result](live-observation.json)
+
+The private API fixture has no
 workload controller or public endpoints, so its health callback checks the
 selected stack. [Observer command and access scope](../../../../docs/helmfile-bundles.md#acquiring-the-live-baseline)

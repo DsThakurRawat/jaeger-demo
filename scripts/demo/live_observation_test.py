@@ -83,6 +83,10 @@ class ReadOnlyTests(unittest.TestCase):
         def read(d=parent, p=pods, r=rs):
             return o.live_image(Mock(side_effect=[d, p, r]), Mock(return_value=src), "default", "jaeger")
         self.assertEqual(read(), {"digest": src["digest"], "sourceCommit": src["sourceCommit"], "reference": image})
+        del pod["kind"], pod["apiVersion"]
+        self.assertEqual(read()["digest"], src["digest"])
+        with self.assertRaisesRegex(ValueError, "selected Pod"):
+            read(p=dict(pods, items=[dict(pod, kind="Secret")]))
         with self.assertRaisesRegex(ValueError, "all Deployment replicas"):
             read(p=dict(pods, items=[]))
         with self.assertRaisesRegex(ValueError, "reconciling"):
