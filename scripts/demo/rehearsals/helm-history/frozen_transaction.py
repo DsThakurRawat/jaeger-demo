@@ -121,6 +121,26 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         assert grafana["data"]["admin-password"] == marker
         assert len(a.release_docs(first)) == 129 and len(first["hooks"]) == 12
         assert a.history("oci-monitoring")[0][0]["revision"] == 6
+    # Exercise schema/defaulting for each actual non-hook RBAC body.
+    observed = {}
+    for obj in rendered:
+        if obj["kind"] not in ("Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding"):
+            continue
+        if a.HELM_HOOK in (obj["metadata"].get("annotations") or {}):
+            continue
+        stored = json.loads(kube(["create", "-o", "json", "-f", "-"], body=json.dumps(obj)).stdout)
+        # Fetch what API storage returns later, as the real preparer does.
+        persisted = json.loads(kube(["get", obj["kind"], obj["metadata"]["name"], "-n",
+                                     obj["metadata"].get("namespace", "default"), "-o", "json"]).stdout)
+        fields = ["rules", "aggregationRule", "subjects", "roleRef"]
+        ident = a.identity(obj, "default")
+        observed[ident] = {k: [type(obj.get(k)).__name__, type(persisted.get(k)).__name__] for k in fields
+                           if obj.get(k) != persisted.get(k)}
+        a.check_live_rbac(obj, persisted)
+        assert bool(stored["metadata"]["uid"])
+    shapes = {k: v for k, v in observed.items() if v}
+    assert shapes == {"rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": {"rules": ["list", "NoneType"]}}
     return {"reader": user, "secretPatchDenied": True, "chartSHA256": a.sha(package), "renderedObjects": len(rendered),
+            "comparedOrdinaryRBAC": len(observed), "apiStorageNormalization": shapes,
             "hookObjects": len(first["hooks"]), "seededCRDs": len(crds), "grafanaLookupMatchedPrivateFixture": True,
             "unchangedHelmRevision": 6, "frozenPostRendererPassed": True}

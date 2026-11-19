@@ -550,6 +550,15 @@ def monitoring_guards(objects):
     return protected
 
 
+def check_live_rbac(desired, live):
+    for field in ("rules", "aggregationRule", "subjects", "roleRef"):
+        wanted, actual = desired.get(field), live.get(field)
+        if field == "rules" and wanted == [] and actual is None:
+            # The Kubernetes RBAC API persists an empty rule set as null.
+            continue
+        need(wanted == actual, "Live RBAC differs from the protected baseline")
+
+
 def baseline(key, current, rollback, candidate, extras, images):
     ns = RELEASES[key][0]
     validate_change(key, release_docs(current), candidate, images)
@@ -566,8 +575,7 @@ def baseline(key, current, rollback, candidate, extras, images):
                  and annotations.get("meta.helm.sh/release-namespace") == ns
                  and labels.get("app.kubernetes.io/managed-by") == "Helm", "Existing chart resource has foreign ownership")
         if desired["kind"] in {"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"}:
-            for field in ("rules", "aggregationRule", "subjects", "roleRef"):
-                need(desired.get(field) == live.get(field), "Live RBAC differs from the protected baseline")
+            check_live_rbac(desired, live)
         if ident in extra_ids:
             supplemental_changes(desired, live)  # Reject unavailable management history before any Helm write.
         if desired["kind"] == "Secret":

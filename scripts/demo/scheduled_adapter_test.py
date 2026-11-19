@@ -135,6 +135,16 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(a.AdapterError, "Unreviewed"):
             a.check_jaeger_patch_access("jaeger", [obj("Secret", "private")])
 
+    def test_live_rbac_comparison_accepts_persisted_empty_rules_only(self):
+        a.check_live_rbac({"rules": []}, {"rules": None})
+        for before, after in (({"rules": []}, {"rules": [{"verbs": ["get"]}]}),
+                              ({"rules": [{"verbs": ["get"]}]}, {"rules": None}),
+                              ({"subjects": [{"name": "jaeger"}]}, {"subjects": []}),
+                              ({"roleRef": {"name":"original"}}, {"roleRef":{"name":"changed"}}),
+                              ({"rules": []}, {"rules": ""})):
+            with self.subTest(before=before, after=after), self.assertRaisesRegex(a.AdapterError, "Live RBAC"):
+                a.check_live_rbac(before, after)
+
     def test_inherits_recorded_apply_method_and_rejects_drift_before_any_write(self):
         for previous, expected in (({}, "csa"), ({"apply_method": ""}, "csa"),
                                    ({"apply_method": "csa"}, "csa"), ({"apply_method": "ssa"}, "ssa")):

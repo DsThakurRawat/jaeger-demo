@@ -1,6 +1,6 @@
 {
-  "startedAt": "2026-11-19T13:15:26.207588+00:00",
-  "finishedAt": "2026-11-19T13:15:43.009047+00:00",
+  "startedAt": "2026-11-19T13:29:44.698773+00:00",
+  "finishedAt": "2026-11-19T13:30:01.036671+00:00",
   "productionAccess": false,
   "endpoint": "ephemeral 127.0.0.1",
   "helm": "v4.3.2+g8346aaa",
@@ -27,6 +27,15 @@
     "secretPatchDenied": true,
     "chartSHA256": "e0c601a95d333616fd30961ec9374893fba2b6852ce7df87f97f9efdd2cb9b41",
     "renderedObjects": 129,
+    "comparedOrdinaryRBAC": 10,
+    "apiStorageNormalization": {
+      "rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": {
+        "rules": [
+          "list",
+          "NoneType"
+        ]
+      }
+    },
     "hookObjects": 12,
     "seededCRDs": 10,
     "grafanaLookupMatchedPrivateFixture": true,

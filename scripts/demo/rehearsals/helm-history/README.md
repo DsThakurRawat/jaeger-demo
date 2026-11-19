@@ -76,6 +76,12 @@ preserved all 129 objects and left the monitoring release at revision 6.
 The private API had no real controllers, scheduled pods, or cloud volumes.
 [Private API outcome](frozen-transaction-receipt.json)
 
+The API fixture also creates all ten ordinary RBAC resources from the real
+monitoring chart, then reads them back through Kubernetes storage. The
+Grafana Role's empty `rules` array returns as null. The preparer accepts
+that representation of zero permissions and compares every populated rule,
+binding subject, role reference and aggregation rule against the chart.
+
 The same API fixture exercised both initial Jaeger recovery modes. With automatic rollback disabled, an incompatible upgrade left revision 7 failed. An explicit fixture operator rollback established revision 8. A later incompatible upgrade with automatic rollback enabled recorded failure at 9 and restored the release at 10. Independent adapter tests cover selecting that mode from both stored image references and verifying Ready Pod digests.
 
 Add `--jaeger-patch-methods "$JAEGER_CHART_CHECKOUT"` to install the actual
