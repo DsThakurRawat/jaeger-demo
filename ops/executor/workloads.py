@@ -36,7 +36,8 @@ def pod(image, mode, cluster_uid):
                  "securityContext": SECURITY, "resources": {"requests": {"cpu": "100m", "memory": "256Mi",
                  "ephemeral-storage": "256Mi"}, "limits": {"memory": "1Gi", "ephemeral-storage": "2Gi"}},
                  "volumeMounts": mounts}
-    spec = {"restartPolicy": "Always" if mode == "serve" else "Never", "securityContext": POD_SECURITY,
+    spec = {"nodeSelector": {"kubernetes.io/os": "linux", "kubernetes.io/arch": "amd64"},
+            "restartPolicy": "Always" if mode == "serve" else "Never", "securityContext": POD_SECURITY,
             "enableServiceLinks": False, "automountServiceAccountToken": not init, "containers": [container],
             "volumes": volumes, "terminationGracePeriodSeconds": 30}
     if init:

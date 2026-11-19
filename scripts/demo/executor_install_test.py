@@ -39,6 +39,7 @@ class InstallTests(unittest.TestCase):
         paths = Paths()
         for mode in ACCOUNTS:
             spec = workloads.pod(IMAGE, mode, CLUSTER_UID)["spec"]
+            self.assertEqual(spec["nodeSelector"], {"kubernetes.io/os": "linux", "kubernetes.io/arch": "amd64"})
             self.assertEqual(spec["serviceAccountName"], ACCOUNTS[mode])
             self.assertTrue(spec["automountServiceAccountToken"])
             container, = spec["containers"]
