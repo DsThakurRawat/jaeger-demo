@@ -52,7 +52,7 @@ For a Helm, kubectl, Python or Go runtime change, update the version, appropriat
 
 ### Installation approval
 
-Render the candidate offline. Keep the image digest, configuration commit, exact object list, permission evidence and private key custody destination with the change record. The renderer emits a suspended CronJob and a Deployment at zero replicas. The bootstrap Job is the sole pod launched by applying this manifest. It has no API token and initializes the two directories on the new claim.
+Use the [production installation review packet](daily-production-install-review.md) to assemble the ordered manifests and their hashes offline. Keep the image digest, configuration commit, exact object list, permission evidence and private key custody destination with the change record. The renderer emits a suspended CronJob and a Deployment at zero replicas. The bootstrap Job is the sole pod launched by applying this manifest. It has no API token and initializes the two directories on the new claim.
 
 ```bash
 python3 ops/executor/workloads.py --image "$release_image" --storage-class oci-bv \
