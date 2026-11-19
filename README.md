@@ -13,7 +13,7 @@ The [OCI deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/4
 reached Helm revision 25 and the [OTel deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094)
 reached revision 14. The previous core deployment and maintenance workflows are disabled.
 The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
-the OTel sample application, and OCI monitoring. Its production activation
+the OTel sample application, and OCI monitoring through a [protected deployment request](docs/daily-update-request.md). Its production activation
 and first verified run are tracked in the [handover runbook](docs/cutover.md#review-scheduled-scope).
 Helmfile adoption follows the script handover.
 

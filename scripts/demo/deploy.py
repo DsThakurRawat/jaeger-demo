@@ -216,7 +216,7 @@ def reconcile(env, root=ROOT):
                 snapshots_resolved = True
             print(f"::group::Deploy {name}", flush=True)
             deploy_component(name, env)
-            if event == "schedule":
+            if event == "schedule" or env.get("JAEGER_DEMO_LOCK_HELD") == "true":
                 patch = json.dumps({"data": {name: desired[name]}})
                 run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
             else:

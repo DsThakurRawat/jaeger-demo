@@ -50,5 +50,15 @@ jobs:
         ref: ${{ github.sha }}
         persist-credentials: false
 
+    - name: Acquire the shared deployment lock
+      id: writer-lock
+      env:
+        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
+      run: python3 scripts/demo/scheduled_request.py manual-acquire
+
     - name: Expand and verify the OpenSearch volume
       run: bash examples/otel-demo/opensearch-expand-volume.sh
+
+    - name: Release the shared deployment lock
+      if: success() && steps.writer-lock.outputs.held == 'true'
+      run: python3 scripts/demo/scheduled_request.py manual-release

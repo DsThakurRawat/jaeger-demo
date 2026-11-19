@@ -129,8 +129,8 @@ payloads.
 
 ## Daily component updates
 
-The scheduled job resolves upstream Jaeger and HotROD snapshot tags independently
-and refreshes both Jaeger releases daily. Renovate proposes chart, image and
+The protected planner resolves upstream Jaeger and HotROD snapshot tags independently
+and freezes the exact images in the daily bundle. The GitHub job signals the [protected executor](daily-update-request.md) and waits for its verified result. Both Jaeger releases refresh daily. Renovate proposes chart, image and
 dependency changes for maintainer review, with a seven-day release-age policy
 and manual merges. The next daily reconciliation uses the reviewed configuration
 on main. Unchanged storage, monitoring and sample-application inputs retain their
@@ -159,9 +159,7 @@ retry, especially when OpenSearch upgraded before Dashboards failed.
 
 ## Failure handling
 
-A failure leaves the schedule enabled. The next 13:00 UTC event retries eligible
-components, including changed components whose last attempt did not record a new
-fingerprint. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
+A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
 writers separately and let an active Helm transaction finish before rolling back.
 Preserve the failed run's diagnostics and compare actual release state with the
