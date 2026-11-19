@@ -77,12 +77,13 @@ def check_fixture(kube):
         raise ValueError("The workload rehearsal requires a fresh disposable cluster")
 
 
-def add_fixtures(obj):
+def add_fixtures(obj, architecture):
     name = obj["kind"]
     if name not in ("Deployment", "CronJob", "Job"):
         return
     job = obj["spec"]["jobTemplate"]["spec"] if name == "CronJob" else obj["spec"]
     pod = job["template"]["spec"]
+    pod["nodeSelector"]["kubernetes.io/arch"] = architecture
     container = pod["containers"][0]
     container["imagePullPolicy"] = "Never"
     if name == "Job":
@@ -140,6 +141,10 @@ def install_keys(kube, work):
 
 def rehearse(kube, image, work):
     check_fixture(kube)
+    architecture = run([*kube, "get", "node", "jaeger-executor-ci-control-plane",
+                        "-o", "jsonpath={.status.nodeInfo.architecture}"])
+    if architecture not in ("amd64", "arm64"):
+        raise ValueError("Unsupported kind fixture architecture")
     generate_keys(work)
 
     def api(*args, doc=None, timeout=40):
@@ -268,7 +273,7 @@ def rehearse(kube, image, work):
     api("create", "-f", "-", doc=fixture)
     for item in objects:
         if item["kind"] != "Namespace":
-            add_fixtures(item)
+            add_fixtures(item, architecture)
             api("create", "-f", "-", doc=item)
     check(
         "installation starts with zero receivers and the scheduled preparer suspended",
