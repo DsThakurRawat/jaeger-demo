@@ -171,7 +171,7 @@ def main():
         guard = LOCK.parent / "helm-plugins" / "verify-frozen-manifests"
         shutil.copytree(guard, directory / "plugins" / guard.name)
         env = dict(os.environ, PATH=str(directory / "bin") + os.pathsep + os.environ["PATH"],
-                   HELM_PLUGINS=str(directory / "plugins"))
+                   HELM_PLUGINS=str(directory / "plugins"), JAEGER_HELMFILE_TOOLCHAIN=str(directory))
         env.setdefault("HELM_CACHE_HOME", str(CACHE.parent / "helm-cache"))
         if args.operation == "check":
             check_versions(tools, env)

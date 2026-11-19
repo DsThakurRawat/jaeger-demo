@@ -115,6 +115,49 @@ checks. Keep the lock through verification and record last-known-good only on
 successful completion. Kubernetes actors outside that lock can still change
 objects. Enforce resource preconditions at each mutation boundary.
 
+For the six existing application releases, pass
+`functools.partial(helmfile_transaction.reconcile_existing, kubeconfig=path, context=name)`
+to the consumer. Start the trusted process with `scripts/demo/helmfile_tools.py run`
+from the approved checkout. The launcher verifies the tool archives and supplies
+the isolated Helm, Helmfile, helm-diff and post-renderer directory. Prefill
+the locked tool cache when the runtime has no public download access.
+
+The callback writes one release state and the sealed inputs in an owner-only
+temporary directory. It declares no repositories, skips dependency preparation
+and passes the local values file directly to Helm and helm-diff. This preserves
+literal values that Helmfile itself could interpret as external references.
+Both commands require the frozen post-renderer. Helmfile prepends
+`--install` to its upgrade command, so the callback adds `--install=false` to
+the final upgrade arguments and `--allow-unreleased=false` to the diff. A
+deleted release needs operator review. The separate companion adoption process
+owns first installs. The caller must still hold the writer lock and reobserve
+live state. Helm has no compare-and-swap flag for a release deleted and recreated
+by another actor between observation and upgrade.
+
+The callback discards both subprocess output streams, including failure output.
+It uses the exact trusted kubeconfig and context passed by the runtime. The
+Helm subprocesses have a fresh `HOME` and no inherited OCI settings, signing
+keys or proxy environment. A kubeconfig exec credential plugin must be present
+on the pinned process's trusted `PATH` and authenticate with that environment.
+Use a runtime-provided identity or reviewed absolute credential/configuration
+paths accessible only to the executor. The local fixture uses a temporary
+loopback identity. OKE authentication requires its own rehearsal.
+
+Run the [frozen transaction rehearsal](../scripts/demo/rehearsals/frozen-transaction/exercise.py)
+against a fresh loopback Kubernetes fixture using the verified tool launcher:
+
+```sh
+python3 scripts/demo/helmfile_tools.py run -- python3 \
+  scripts/demo/rehearsals/frozen-transaction/exercise.py \
+  --kubeconfig "$FIXTURE_KUBECONFIG" --context fixture
+```
+
+The fixture starts with an existing release and a packaged dependency whose
+repository is unreachable. It verifies unchanged revision and resources after
+guard rejection, a healthy no-op, a Secret-only change under suppressed diff
+output, an empty-diff failed release retry, the configured history limit and
+refusal to reinstall a deleted release.
+
 The [phase rehearsal](../scripts/demo/rehearsals/release-phases/exercise.py)
 uses two synthetic Helm releases on disposable Kubernetes. It checks a failed
 release with an empty diff, pending-state rejection before writes, zero new
@@ -138,10 +181,11 @@ before calling its post-renderer on first install. The bundle refuses first
 installs of charts that contain native CRDs. The supported first installs are
 namespace-scoped companion releases.
 
-The bundle library and synthetic rehearsals are available for integrating the
-read-only planner and the restricted executor. Production observation, the actual
-Helm transaction, artifact transport and key custody remain the responsibility of
-those integrations. The credential-free monitoring rehearsal sealed a chart and
+The bundle library, existing-release transaction callback and synthetic rehearsals
+are available for integrating the read-only planner and the restricted executor.
+Production authentication, live observation, stack health checks, artifact
+transport and key custody remain the responsibility of those integrations.
+The credential-free monitoring rehearsal sealed a chart and
 139 rendered objects including ten CRDs and three Secret objects. It reproduced
 the full render, compared the 129 templated objects and hooks in the real Helm
 post-renderer, and rejected a later revision drift in the local test executor.
