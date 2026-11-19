@@ -1,0 +1,30 @@
+{
+  "apiServer": "Kubernetes v1.36.0",
+  "helm": "v4.3.2+g8346aaa",
+  "finishedAt": "2026-11-19T13:38:05.039331+00:00",
+  "productionAccess": false,
+  "monitoringHookAccess": {
+    "created": 12,
+    "deleted": 12,
+    "denied": [
+      "escalation on existing named Roles",
+      "unrelated name",
+      "altered Job",
+      "altered ClusterRoleBinding",
+      "altered ClusterRole",
+      "altered ConfigMap",
+      "altered ServiceAccount",
+      "altered Role",
+      "altered RoleBinding",
+      "altered hook command",
+      "hook CA replacement",
+      "webhook field change",
+      "hook certificate creation",
+      "hook CRD schema/definition change",
+      "missing daily holder",
+      "no running request"
+    ],
+    "controlPlaneOnly": true
+  },
+  "passed": true
+}

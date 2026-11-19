@@ -121,6 +121,22 @@ class DeploymentTests(unittest.TestCase):
                 if not deleted:
                     self.assertEqual("independent-operator-update", state["otel-demo"])
 
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_locked_manual_update_preserves_checkpoint_annotations(self, run, component, snapshots):
+        state = {"metadata": {"annotations": {"jaegertracing.io/deployment-lock-holder": "manual/123/1"}},
+                 "data": self.desired}
+        run.return_value.stdout = json.dumps(state)
+        env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_STACK="oci",
+                   JAEGER_OTEL_DEMO_DEPLOY_SCOPE="monitoring", JAEGER_DEMO_LOCK_HELD="true")
+        self.assertEqual(0, deploy.reconcile(env))
+        component.assert_called_once()
+        snapshots.assert_not_called()
+        args = run.call_args.args[0]
+        self.assertEqual(["kubectl", "-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p"], args[:-1])
+        self.assertEqual({"data": {"oci-monitoring": self.desired["oci-monitoring"]}}, json.loads(args[-1]))
+
     def test_manual_routing_and_clean(self):
         for name, (stack, scope, _) in deploy.COMPONENTS.items():
             self.assertEqual([name], deploy.selected_components("workflow_dispatch", stack, scope, "upgrade", {}, self.desired))
@@ -295,10 +311,11 @@ class DeploymentTests(unittest.TestCase):
     def test_deploy_workflow_guards_the_restore_test(self):
         workflows = deploy.ROOT / ".github/workflows"
         workflow = (workflows / "ci-deploy-demo.yml").read_text()
-        job, *steps = workflow.split("\n    - name: ")
+        job, *steps = workflow.split("\n  request-daily:",1)[0].split("\n    - name: ")
         names = [step.split("\n", 1)[0] for step in steps]
         self.assertEqual(["Reconcile demo components", "Collect OpenSearch recovery diagnostics",
-                          "Remove disposable restore pod", "Send detailed Slack notification on failure"], names[-4:])
+                          "Remove disposable restore pod", "Release the shared deployment lock",
+                          "Send detailed Slack notification on failure"], names[-5:])
         self.assertNotIn("continue-on-error", workflow)
         limit = re.search(r"^    timeout-minutes: (\d+)$", job, re.MULTILINE)
         self.assertIsNotNone(limit, "the deploy job has no timeout-minutes")
@@ -306,7 +323,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertLess(int(recovery_limit[1]), int(limit[1]))
         self.assertLess(int(limit[1]), 360)
 
-        diagnostics, cleanup, slack = steps[-3:]
+        diagnostics, cleanup, release_lock, slack = steps[-4:]
+        self.assertIn("steps.writer-lock.outputs.held == 'true'", release_lock)
         self.assertIn("\n      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
         self.assertIn("\n      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && "
                       "steps.reconcile.outputs.recovery_started == 'true' && "

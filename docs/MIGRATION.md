@@ -3,7 +3,7 @@
 
 # Hosted-demo migration plan
 
-Updated November 18, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh. The dedicated scheduled identity has read-only cluster access. Its production write grant, schedule activation and first unattended run remain pending. See the [scheduled access and rehearsal plan](all-five-schedule-access.md).
+Updated November 19, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh and chose an in-cluster executor. The GitHub requester signals a named ConfigMap. Separately authenticated Kubernetes workloads prepare the reviewed inputs and execute Helm. The scheduled OCI identity currently has read-only cluster access. Installation, schedule activation and the first verified unattended run are open. Installation and activation require separate maintainer approvals. [Executor release and installation](in-cluster-executor.md) · [Permissions and rehearsal](daily-executor-permissions.md) · [Original access inventory](all-five-schedule-access.md)
 
 ## Ownership and fixed constraints
 

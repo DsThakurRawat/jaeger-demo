@@ -60,21 +60,36 @@ class WorkflowTests(unittest.TestCase):
         events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
         self.assertEqual(['schedule', 'workflow_dispatch'], re.findall(r'^  ([a-z_]+):', events, re.MULTILINE))
         self.assertIn("  schedule:\n    - cron: '0 13 * * *'\n", events)
-        job = source.split('\njobs:\n  deploy:\n', 1)[1]
-        condition = ' '.join(job.split('    if: >-\n', 1)[1].split('\n    environment:', 1)[0].split())
-        self.assertIn("    environment: ${{ github.event_name == 'schedule' && 'demo-scheduled' || 'demo-apply' }}", job)
-        self.assertIn('    concurrency:\n      group: jaeger-otel-demo-opensearch-recovery\n      cancel-in-progress: false', job)
-        self.assertNotIn('\nconcurrency:', source)
-        for event in ('schedule', 'workflow_dispatch', 'push', 'pull_request_target'):
-            for ref in ('refs/heads/main', 'refs/heads/topic', 'refs/tags/main'):
-                for switch in ('true', 'false', '', 'yes'):
-                    with self.subTest(event=event, ref=ref, switch=switch):
-                        expression = condition.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
-                        expression = expression.replace('vars.DEMO_SCHEDULE_ENABLED', repr(switch))
-                        expression = expression.replace('&&', 'and').replace('||', 'or')
-                        self.assertEqual(ref == 'refs/heads/main' and
-                                         (event == 'workflow_dispatch' or (event == 'schedule' and switch == 'true')),
-                                         eval(expression, {'__builtins__': {}}, {}))
+        manual, request = source.split('\n  request-daily:\n', 1)
+        self.assertIn("    environment: demo-apply\n", manual)
+        self.assertIn("    environment: demo-scheduled\n", request)
+        self.assertIn("scheduled_request.py request", request)
+        for dangerous in ("azure/setup-helm", "scripts/demo/deploy.py", "manual-acquire", "demo-apply"):
+            self.assertNotIn(dangerous, request)
+        self.assertIn("Send detailed Slack notification on failure", request)
+        self.assertIn("env: *demo-failure-alert", request)
+        for section in (manual, request):
+            self.assertIn('    concurrency:\n      group: jaeger-otel-demo-opensearch-recovery\n      cancel-in-progress: false', section)
+            condition = ' '.join(section.split('    if: >-\n', 1)[1].split('\n    environment:', 1)[0].split())
+            for event in ('schedule', 'workflow_dispatch', 'push', 'pull_request_target'):
+                for ref in ('refs/heads/main', 'refs/heads/topic', 'refs/tags/main'):
+                    for switch in ('true', 'false', '', 'yes'):
+                        with self.subTest(event=event, ref=ref, switch=switch):
+                            expression = condition.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
+                            expression = expression.replace('vars.DEMO_SCHEDULE_ENABLED', repr(switch))
+                            expression = expression.replace('&&', 'and').replace('||', 'or')
+                            intended = event == 'workflow_dispatch' if section == manual else event == 'schedule' and switch == 'true'
+                            self.assertEqual(ref == 'refs/heads/main' and intended,
+                                             eval(expression, {'__builtins__': {}}, {}))
+
+    def test_all_manual_writers_use_the_shared_lock(self):
+        for workflow, operation in [('ci-deploy-demo.yml','Reconcile demo components'),
+                                   ('ci-opensearch-recovery.yml','Create and verify OpenSearch recovery point'),
+                                   ('ci-opensearch-volume-expand.yml','Expand and verify the OpenSearch volume')]:
+            source = (WORKFLOWS / workflow).read_text()
+            self.assertLess(source.index('scheduled_request.py manual-acquire'),source.index('- name: '+operation))
+            self.assertLess(source.index('- name: '+operation),source.index('scheduled_request.py manual-release'))
+            self.assertIn("if: success() && steps.writer-lock.outputs.held == 'true'",source)
 
     def test_config_guard_accepts_only_matching_full_sha_or_no_override(self):
         script = step_script('Verify the reviewed configuration revision')

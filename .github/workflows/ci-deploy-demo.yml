@@ -65,9 +65,8 @@ jobs:
     name: Deploy Jaeger to OKE Cluster
     if: >-
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'schedule' && vars.DEMO_SCHEDULE_ENABLED == 'true'))
-    environment: ${{ github.event_name == 'schedule' && 'demo-scheduled' || 'demo-apply' }}
+      github.event_name == 'workflow_dispatch'
+    environment: demo-apply
     concurrency:
       group: jaeger-otel-demo-opensearch-recovery
       cancel-in-progress: false
@@ -148,8 +147,16 @@ jobs:
       with:
         version: v4.3.2
 
+    - name: Acquire the shared deployment lock
+      id: writer-lock
+      env:
+        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
+      run: python3 scripts/demo/scheduled_request.py manual-acquire
+
     - name: Reconcile demo components
       id: reconcile
+      env:
+        JAEGER_DEMO_LOCK_HELD: ${{ steps.writer-lock.outputs.held }}
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
@@ -176,10 +183,14 @@ jobs:
           --ignore-not-found=true --wait=false ||
           echo "::warning::Could not confirm removal of restore pod jaeger-os-verify-$OPENSEARCH_RECOVERY_ID; delete it manually if the recovery test started"
 
+    - name: Release the shared deployment lock
+      if: success() && steps.writer-lock.outputs.held == 'true'
+      run: python3 scripts/demo/scheduled_request.py manual-release
+
     - name: Send detailed Slack notification on failure
       if: failure()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
-      env:
+      env: &demo-failure-alert
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
         SLACK_CHANNEL: '#jaeger-operations'
         SLACK_COLOR: danger
@@ -195,3 +206,58 @@ jobs:
 
           <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Failed Run>
         SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
+
+  request-daily:
+    name: Request the reviewed daily demo update
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'schedule' && vars.DEMO_SCHEDULE_ENABLED == 'true'
+    environment: demo-scheduled
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: jaeger-otel-demo-opensearch-recovery
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+    - name: Checkout demo configuration
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+
+    - name: Read the original scheduled run time
+      id: schedule-time
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        created_at=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+        printf 'created_at=%s\n' "$created_at" >> "$GITHUB_OUTPUT"
+
+    - name: Configure the request-only OKE credential
+      uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
+      env: &daily-request-credential
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        SCHEDULE_RUN_CREATED_AT: ${{ steps.schedule-time.outputs.created_at }}
+        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
+      with:
+        cluster: ${{ secrets.OKE_CLUSTER_OCID }}
+        enablePrivateEndpoint: false
+
+    - name: Verify OCI CLI version
+      run: python scripts/demo/verify_oci_cli.py
+
+    - name: Signal the daily update and wait for verified completion
+      env: *daily-request-credential
+      run: python3 scripts/demo/scheduled_request.py request
+
+    - name: Send detailed Slack notification on failure
+      if: failure()
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env: *demo-failure-alert

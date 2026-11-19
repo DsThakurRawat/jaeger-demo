@@ -30,17 +30,7 @@ the reviewer-gated `demo-apply` environment.
 
 ## Deployment access awaiting approval
 
-The write-access decision covers the candidate and rollback release
-objects, the six Helm histories, live verification and the privileged monitoring
-hooks described below. Helm requires Secret GET/LIST in four namespaces. A
-credential with those permissions can read unrelated Secrets, including AI and
-TLS credentials. Someone who controls the Prometheus operator workload or its
-binding can act through its cluster-wide Secret permissions. For monitoring,
-use a protected executor accepting reviewed chart inputs or independently enforce
-permitted object contents, binding subjects and hook workloads. Review the
-specific proposed RBAC and enforcement before issuing this grant or enabling
-the job. Main-branch workflow changes can use the environment credential, so
-review those changes under repository protection.
+The GitHub scheduled credential signals one named request through the [protected daily update protocol](daily-update-request.md). The independent executor owns the application write access. Its review covers candidate and rollback objects, all six Helm histories, functional checks and privileged monitoring hooks. Helm Secret GET/LIST in the four release namespaces can expose unrelated AI and TLS credentials to that executor. The Prometheus operator has cluster-wide Secret access. Protect the executor code, bundle custody, infrastructure, effective RBAC and accepted operations independently before the write grant and schedule activation.
 
 Scheduled API permissions exclude snapshot operations, PVC or PV mutation, restore
 Pod/config creation and cleanup, and OCI backup, block-volume, compute and IAM
@@ -76,15 +66,7 @@ Kubernetes RBAC `resourceNames` can select existing objects for named actions. I
 
 ## Monitoring rollback target
 
-Helm runs the hooks stored in the rollback target. A separately authorized
-operator must first upgrade monitoring with the pinned Jobs and verify the release
-before recording it as a rollback target. Revisions 5 and 6 retain their tag-only
-pre-rollback CRD Job even after a pinned revision succeeds. A digest-only policy
-would reject rollback to either one.
-
-Before that first upgrade, rehearse a repair using the prior functional inputs
-and the pinned hooks in a new revision. A direct rollback to an older revision
-requires separate review of its stored hooks and how they would execute.
+Helm runs the hooks stored in the rollback target. On November 19 at 01:55 UTC the separately approved operator upgrade established `default/prometheus` revision 7 at configuration `ce3cf3a` as the first verified digest-pinned rollback target. All three hook Jobs succeeded and the ten CRDs, thirteen Service bindings and four monitoring Secret payloads were preserved. Revisions 5 and 6 retain their tag-only pre-rollback CRD Job and require an operator decision before use.
 
 Renovate tracks all three image digests under the seven-day release age and
 maintainer review rules. The chart defaults to BusyBox `latest`. At initial
@@ -105,8 +87,8 @@ test target and review the kubectl tag and digest together.
 ## Rehearsal and activation
 
 1. Compare the recorded six Helm revisions to live release and retained manifests. At this checkpoint the revisions were 25, 14, 14, 14, 11 and 6 for OCI Jaeger, OTel Jaeger, OpenSearch, Dashboards, OTel application and monitoring. An upgrade plus rollback could require 26/27, 15/16, 15/16, 15/16, 12/13 and 7/8 respectively. Pruning may delete older retained records. Two Jaeger upgrades use `--atomic`. The other four releases need explicit failure inspection and targeted rollback. A successful OpenSearch engine upgrade followed by a failed Dashboards upgrade needs component-level recovery. Helm rollback does not downgrade migrated storage or restore custom-resource data.
-2. Rehearse the proposed rights using isolated Kubernetes credentials and fixtures. Exercise the monitoring pre-upgrade and pre-rollback hook resources and chart-owned Secret handling, not only a Jaeger upgrade. Test a denied unrelated Secret mutation and unexpected privileged Job/RBAC/webhook spec. Verify the actual scheduled principal with nonpersistent server-side requests on OKE before activation. Keep recovery/operator access independent and remove broad RBAC before relaxing any admission guard.
+2. Rehearse the proposed rights using isolated Kubernetes credentials and fixtures. Exercise the monitoring pre-upgrade and pre-rollback hook resources and chart-owned Secret handling, not only a Jaeger upgrade. Test a denied unrelated Secret mutation and unexpected privileged Job/RBAC/webhook spec. Verify the actual requester, preparer, executor and recovery operator with their distinct permissions on OKE before activation. Keep recovery/operator access independent and remove broad RBAC before relaxing any admission guard.
 3. Verify sufficient headroom for the existing OpenSearch StatefulSet, preserve the live PVC binding, and compare the actual OpenSearch and Dashboards versions and a newly written trace after upgrade. Scheduling omits backups. An incompatible storage change can make old synthetic traces unavailable. If repair requires a destructive storage reset, pause the writers and seek approval for the exact affected resources. Historical trace preservation is available under the separately authorized [manual recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md).
 4. Before the first scheduled write, capture all six releases and supplemental state, check that all five components can run or give a clear reason for each skip, and verify prior/candidate/rollback scope. After the first run inspect each release and component fingerprint plus fresh write/read traces, finite metrics under observed traffic, public UI, TLS, Grafana and Dashboards. On failure drain new writers, preserve successful siblings and restore only the affected release and its fingerprint after inspection.
 
-The [Helm history rehearsal](../scripts/demo/rehearsals/helm-history/README.md) ran Helm 4.3.2 against a disposable Kubernetes API server for all six release identities. Each fixture pruned an old revision, failed an upgrade on an immutable ConfigMap, rolled back to a new deployed revision, and retained the ConfigMap's data and UID. Eleven negative checks covered the Secret admission rules and the writer's RBAC. The live applications and monitoring hooks still need a rehearsal of the proposed write access, including a check that the original storage binding survives the in-place upgrade. The production write grant, activation and first unattended run remain pending.
+The [Helm history rehearsal](../scripts/demo/rehearsals/helm-history/README.md) ran Helm 4.3.2 against a disposable Kubernetes API server for all six release identities. Each fixture pruned an old revision, failed an upgrade on an immutable ConfigMap, rolled back to a new deployed revision, and retained the ConfigMap's data and UID. Eleven negative checks covered the Secret admission rules and the writer's RBAC. The [protected monitoring rehearsal](../scripts/demo/rehearsals/monitoring-writer/README.md) exercised the pinned hook upgrade and rollback behind two operator-prepared, one-time requests. The restricted requester had no Helm Secret access. Production executor permissions, full-chart verification and storage binding continuity still require separate evidence. The production write grant, activation and first unattended run remain pending.

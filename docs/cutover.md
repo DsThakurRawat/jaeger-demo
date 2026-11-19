@@ -292,15 +292,11 @@ Manual runs continue to use `demo-apply`.
    repeats the version and trace checks afterward. Existing synthetic trace
    history can be lost. Any destructive reset needs its own approval.
 2. Review the [proposed access and chart inventory](all-five-schedule-access.md).
-   Prepare `demo-scheduled` in GitHub, restricted to main, with the approved
-   unattended principal and its six OCI connection settings. Confirm the job
-   cannot inherit other deployment credentials from repository or organization
-   secrets. Verify the five-component Kubernetes and OCI permissions, including
-   future Helm revisions, pruning and rollback in each release namespace. The
-   schedule must succeed with that principal. Keep the human reviewer on
-   `demo-apply` for manual jobs and maintenance.
-3. With explicit activation approval, enable the repository variable for the next
-   13:00 UTC event. To pause future scheduled jobs, set it to `false`. Inspect
+   Verify the main-only `demo-scheduled` environment and the four independently authenticated
+   request actors. Follow the [request and lock setup](daily-update-request.md). The requester
+   may signal the named request. The protected executor needs the rehearsed six-release
+   apply, rollback and verification access. Verify prep-only signing and executor-only decryption keys, enforce dry-run-only workload patching for the preparer, and confirm the requester has only its request role. Verify the durable lock across all manual writers and keep the human reviewer on `demo-apply`.
+3. With the signal off, verify receiver readiness and the real dated ready receipt from the preparer. With explicit activation approval, enable the preparer and the repository variable for the intended 13:00 UTC event. To pause future scheduled jobs, set it to `false`. Inspect
    and drain any queued or running writers before changing access or rolling back.
 
    ```bash

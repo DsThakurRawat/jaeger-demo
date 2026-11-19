@@ -129,8 +129,8 @@ payloads.
 
 ## Daily component updates
 
-The scheduled job resolves upstream Jaeger and HotROD snapshot tags independently
-and refreshes both Jaeger releases daily. Renovate proposes chart, image and
+The protected planner resolves upstream Jaeger and HotROD snapshot tags independently
+and freezes the exact images in the daily bundle. The GitHub job signals the [protected executor](daily-update-request.md) and waits for its verified result. Both Jaeger releases refresh daily. Renovate proposes chart, image and
 dependency changes for maintainer review, with a seven-day release-age policy
 and manual merges. The next daily reconciliation uses the reviewed configuration
 on main. Unchanged storage, monitoring and sample-application inputs retain their
@@ -157,11 +157,16 @@ updates may succeed in the same run. A failed component keeps its preceding
 fingerprint. Inspect each component outcome and its live Helm history before a
 retry, especially when OpenSearch upgraded before Dashboards failed.
 
+During commissioning, verify the prepared slot and receipt with the GitHub
+signal disabled. After activation, use the first actual scheduled run to accept
+the deployment. Record its run URL and receipt, reconcile the six releases
+and five component fingerprints, and verify fresh traces, public health, TLS
+and storage bindings. The scheduled failure notification includes the run ID in
+`#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
+
 ## Failure handling
 
-A failure leaves the schedule enabled. The next 13:00 UTC event retries eligible
-components, including changed components whose last attempt did not record a new
-fingerprint. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
+A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
 writers separately and let an active Helm transaction finish before rolling back.
 Preserve the failed run's diagnostics and compare actual release state with the
@@ -192,3 +197,5 @@ Verified manual adoption unlocks guarded automation. Final cutover acceptance
 requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
+
+The in-cluster runtime has its own image release, inactive installation manifest and activation procedure. The release receipt records the image digest separately from the daily configuration SHA and component versions. [Executor image release and installation](in-cluster-executor.md#release-and-installation)

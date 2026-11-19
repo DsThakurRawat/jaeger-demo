@@ -1,0 +1,9 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+**/.git
+**/.tools
+**/__pycache__
+**/*.pyc
+**/*_test.py
+scripts/demo/rehearsals
+examples/**/helm-charts
