@@ -10,6 +10,7 @@ from datetime import timedelta
 import json
 import os
 import re
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -165,7 +166,9 @@ def application_deadline():
         deadline.cancel()
 
 
-def poll(store, bundle, adapter, paths, now=protocol.utcnow, active=lambda: None):
+def poll(store, bundle, adapter, paths, now=protocol.utcnow, active=lambda: None, stopping=lambda: False):
+    if stopping():
+        return "draining"
     obj = store.read(protocol.REQUEST)
     if not obj:
         raise ReceiverError("The protected control record is missing")
@@ -232,6 +235,8 @@ def poll(store, bundle, adapter, paths, now=protocol.utcnow, active=lambda: None
                     decryption_key=paths.keys / "decryption-key.pem",
                 )
                 assert_locked()
+                if stopping():
+                    raise ReceiverError("Receiver is draining before application")
                 if (
                     adapter.apply(files, slot=stamp, configuration_sha=sha, assert_locked=assert_locked)
                     is not True
@@ -244,6 +249,8 @@ def poll(store, bundle, adapter, paths, now=protocol.utcnow, active=lambda: None
             raise ReceiverError("The daily application or verification failed") from None
         return True
 
+    if stopping():
+        return "draining"
     protocol.execute(store, slot, sha, receipt, apply, now=now, engine=ENGINE)
     return "succeeded"
 
@@ -264,12 +271,23 @@ def ready():
     return timedelta(0) <= age < limit
 
 
-def serve(store, bundle, adapter, paths, now=protocol.utcnow):
+def serve(store, bundle, adapter, paths, now=protocol.utcnow, shutdown=None):
     previous = None
-    while True:
+    stopping = shutdown.is_set if shutdown is not None else lambda: False
+    wait = shutdown.wait if shutdown is not None else time.sleep
+    while not stopping():
         try:
-            state = poll(store, bundle, adapter, paths, now=now, active=lambda: mark_ready("applying"))
-            mark_ready(state)
+            state = poll(
+                store,
+                bundle,
+                adapter,
+                paths,
+                now=now,
+                active=lambda: mark_ready("applying"),
+                stopping=stopping,
+            )
+            if not stopping():
+                mark_ready(state)
         except Exception as error:
             # Subprocess errors and bundle/Helm diagnostics can contain private input.
             state = "poll-error/" + type(error).__name__
@@ -277,7 +295,8 @@ def serve(store, bundle, adapter, paths, now=protocol.utcnow):
         if state != previous:
             print(json.dumps({"receiver": state, "at": protocol.format_utc(protocol.utcnow())}), flush=True)
         previous = state
-        time.sleep(POLL_SECONDS)
+        wait(POLL_SECONDS)
+    READINESS.unlink(missing_ok=True)
 
 
 def check_mounts(paths):
@@ -298,7 +317,10 @@ def main():
     op = parser.parse_args().operation
     if op == "ready":
         return 0 if ready() else 1
+    shutdown = None
     if op == "serve":
+        shutdown = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
         READINESS.unlink(missing_ok=True)
     import scheduled_adapter as adapter
     import scheduled_bundle as bundle
@@ -314,7 +336,7 @@ def main():
             print(json.dumps({"prepared": receipt}, sort_keys=True))
             return 0
         check_mounts(paths)
-        serve(store, bundle, adapter, paths)
+        serve(store, bundle, adapter, paths, shutdown=shutdown)
     return 0
 
 

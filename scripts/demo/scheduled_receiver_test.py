@@ -251,6 +251,42 @@ class ReceiverTests(unittest.TestCase):
             self.assertNotIn("synthetic-private-content", log.getvalue())
             self.assertIn("poll-error/RuntimeError", log.getvalue())
 
+    def test_sigterm_drains_before_claim_and_before_an_unstarted_mutation(self):
+        self.signal()
+        signal = receiver.threading.Event()
+
+        def late_receipt(*args, **kwargs):
+            signal.set()
+            return self.receipt
+
+        self.bundle.trusted_receipt.side_effect = late_receipt
+        self.assertEqual(
+            receiver.poll(
+                self.store, self.bundle, self.adapter, self.paths, self.now, stopping=signal.is_set
+            ),
+            "draining",
+        )
+        self.assertEqual(self.state(), "requested")
+        self.assertNotIn(protocol.HOLDER, self.store.read(protocol.CHECKPOINT)["metadata"]["annotations"])
+        self.bundle.trusted_receipt.side_effect = None
+        signal.clear()
+
+        def drain_during_load(*args, **kwargs):
+            signal.set()
+            return self.member
+
+        self.bundle.load.side_effect = drain_during_load
+        with self.assertRaises(receiver.ReceiverError):
+            receiver.poll(
+                self.store, self.bundle, self.adapter, self.paths, self.now, stopping=signal.is_set
+            )
+        self.adapter.apply.assert_not_called()
+        self.assertEqual(self.state(), "failed")
+        with patch.object(receiver, "READINESS", self.paths.outcomes / "ready"):
+            receiver.mark_ready("idle")
+            receiver.serve(self.store, self.bundle, self.adapter, self.paths, shutdown=signal)
+            self.assertFalse(receiver.ready())
+
     def test_incluster_config_references_rotating_token_and_restores_prior_kubeconfig(self):
         account = self.paths.keys
         (account / "namespace").write_text("other")
