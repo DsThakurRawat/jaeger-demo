@@ -1,0 +1,19 @@
+{
+  "cases": [
+    "an authentic preparer token cannot start the executor role",
+    "preparer restart reuses the signed dated receipt without another request write",
+    "separate projected service accounts authenticate and publish readiness",
+    "verified encrypted bundle and durable outcome precede GitHub success",
+    "restarted receiver observes completed slot without reapplying it",
+    "failed verification writes durable failure and preserves the claim",
+    "restarted receiver reports failed state for operator inspection",
+    "restart after success or failure never replays the application",
+    "shared writer lock remains held after application failure",
+    "abrupt process exit retains its running claim",
+    "replacement receiver preserves the interrupted evidence and never replays an ambiguous operation"
+  ],
+  "kubernetes": "v1.36.0",
+  "productionAccess": false,
+  "applicationAdapter": "synthetic fixed callback",
+  "privateCustody": "real signed and encrypted fixture bytes"
+}
