@@ -37,6 +37,8 @@ jobs:
       uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
       with:
         version: v4.3.2
+    - name: Verify the pinned Helmfile toolchain
+      run: make helmfile-tools
     - name: Install and verify constrained OCI CLI without credentials
       env:
         PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
