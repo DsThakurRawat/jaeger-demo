@@ -18,7 +18,7 @@ make them look newly contributed.
 
 ## Local checks
 
-Install Bash, Python 3, Git, jq, Helm, ShellCheck and actionlint. Keep production
+Install Bash, Python 3 with PyYAML, Git, jq, Helm, ShellCheck and actionlint. Keep production
 kubeconfig and cloud credentials out of the test environment. Obtain shunit2:
 
 ```bash
@@ -65,8 +65,8 @@ bumps already managed by automation.
 
 ## Production changes
 
-Tests and PRs require no production access. Keep production workflows main-only
-and manual-only until the [handover gates](docs/cutover.md) are met. Repository
+Tests and PRs require no production access. Keep production workflows main-only. Scheduled deployment requires the
+[activation and verification procedure](docs/cutover.md#review-scheduled-scope). Repository
 protection and DCO/Renovate app coverage must be verified, not inferred from files.
 
 The first access transition, script handover, Helmfile adoption and final

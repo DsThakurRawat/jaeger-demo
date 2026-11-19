@@ -37,6 +37,90 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(["otel-jaeger", "oci-jaeger"], deploy.selected_components(
             "schedule", "oci", "jaeger", "upgrade", self.desired, self.desired))
 
+    def test_schedule_reconciles_all_five_components_when_inputs_change(self):
+        self.assertEqual(list(deploy.COMPONENTS), deploy.selected_components(
+            "schedule", "oci", "jaeger", "upgrade", {}, self.desired))
+        for name in ("opensearch", "otel-demo", "oci-monitoring"):
+            previous = dict(self.desired, **{name: "old"})
+            self.assertEqual({name, "oci-jaeger", "otel-jaeger"}, set(deploy.selected_components(
+                "schedule", "oci", "jaeger", "upgrade", previous, self.desired)))
+
+    @patch("deploy.handover.read", return_value="default")
+    @patch("deploy.run")
+    def test_schedule_requires_existing_revision_state(self, run, read):
+        run.return_value.stdout = ""
+        with self.assertRaisesRegex(ValueError, "existing deployment revision"):
+            deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule"))
+        self.assertEqual(1, run.call_count)
+
+    @patch("deploy.handover.read")
+    @patch("deploy.run")
+    def test_schedule_rejects_invalid_context_clean_and_recovery_policy_before_mutation(self, run, read):
+        for overrides, namespace in (({"HELM_DRIVER": "configmap"}, ""), ({"HELM_NAMESPACE": "test"}, ""),
+                                     ({"HELM_KUBECONTEXT": "another-cluster"}, ""),
+                                     ({}, "other"), ({"JAEGER_DEMO_DEPLOY_MODE": "clean"}, ""),
+                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "waive"}, ""),
+                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "invalid"}, "")):
+            with self.subTest(overrides=overrides, namespace=namespace):
+                read.return_value = namespace
+                with self.assertRaises(ValueError):
+                    deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule", **overrides))
+                run.assert_not_called()
+
+    @patch("deploy.run")
+    def test_schedule_checks_all_existing_releases_before_mutating_component(self, run):
+        run.return_value.stdout = json.dumps({"info": {"status": "deployed"}})
+        for component in deploy.COMPONENTS:
+            deploy.check_scheduled_releases(component)
+        self.assertEqual([("opensearch", "opensearch"), ("opensearch", "opensearch-dashboards"),
+                          ("jaeger", "jaeger"), ("otel-demo", "otel-demo"),
+                          ("default", "jaeger"), ("default", "prometheus")],
+                         [(args[4], args[2]) for call in run.call_args_list for args in [call.args[0]]])
+
+    @patch("deploy.run")
+    def test_pending_or_missing_storage_stops_before_scheduled_upgrade(self, run):
+        for error in (subprocess.CalledProcessError(1, "helm status"), None):
+            with self.subTest(error=error):
+                run.reset_mock()
+                healthy = subprocess.CompletedProcess([], 0, stdout='{"info":{"status":"deployed"}}')
+                pending = subprocess.CompletedProcess([], 0, stdout='{"info":{"status":"pending-upgrade"}}')
+                run.side_effect = [healthy, error or pending]
+                with self.assertRaises((deploy.ScheduledReleaseError, subprocess.CalledProcessError)):
+                    deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="schedule"))
+                self.assertEqual([["helm", "status"]] * 2, [c.args[0][:2] for c in run.call_args_list])
+
+    @patch("deploy.run")
+    def test_failed_monitoring_can_retry_in_place_but_failed_jaeger_cannot(self, run):
+        run.return_value.stdout = '{"info":{"status":"failed"}}'
+        deploy.check_scheduled_releases("oci-monitoring")
+        for name in ("oci-jaeger", "otel-jaeger"):
+            with self.subTest(component=name), self.assertRaises(deploy.ScheduledReleaseError):
+                deploy.check_scheduled_releases(name)
+
+    @patch("deploy.handover.read", return_value="default")
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_schedule_patches_only_its_key_and_does_not_recreate_deleted_state(self, run, component, resolve, read):
+        for deleted in (False, True):
+            state = self.desired.copy()
+            def command(args, **kwargs):
+                if args[3] == "get":
+                    return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": state}))
+                self.assertEqual(["kubectl", "-n", "default", "patch", "configmap", deploy.STATE,
+                                  "--type=merge", "-p"], args[:-1])
+                patch = json.loads(args[-1])
+                self.assertEqual({"data": {component.call_args.args[0]: self.desired[component.call_args.args[0]]}}, patch)
+                if deleted:
+                    raise subprocess.CalledProcessError(1, args)
+                state["otel-demo"] = "independent-operator-update"
+                state.update(patch["data"])
+            run.side_effect = command
+            with self.subTest(deleted=deleted):
+                self.assertEqual(int(deleted), deploy.reconcile(dict(self.env, GITHUB_EVENT_NAME="schedule")))
+                if not deleted:
+                    self.assertEqual("independent-operator-update", state["otel-demo"])
+
     def test_manual_routing_and_clean(self):
         for name, (stack, scope, _) in deploy.COMPONENTS.items():
             self.assertEqual([name], deploy.selected_components("workflow_dispatch", stack, scope, "upgrade", {}, self.desired))
@@ -56,23 +140,106 @@ class DeploymentTests(unittest.TestCase):
             values.write_text(values.read_text() + "\n# revised application\n")
             self.assertNotEqual(self.desired["otel-demo"], deploy.fingerprint("otel-demo", root))
 
+    def test_opensearch_fingerprint_tracks_deployed_inputs_independently_of_manual_recovery(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copytree(deploy.ROOT / "examples", root / "examples")
+            shutil.copytree(deploy.ROOT / "scripts/demo", root / "scripts/demo")
+            stack = root / "examples/otel-demo"
+            script = stack / "deploy-all.sh"
+            edits = [(stack / name, None, False) for name in (
+                "opensearch-recovery.sh", "opensearch-volume-snapshot-class.yaml")]
+            edits.extend((path, None, True) for path in (
+                root / "scripts/demo/recovery_policy.py", stack / "opensearch-values.yaml",
+                stack / "opensearch-dashboard-values.yaml"))
+            edits.extend((script, pin, True) for pin in deploy.CHART_PINS["opensearch"])
+            for path, pin, should_select in edits:
+                with self.subTest(path=path.name, pin=pin):
+                    original = path.read_text()
+                    updated = (re.sub(rf'^{pin}="[^"]+"', f'{pin}="99.99.99"', original, flags=re.MULTILINE)
+                               if pin else original + "\n# revised input\n")
+                    self.assertNotEqual(original, updated)
+                    path.write_text(updated)
+                    try:
+                        desired = {name: deploy.fingerprint(name, root) for name in deploy.COMPONENTS}
+                    finally:
+                        path.write_text(original)
+                    changed = {name for name in desired if desired[name] != self.desired[name]}
+                    self.assertEqual({"opensearch"} if should_select else set(), changed)
+                    daily = deploy.selected_components("schedule", "oci", "jaeger", "upgrade", self.desired, desired)
+                    self.assertEqual({"oci-jaeger", "otel-jaeger"} | changed, set(daily))
+                    manual = deploy.selected_components("workflow_dispatch", "otel", "opensearch", "upgrade", self.desired, desired)
+                    self.assertEqual(["opensearch"], manual)
+                    self.assertEqual(changed, set(deploy.selected_components("push", "oci", "jaeger", "upgrade",
+                                                                            self.desired, desired)))
+
     @patch("deploy.run")
-    def test_recovery_precedes_upgrade_and_fresh_trace(self, run):
-        deploy.deploy_component("opensearch", self.env)
+    def test_schedule_needs_a_unique_persistent_claim_mounted_by_the_database(self, run):
+        for volumes in ([], [{"name": "sidecar", "persistentVolumeClaim": {"claimName": "wrong"}}],
+                        [{"name": "data", "emptyDir": {}}]):
+            with self.subTest(volumes=volumes):
+                run.return_value.stdout = json.dumps({"spec": {"containers": [{"name": "opensearch",
+                    "volumeMounts": [{"name": "data", "mountPath": "/usr/share/opensearch/data"}]}], "volumes": volumes}})
+                with self.assertRaisesRegex(deploy.ScheduledReleaseError, "existing OpenSearch data PVC"):
+                    deploy.opensearch_data_binding()
+
+    @patch("deploy.run")
+    def test_scheduled_opensearch_preserves_bound_data_and_verifies_trace_without_recovery(self, run):
+        pod = {"spec": {"containers": [{"name": "opensearch", "volumeMounts": [
+            {"name": "data", "mountPath": "/usr/share/opensearch/data"}]}],
+            "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "source"}}]}}
+        claim = {"metadata": {"uid": "existing"}, "spec": {"volumeName": "live"}, "status": {"phase": "Bound"}}
+        changed = dict(claim, metadata={"uid": "replacement"})
+        cases = {"success": [claim, claim], "rebound": [claim, changed], "different PV": [
+            claim, dict(claim, spec={"volumeName": "other"})], "pending": [dict(claim, status={"phase": "Pending"})],
+            "terminating": [dict(claim, metadata={"uid": "existing", "deletionTimestamp": "now"})]}
+        for case, claims in cases.items():
+            with self.subTest(case=case), tempfile.NamedTemporaryFile() as output:
+                calls = []
+                observations = iter(claims)
+                def command(args, **kwargs):
+                    calls.append(args)
+                    if args[:2] == ["helm", "status"]:
+                        data = {"info": {"status": "deployed"}}
+                    elif args[:5] == ["kubectl", "-n", "opensearch", "get", "pod"]:
+                        data = pod
+                    elif args == ["kubectl", "-n", "opensearch", "get", "pvc", "source", "-o", "json"]:
+                        data = next(observations)
+                    else:
+                        self.assertIn(Path(args[1]).name, ("deploy-all.sh", "verify_trace.py"))
+                        data = {}
+                    return subprocess.CompletedProcess(args, 0, stdout=json.dumps(data))
+                run.side_effect = command
+                env = dict(self.env, GITHUB_EVENT_NAME="schedule", GITHUB_OUTPUT=output.name)
+                if case == "success":
+                    deploy.deploy_component("opensearch", env)
+                    self.assertEqual("verify_trace.py", Path(calls[-1][1]).name)
+                else:
+                    with self.assertRaises(deploy.ScheduledReleaseError):
+                        deploy.deploy_component("opensearch", env)
+                    self.assertFalse(any(Path(args[1]).name == "verify_trace.py" for args in calls))
+                self.assertEqual("", Path(output.name).read_text())
+                self.assertEqual(case in ("success", "rebound", "different PV"),
+                                 any(Path(args[1]).name == "deploy-all.sh" for args in calls))
+
+    @patch("deploy.run")
+    def test_manual_default_recovery_precedes_upgrade_and_fresh_trace(self, run):
+        deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
         self.assertEqual("backup-test", run.call_args_list[0].args[0][-1])
         self.assertTrue(run.call_args_list[1].args[0][1].endswith("deploy-all.sh"))
         self.assertTrue(run.call_args_list[2].args[0][1].endswith("verify_trace.py"))
         self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
     @patch("deploy.run", side_effect=subprocess.CalledProcessError(1, "recovery"))
-    def test_recovery_failure_prevents_helm_upgrade(self, run):
+    def test_manual_recovery_failure_prevents_helm_upgrade(self, run):
         with self.assertRaises(subprocess.CalledProcessError):
-            deploy.deploy_component("opensearch", self.env)
+            deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
         self.assertEqual(1, run.call_count)
 
     @patch("deploy.run")
     def test_explicit_manual_waiver_skips_only_backup(self, run):
-        deploy.deploy_component("opensearch", dict(self.env, JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY="waive"))
+        deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch",
+                                                  JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY="waive"))
         self.assertEqual(2, run.call_count)
 
     @patch("deploy.run")
@@ -140,8 +307,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertLess(int(limit[1]), 360)
 
         diagnostics, cleanup, slack = steps[-3:]
-        self.assertIn("\n      if: failure() && steps.configure-oke.outcome == 'success'\n", diagnostics)
-        self.assertIn("\n      if: always() && steps.configure-oke.outcome == 'success' && "
+        self.assertIn("\n      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
+        self.assertIn("\n      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && "
                       "steps.reconcile.outputs.recovery_started == 'true' && "
                       "(steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || "
                       "steps.reconcile.outcome == 'cancelled')\n", cleanup)
@@ -267,7 +434,7 @@ class DeploymentTests(unittest.TestCase):
                                                   ("otel-jaeger", "upgrade", "required", False)):
             with self.subTest(component=component, mode=mode, policy=policy), tempfile.NamedTemporaryFile() as output:
                 run.reset_mock()
-                env = dict(self.env, JAEGER_DEMO_DEPLOY_MODE=mode,
+                env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_DEPLOY_MODE=mode,
                            JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=policy, GITHUB_OUTPUT=output.name)
                 def command(args, **kwargs):
                     if args[-1] == "backup-test":
