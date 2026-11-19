@@ -80,3 +80,12 @@ jobs:
         python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
           --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/helm-result.json" \
           --frozen-transaction --monitoring-lookup "$MONITORING_CHART"
+    - name: Check native per-slot authorization, both Helm apply modes and rollback
+      env:
+        GOTOOLCHAIN: go1.27.4
+        CGO_ENABLED: 0
+      run: |
+        mkdir -p "$RUNNER_TEMP/preview-bin"
+        (cd ops/executor/preview && go mod verify && go test -mod=readonly ./... && go build -mod=readonly -o "$RUNNER_TEMP/preview-bin/jaeger-helm-preview" .)
+        PATH="$RUNNER_TEMP/preview-bin:$PATH" python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
+          --assets "$RUNNER_TEMP/controller-tools/envtest" --receipt "$RUNNER_TEMP/typed-admission.json" --typed-approval-rehearsal

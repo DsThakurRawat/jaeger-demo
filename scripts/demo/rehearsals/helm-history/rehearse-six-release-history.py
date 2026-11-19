@@ -23,6 +23,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -72,6 +73,8 @@ def main():
     parser.add_argument("--monitoring-lookup", type=Path, help="Verify full chart dry-run and real Grafana Secret lookup")
     parser.add_argument("--monitoring-hook-access", type=Path, help="Verify RBAC/admission using the twelve pinned monitoring hooks")
     parser.add_argument("--jaeger-patch-methods", type=Path, help="Audit real Jaeger chart SSA/CSA upgrade patch permissions")
+    parser.add_argument("--typed-approval-rehearsal", action="store_true",
+                        help="Use a fresh API exclusively for the per-slot workload admission rehearsal")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -354,6 +357,18 @@ def main():
                 time.sleep(0.4)
             else:
                 raise RuntimeError("Local API timeout: " + (root / "apiserver.log").read_text()[-1500:])
+            if args.typed_approval_rehearsal:
+                if any((args.storage_charts, args.monitoring_lookup, args.monitoring_hook_access,
+                        args.frozen_transaction, args.jaeger_patch_methods)):
+                    raise ValueError("The admission parameter fixture requires its own empty API")
+                probe = Path(__file__).resolve().parents[4] / "ops/executor/rehearsals/approvals.py"
+                result = execute([sys.executable, probe, "--kubeconfig", cfg, "--context", "fixture"], timeout=480)
+                evidence = json.loads(result.stdout)
+                assert evidence["exactForwardAndRollback"] and evidence["realHelmSSAAndCSA"]
+                with receipt.open("x") as file:
+                    json.dump({"productionAccess": False, "typedApprovals": evidence, "passed": True}, file, indent=2)
+                print("PASS: two native identities and five per-slot approval partitions")
+                return
             for ns in ("jaeger", "opensearch", "otel-demo"):
                 kube(["create", "namespace", ns])
             api_group = "rbac.authorization.k8s.io"

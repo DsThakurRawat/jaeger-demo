@@ -99,7 +99,7 @@ manifest for preparing a new upgrade. A failure that needs a different
 admitted rollback state returns to operator recovery under the existing
 verified-history procedure.
 
-The disposable loopback rehearsal is in
+The Linux pull-request job runs `rehearse-six-release-history.py --typed-approval-rehearsal` with the pinned offline preview helper and a new local API. The standalone disposable loopback rehearsal is in
 `ops/executor/rehearsals/approvals.py`. Supply a fresh Kubernetes API server
 with RBAC and ValidatingAdmissionPolicy enabled, a localhost kubeconfig context
 named `fixture`, Helm 4.3.2 and the locally built `jaeger-helm-preview` on
