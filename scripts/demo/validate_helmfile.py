@@ -23,7 +23,7 @@ class ManifestLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
 ManifestLoader.add_constructor("tag:yaml.org,2002:value", ManifestLoader.construct_scalar)
 
 
-def schema_node(node, custom=False, structural=True):
+def schema_node(node, custom=False, structural=True, metadata_ref=None):
     """Convert OpenAPI schema nodes to draft-4, keeping arbitrary user data opaque."""
     if custom:
         supported = {"additionalProperties", "allOf", "anyOf", "default", "description", "enum", "example",
@@ -41,23 +41,31 @@ def schema_node(node, custom=False, structural=True):
     if node.get("nullable") and "type" in out:
         kinds = out["type"] if isinstance(out["type"], list) else [out["type"]]
         out["type"] = [*kinds, "null"]
-    if "properties" in node:
+    embedded = custom and structural and node.get("x-kubernetes-embedded-resource")
+    if "properties" in node or embedded:
         props = {}
-        for name, prop in node["properties"].items():
-            value = schema_node(prop, custom, structural)
+        for name, prop in node.get("properties", {}).items():
+            # Embedded metadata is governed by ObjectMeta and any declared validation rules.
+            value = schema_node(prop, custom, structural and not (embedded and name == "metadata"), metadata_ref)
             # Kubernetes native typed decoding treats null on optional fields as omitted.
             if not custom and name not in node.get("required", []):
                 value = {"anyOf": [value, {"type": "null"}]}
             props[name] = value
+        if embedded:
+            props.setdefault("apiVersion", {"type": "string"})
+            props.setdefault("kind", {"type": "string"})
+            meta = {"$ref": metadata_ref} if metadata_ref else {"type": "object"}
+            props["metadata"] = {"allOf": [meta, props["metadata"]]} if "metadata" in props else meta
         out["properties"] = props
-        if structural and not node.get("x-kubernetes-preserve-unknown-fields"):
-            out.setdefault("additionalProperties", False)
+    if (structural and not node.get("x-kubernetes-preserve-unknown-fields") and
+            ("properties" in node or custom and node.get("type") == "object")):
+        out.setdefault("additionalProperties", False)
     for keyword in ("items", "additionalProperties", "not"):
         if isinstance(node.get(keyword), dict):
-            out[keyword] = schema_node(node[keyword], custom, structural and keyword != "not")
+            out[keyword] = schema_node(node[keyword], custom, structural and keyword != "not", metadata_ref)
     for keyword in ("oneOf", "allOf", "anyOf"):
         if keyword in node:
-            out[keyword] = [schema_node(item, custom, structural=False) for item in node[keyword]]
+            out[keyword] = [schema_node(item, custom, structural=False, metadata_ref=metadata_ref) for item in node[keyword]]
     return out
 
 
@@ -97,12 +105,13 @@ def prepare(openapi, manifests, folder):
                     identity = gvk(spec["group"] + "/" + version["name"], spec["names"]["kind"])
                     if identity in schemas:
                         raise ValueError(f"Duplicate served schema: {identity}")
-                    schema = schema_node(version["schema"]["openAPIV3Schema"], custom=True)
+                    meta_ref = f"{shared.as_uri()}#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+                    schema = schema_node(version["schema"]["openAPIV3Schema"], custom=True, metadata_ref=meta_ref)
                     # A structural CRD schema may omit these Kubernetes-managed envelope fields.
                     props = schema.setdefault("properties", {})
                     props.update(apiVersion={"enum": [spec["group"] + "/" + version["name"]]},
                                  kind={"enum": [identity[2]]},
-                                 metadata={"$ref": f"{shared.as_uri()}#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"})
+                                 metadata={"$ref": meta_ref})
                     schemas[identity] = schema
     if not requested:
         raise ValueError("No resources in manifest input")

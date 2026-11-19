@@ -75,6 +75,38 @@ spec:
                 self.assertFalse(converted["additionalProperties"])
                 self.assertEqual(converted[keyword], constraint)
 
+    def test_empty_structural_object_prunes_keys_but_explicit_maps_keep_them(self):
+        empty = {"type": "object"}
+        self.assertIs(schema_node(empty, custom=True).get("additionalProperties"), False)
+        preserved = {"type": "object", "x-kubernetes-preserve-unknown-fields": True,
+                     "properties": {"closed": empty}}
+        converted = schema_node(preserved, custom=True)
+        self.assertNotIn("additionalProperties", converted)
+        self.assertIs(converted["properties"]["closed"]["additionalProperties"], False)
+        for declaration in (True, False, {}, {"type": "string"}):
+            explicit = {"type": "object", "additionalProperties": declaration}
+            self.assertEqual(schema_node(explicit, custom=True), explicit)
+        self.assertEqual(schema_node(empty), empty)
+        for keyword in ("allOf", "anyOf", "oneOf", "not"):
+            fragment = empty if keyword == "not" else [empty]
+            converted = schema_node({"type": "object", keyword: fragment}, custom=True)
+            self.assertEqual(converted[keyword], fragment)
+
+    def test_embedded_object_retains_kubernetes_envelope_with_or_without_properties(self):
+        for fields in ({}, {"properties": {"spec": {"type": "object"}}}):
+            obj = {"type": "object", "x-kubernetes-embedded-resource": True, **fields}
+            self.manifest.write_text("apiVersion: example.com/v1\nkind: Alarm\n---\n" +
+                                     self.crd.split("          spec:", 1)[0] + "          embedded: " + json.dumps(obj) + "\n")
+            prepare(self.spec, [self.manifest], self.root)
+            schema = json.loads((self.root / "example.com/v1/alarm.json").read_text())["properties"]["embedded"]
+            self.assertIs(schema.get("additionalProperties"), False)
+            self.assertTrue({"apiVersion", "kind", "metadata"} <= schema["properties"].keys())
+            self.assertIn("ObjectMeta", schema["properties"]["metadata"]["$ref"])
+        meta = {"type": "object", "properties": {"name": {"type": "string", "maxLength": 20}}}
+        embedded = {"type": "object", "x-kubernetes-embedded-resource": True, "properties": {"metadata": meta}}
+        schema = schema_node(embedded, custom=True, metadata_ref="#/definitions/ObjectMeta")
+        self.assertEqual(schema["properties"]["metadata"], {"allOf": [{"$ref": "#/definitions/ObjectMeta"}, meta]})
+
     def test_reject_duplicate_or_external_custom_schema(self):
         self.manifest.write_text(self.crd + "---\n" + self.crd)
         with self.assertRaisesRegex(ValueError, "Duplicate served schema"):
