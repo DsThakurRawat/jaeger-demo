@@ -1,7 +1,7 @@
 {
   "apiServer": "Kubernetes v1.36.0",
   "helm": "v4.3.2+g8346aaa",
-  "finishedAt": "2026-11-19T13:25:17.185954+00:00",
+  "finishedAt": "2026-11-19T13:38:05.039331+00:00",
   "productionAccess": false,
   "monitoringHookAccess": {
     "created": 12,
@@ -16,7 +16,9 @@
       "altered ServiceAccount",
       "altered Role",
       "altered RoleBinding",
-      "hook CA or webhook field change",
+      "altered hook command",
+      "hook CA replacement",
+      "webhook field change",
       "hook certificate creation",
       "hook CRD schema/definition change",
       "missing daily holder",

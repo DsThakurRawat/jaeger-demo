@@ -72,6 +72,12 @@ def exercise(archive, kubectl, cfg, kube):
         if not rejected.returncode or "Hook differs" not in rejected.stderr:
             raise ValueError(f"Expected content policy denial for altered {kind}: {rejected.stderr[:400]}")
         negatives.append("altered " + kind)
+    changed_command = deepcopy(next(o for o in definitions if o["kind"] == "Job"))
+    changed_command["spec"]["template"]["spec"]["containers"][0]["command"] = ["/bin/false"]
+    blocked_command = trial(changed_command)
+    if not blocked_command.returncode or "Hook differs" not in blocked_command.stderr:
+        raise ValueError("Altered hook command was not denied")
+    negatives.append("altered hook command")
     for obj in definitions:
         got = trial(obj, dry=False)
         if got.returncode:
@@ -90,6 +96,11 @@ def exercise(archive, kubectl, cfg, kube):
     hook_patch([{"op":"replace","path":"/webhooks/0/failurePolicy","value":"Ignore"}], allowed=True)
     changed_policy = [{"op":"replace","path":"/webhooks/0/failurePolicy","value":"Fail"}]
     hook_patch(changed_policy)
+    import base64
+    config = json.loads(Path(cfg).read_bytes())
+    trust = config["clusters"][0]["cluster"]
+    ca = trust.get("certificate-authority-data") or base64.b64encode(Path(trust["certificate-authority"]).read_bytes()).decode()
+    hook_patch([{"op":"add","path":"/webhooks/0/clientConfig/caBundle","value":ca}])
     bad = kube([*account_args, "-n", "default", "create", "secret", "generic", "unreviewed", "--from-literal=x=fixture",
                 "--dry-run=server"], check=False)
     if not bad.returncode or "must preserve" not in bad.stderr:
@@ -104,7 +115,7 @@ def exercise(archive, kubectl, cfg, kube):
                       '{"spec":{"names":{"shortNames":["unexpected"]}}}'], check=False)
     if not wrong_crd.returncode or "must preserve" not in wrong_crd.stderr:
         raise ValueError("Changed CRD spec was not denied: " + wrong_crd.stderr[:300])
-    negatives.extend(["hook CA or webhook field change", "hook certificate creation", "hook CRD schema/definition change"])
+    negatives.extend(["hook CA replacement","webhook field change", "hook certificate creation", "hook CRD schema/definition change"])
     kube(["-n", "default", "annotate", "configmap", checkpoint["metadata"]["name"], "jaegertracing.io/deployment-lock-holder-"])
     hook_patch(changed_policy, allowed=True)
     locked = trial(definitions[0])
