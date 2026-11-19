@@ -4,6 +4,9 @@
 """Seal, verify and consume a frozen private Helmfile plan without network resolution."""
 
 import argparse
+import base64
+import binascii
+import bz2
 import contextlib
 import gzip
 import hashlib
@@ -243,7 +246,12 @@ def check_chart(data, expected):
     # The budget includes all layers and PAX headers before tarfile processes them.
     remaining = MAX_PLAN
     count = 0
-    def inspect(compressed, depth=0):
+    static = {}
+    def chart_root(path):
+        # Helm loads dependencies only below the reserved charts/ directory of a chart.
+        return len(path.parts) % 2 == 1 and all(part == "charts" for part in path.parts[1::2])
+
+    def inspect(compressed, depth=0, prefix=PurePosixPath()):
         nonlocal remaining, count
         require(depth < 8, "Chart dependency nesting exceeds limit")
         with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
@@ -253,6 +261,7 @@ def check_chart(data, expected):
         names = set()
         charts = {}
         packages = {}
+        potential_crds = {}
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
             for item in archive:
                 path = PurePosixPath(item.name)
@@ -261,12 +270,20 @@ def check_chart(data, expected):
                         ".." not in path.parts and "\\" not in item.name and path not in names and
                         (item.isfile() or item.isdir()), "Chart contains an unsafe or duplicate member")
                 names.add(path)
-                if item.isfile() and path.name == "Chart.yaml":
+                if item.isfile() and path.name == "Chart.yaml" and chart_root(path.parent):
                     require(item.size < 262144, "Invalid chart metadata member")
                     charts[path.parent] = yaml.safe_load(archive.extractfile(item))
-                if item.isfile() and path.parent.name == "charts" and path.suffix == ".tgz":
-                    dep = inspect(archive.extractfile(item).read(), depth + 1)
+                if (item.isfile() and path.parent.name == "charts" and path.suffix == ".tgz"
+                        and chart_root(path.parent.parent)):
+                    dep = inspect(archive.extractfile(item).read(), depth + 1, prefix / path.parent)
                     packages.setdefault(path.parent.parent, set()).add(dep["name"])
+                if item.isfile() and "crds" in path.parts and path.suffix.lower() in (".yaml", ".yml", ".json"):
+                    potential_crds[path] = archive.extractfile(item).read()
+        for path, payload in potential_crds.items():
+            if any(r / "crds" in path.parents for r in charts):
+                source = str(prefix / path)
+                require(source not in static, "Duplicate static chart CRD source")
+                static[source] = crd_definitions(payload)
         roots = {p.parts[0] for p in names}
         require(len(roots) == 1, "Chart must have one root")
         root = PurePosixPath(next(iter(roots)))
@@ -283,6 +300,7 @@ def check_chart(data, expected):
     meta = inspect(data)
     require(meta["name"] == expected["name"] and str(meta["version"]) == expected["version"],
             "Chart name or version mismatch")
+    return static
 
 
 def check_live(live, rows):
@@ -329,6 +347,104 @@ class ManifestLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
 
 
 ManifestLoader.add_constructor("tag:yaml.org,2002:value", ManifestLoader.construct_scalar)
+
+
+def crd_definitions(data):
+    result = {}
+    for obj in yaml.load_all(data, Loader=ManifestLoader):
+        if obj is None:
+            continue
+        meta = obj["metadata"]
+        require(obj["apiVersion"] == "apiextensions.k8s.io/v1" and obj["kind"] == "CustomResourceDefinition"
+                and not meta.get("namespace") and meta["name"] not in result, "Invalid or duplicate static CRD")
+        result[meta["name"]] = canonical(obj)
+    require(result, "Empty static CRD source")
+    return result
+
+
+SOURCE_HEADER = re.compile(rb"^---[ \t]*\r?\n# Source: ([^\r\n]+)\r?\n", re.MULTILINE)
+
+
+def verify_crd_hook(ordinary, definitions):
+    name = "prometheus-crds-upgrade"
+    configs = [o for o in ordinary if o["kind"] == "ConfigMap" and "crds.bz2" in (o.get("binaryData") or {})]
+    jobs = [o for o in ordinary if o["kind"] == "Job" and o["metadata"]["name"] == name]
+    if not definitions and not configs and not jobs:
+        return
+    require(len(configs) == len(jobs) == 1 and configs[0]["metadata"]["name"] == name,
+            "Expected one monitoring CRD hook ConfigMap and Job")
+    for obj in (configs[0], jobs[0]):
+        metadata = obj["metadata"]
+        events = metadata.get("annotations", {}).get("helm.sh/hook", "").split(",")
+        require(metadata.get("namespace") == "default" and {"pre-upgrade", "pre-rollback"}.issubset(events),
+                "Unexpected monitoring CRD hook scope or events")
+    pod = jobs[0]["spec"]["template"]["spec"]
+    require(len(pod["initContainers"]) == len(pod["containers"]) == 1, "Unexpected CRD hook container layout")
+    unpack, apply = pod["initContainers"][0], pod["containers"][0]
+    require(unpack["command"] == ["sh"] and unpack["args"] == ["-c", "bzcat /crds/crds.bz2 > /tmp/crds.yaml"],
+            "Unexpected CRD hook unpack command")
+    require(apply["command"] == ["kubectl"] and apply["args"] in (["apply", "--server-side", "--filename", "/tmp/crds.yaml"],
+            ["apply", "--server-side", "--force-conflicts", "--filename", "/tmp/crds.yaml"]),
+            "Unexpected CRD hook apply command")
+    def mount(container, path):
+        matches = [m for m in container["volumeMounts"] if m["mountPath"].rstrip("/") == path]
+        require(len(matches) == 1 and not ({"subPath", "subPathExpr"} & matches[0].keys()), "Unexpected CRD hook mount")
+        return matches[0]["name"]
+    volumes = {v["name"]: v for v in pod["volumes"]}
+    require(len(volumes) == len(pod["volumes"]) == len(unpack["volumeMounts"]) == 2 and len(apply["volumeMounts"]) == 1,
+            "Unexpected CRD hook volumes or shadowed file mount")
+    source = volumes[mount(unpack, "/crds")]["configMap"]
+    dest = mount(unpack, "/tmp")
+    require(source["name"] == name and "items" not in source and dest == mount(apply, "/tmp") and
+            "emptyDir" in volumes[dest], "CRD hook Job does not apply the verified ConfigMap payload")
+    decoder = bz2.BZ2Decompressor()
+    try:
+        compressed = base64.b64decode(configs[0]["binaryData"]["crds.bz2"], validate=True)
+        body = decoder.decompress(compressed, MAX_MEMBER + 1)
+    except (binascii.Error, OSError, ValueError):
+        raise BundleError("Invalid monitoring CRD hook payload encoding") from None
+    require(len(body) <= MAX_MEMBER and decoder.eof and not decoder.unused_data,
+            "Invalid or oversized monitoring CRD hook payload")
+    require(crd_definitions(body) == definitions, "Monitoring hook payload differs from static chart CRDs")
+
+
+def transaction_render(row, files):
+    """Derive the expected Helm 4 post-renderer stream from a complete frozen render."""
+    key = row["id"]
+    base = f"releases/{key}"
+    static = check_chart(files[base + "/chart.tgz"], row["chart"])
+    complete = files[base + "/rendered.yaml"]
+    require(not static or row["helm"]["operation"] != "install",
+            "Static CRDs are outside the ownership scope of a first companion install")
+    admitted = complete
+    definitions = {}
+    if static:
+        # Helm adds archive crds/ files after the post-renderer. Match their full source paths
+        # and contents. A CRD from templates/ is an ordinary transaction manifest.
+        headers = list(SOURCE_HEADER.finditer(complete))
+        require(headers, "Static CRD partition requires source-marked Helm output")
+        kept = [complete[:headers[0].start()]]
+        seen = {}
+        for index, header in enumerate(headers):
+            source = header[1].decode()
+            end = headers[index+1].start() if index + 1 < len(headers) else len(complete)
+            if source not in static:
+                kept.append(complete[header.start():end])
+                continue
+            actual = crd_definitions(complete[header.end():end])
+            require(definitions.keys().isdisjoint(actual), "Duplicate CRD identity in the frozen render")
+            definitions.update(actual)
+            seen.setdefault(source, {}).update(actual)
+        require(seen == static, "Frozen static CRDs differ from chart source or contents")
+        admitted = b"".join(kept)
+    if static or key == "default/prometheus":
+        ordinary = [o for o in yaml.load_all(admitted, Loader=ManifestLoader) if o is not None]
+        for obj in ordinary:
+            if obj["kind"] == "CustomResourceDefinition":
+                require(obj["metadata"]["name"] not in definitions, "CRD appears as both static and templated")
+        if key == "default/prometheus":
+            verify_crd_hook(ordinary, definitions)
+    return admitted
 
 
 def check_render(key, row, rendered, values, images):
@@ -413,7 +529,7 @@ def validate(files, expected):
         check_compatibility(files, expected, plan["images"])
     for key, row in rows.items():
         base = f"releases/{key}"
-        check_chart(files[base + "/chart.tgz"], row["chart"])
+        transaction_render(row, files)
         check_render(key, row, files[base + "/rendered.yaml"], files[base + "/values.yaml"], plan["images"])
     return plan, live
 
@@ -509,6 +625,7 @@ def consume(path, cipher, approved, checkout, expected, render_frozen, read_live
     def run_release(row, method):
         prefix = f"releases/{row['id']}/"
         inputs = {name: files[prefix + name] for name in ("chart.tgz", "values.yaml", "rendered.yaml")}
+        inputs["postrender.yaml"] = transaction_render(row, files)
         reconcile(row, method, MappingProxyType(inputs))
 
     return release_phases.run(plan, previous, read_live, run_release, verify_stack)

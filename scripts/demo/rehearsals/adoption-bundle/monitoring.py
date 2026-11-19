@@ -25,16 +25,26 @@ CLUSTER_KINDS = {"CustomResourceDefinition", "ClusterRole", "ClusterRoleBinding"
                  "MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"}
 
 
-def render(chart, values, version):
+def render(chart, values, version, approved=None):
     with tempfile.TemporaryDirectory() as name:
         directory = Path(name)
         (directory / "chart.tgz").write_bytes(chart)
         (directory / "values.yaml").write_bytes(values)
-        env = dict(os.environ, KUBECONFIG=str(directory / "no-kubeconfig"), HELM_NO_PLUGINS="1")
-        return subprocess.check_output(
-            ["helm", "template", "prometheus", str(directory / "chart.tgz"), "--namespace", "default",
-             "--kube-version", version, "--api-versions", "v1", "--include-crds", "-f", str(directory / "values.yaml")],
-            env=env)
+        env = dict(os.environ, KUBECONFIG=str(directory / "no-kubeconfig"),
+                   HELM_CACHE_HOME=str(directory / "helm-cache"))
+        command = ["helm", "template", "prometheus", str(directory / "chart.tgz"), "--namespace", "default",
+                   "--kube-version", version, "--api-versions", "v1", "--include-crds", "-f", str(directory / "values.yaml")]
+        if approved is not None:
+            path = directory / "approved.yaml"
+            path.write_bytes(approved)
+            path.chmod(0o600)
+            env.pop("HELM_NO_PLUGINS", None)
+            env.update(HELM_PLUGINS=str(ROOT / "scripts/demo/helm-plugins"), JAEGER_APPROVED_MANIFEST=str(path))
+            command.extend(["--post-renderer", "verify-frozen-manifests"])
+        else:
+            env["HELM_NO_PLUGINS"] = "1"
+        # Verification failures must not export any partial Helm output or Secret data.
+        return subprocess.run(command, env=env, capture_output=True, check=True).stdout
 
 
 def exercise(checkout, chart, temp):
@@ -82,12 +92,29 @@ def exercise(checkout, chart, temp):
     def rerender(plan, files):
         return {RELEASE:render(files[PREFIX+"chart.tgz"], files[PREFIX+"values.yaml"],
                                plan["renderContext"]["kubernetesVersion"])}
+    verified = {}
     def apply(row, method, files):
         assert row["id"] == RELEASE and method == "apply"
         if files["chart.tgz"] != chart or files["rendered.yaml"] != manifests:
             raise AssertionError("Executor received unexpected bytes")
+        expected = files["postrender.yaml"]
+        ordinary = [o for o in yaml.load_all(expected, Loader=bundle.ManifestLoader) if o]
+        static = len(objects) - len(ordinary)
+        if (static, len(ordinary)) != (10, 129):
+            raise AssertionError("Unexpected archived CRDs or transaction resource count")
+        protected = render(chart, values, context["kubernetesVersion"], approved=expected)
+        if sum(o is not None for o in yaml.load_all(protected, Loader=bundle.ManifestLoader)) != len(objects):
+            raise AssertionError("Verified Helm output differs in resource count")
+        try:
+            render(chart, values, context["kubernetesVersion"], approved=manifests)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            raise AssertionError("Post-renderer unexpectedly received static CRDs")
+        verified.update(postRenderedObjects=len(ordinary), staticCRDsVerified=static)
     def consume():
-        return bundle.consume(sealed, cipher, approved, checkout, commit, rerender, lambda scope:live, apply, lambda stack: stack == "oci")
+        return bundle.consume(sealed, cipher, approved, checkout, commit, rerender, lambda scope:live,
+                              apply, lambda stack: stack == "oci")
     assert consume()["verifiedStacks"] == ["oci"]
     target["revision"] += 1
     try:
@@ -99,6 +126,7 @@ def exercise(checkout, chart, temp):
         raise AssertionError("Changed revision reached the executor")
     print(json.dumps({"scope":"credential-free", "configurationSHA":commit, "bundleSHA256":approved,
                       "renderedObjects":len(objects), "secretObjects":sum(obj["kind"]=="Secret" for obj in objects),
+                      **verified,
                       "exactFrozenRenderVerified":True, "driftRefused":True}))
 
 

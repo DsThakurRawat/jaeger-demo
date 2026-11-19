@@ -120,12 +120,31 @@ uses two synthetic Helm releases on disposable Kubernetes. It checks a failed
 release with an empty diff, pending-state rejection before writes, zero new
 revisions on a healthy no-op and failed OCI verification before OTel.
 
+For each Helm transaction, the consumer derives `postrender.yaml` from the frozen
+bundle with `transaction_render`. Write those bytes to a private temporary file and point
+`JAEGER_APPROVED_MANIFEST` to that file. Invoke the pinned Helm binary with
+`--post-renderer verify-frozen-manifests` so its actual templated resources and
+hooks pass the comparison before it starts the transaction. Use a plain upgrade
+for an existing release. The full render still includes the archive's native
+CRDs. The helper matches each CRD to its exact packaged source, identity and
+complete definition, and retains template-owned CRDs in the transaction check.
+A new parent or subchart CRD missing from the complete render requires review.
+
+On monitoring upgrades, the reviewed hook Job unpacks a ConfigMap and reapplies
+the CRDs. The verifier checks its two container commands, shared volume path and
+all decoded CRD definitions against the chart. Recheck the identities, UIDs and
+schemas of the live CRDs before and after the hook. Helm installs native CRDs
+before calling its post-renderer on first install. The bundle refuses first
+installs of charts that contain native CRDs. The supported first installs are
+namespace-scoped companion releases.
+
 The bundle library and synthetic rehearsals are available for integrating the
 read-only planner and the restricted executor. Production observation, the actual
 Helm transaction, artifact transport and key custody remain the responsibility of
 those integrations. The credential-free monitoring rehearsal sealed a chart and
-139 rendered objects including ten CRDs and three Secret objects, reproduced its rendered
-bytes, handed them to a local test executor and rejected a later revision drift.
+139 rendered objects including ten CRDs and three Secret objects. It reproduced
+the full render, compared the 129 templated objects and hooks in the real Helm
+post-renderer, and rejected a later revision drift in the local test executor.
 
 Reproduce the test with a clean checkout containing the Helmfile, the toolchain
 lock and this library. Supply the reviewed monitoring chart package:
