@@ -60,3 +60,7 @@ python3 scripts/demo/rehearsals/helmfile-applications/equivalence.py
 ```
 
 This credential-free check uses the extracted scripts' chart versions and equivalent Helm arguments as its reference. It renders each release using Helm and Helmfile, compares full Kubernetes objects by identity including CRDs and hooks, checks both application's exact image references and pull policies, and compares the OTel application selection with Helmfile's native transitive rendering. A synthetic Grafana password makes its two offline renders deterministic. Production planning must compare against the current named Grafana Secret and preserve its UID and payload. Live equivalence, supplemental resource adoption, and rollout verification are separate operator checks. [Adoption contract](MIGRATION.md)
+
+## Public health checks
+
+Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
