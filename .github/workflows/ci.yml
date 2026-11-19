@@ -87,6 +87,36 @@ jobs:
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/release-phases/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
 
+  render-diff:
+    name: Rendered resource changes
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - name: Check out the pull request head
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        repository: ${{ github.event.pull_request.head.repo.full_name }}
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: candidate
+        persist-credentials: false
+    - name: Check out the pull request base
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: baseline
+        persist-credentials: false
+    - name: Install the constrained YAML parser
+      working-directory: candidate
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
+    - name: Compare offline renders
+      working-directory: candidate
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/pr_render_diff.py \
+          --base "$GITHUB_WORKSPACE/baseline" --head "$PWD" >> "$GITHUB_STEP_SUMMARY"
+
   renovate:
     name: Renovate discovery
     runs-on: ubuntu-latest

@@ -17,10 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
 STATE = ROOT / "helmfile.yaml"
-CHART = ROOT / ".tools/helm-charts/charts/jaeger"
 TARGET = ["--kube-version", "1.36.1", "--include-crds"]
-OCI = ROOT / "examples/oci"
-OTEL = ROOT / "examples/otel-demo"
 # Exercise digit-only tags, independent pins, tag-only adoption and digest promotion.
 IMAGES = {
     "oci": {
@@ -49,12 +46,14 @@ def legacy_version(directory, variable):
     return assignment[1]
 
 
-def legacy_jaeger(stack):
+def legacy_jaeger(stack, root=ROOT):
+    oci = root / "examples/oci"
+    otel = root / "examples/otel-demo"
     if stack == "oci":
-        directory, config = OCI, "config.yaml"
+        directory, config = oci, "config.yaml"
         overrides = ["provisionDataStore.cassandra=false", "storage.type=memory"]
     else:
-        directory, config = OTEL, "jaeger-config.yaml"
+        directory, config = otel, "jaeger-config.yaml"
         overrides = ["storage.type=elasticsearch", "storage.elasticsearch.anonymous=true",
                      "storage.elasticsearch.usePassword=false", "storage.elasticsearch.port=9200",
                      "storage.elasticsearch.host=opensearch-cluster-single.opensearch.svc.cluster.local"]
@@ -63,10 +62,36 @@ def legacy_jaeger(stack):
         for key, value in IMAGES[stack][name].items():
             overrides.append(f"{field}.image.{key}={value}")
     flags = ["-f", directory / "jaeger-values.yaml", "--set-file", f"userconfig={directory / config}",
-             "--set-file", f"uiconfig={OCI / 'ui-config.json'}"]
+             "--set-file", f"uiconfig={oci / 'ui-config.json'}"]
     for override in overrides:
         flags.extend(["--set", override])
     return flags
+
+
+def legacy_inputs(root):
+    oci, otel = root / "examples/oci", root / "examples/otel-demo"
+    chart = root / ".tools/helm-charts/charts/jaeger"
+    for namespace, stack in (("default", "oci"), ("jaeger", "otel")):
+        yield namespace, "jaeger", chart, legacy_jaeger(stack, root)
+    charts = [
+        ("default", "prometheus", oci, "prometheus-community/kube-prometheus-stack",
+         "PROMETHEUS_STACK_CHART_VERSION", "monitoring-values.yaml"),
+        ("opensearch", "opensearch", otel, "opensearch/opensearch",
+         "OPENSEARCH_CHART_VERSION", "opensearch-values.yaml"),
+        ("opensearch", "opensearch-dashboards", otel, "opensearch/opensearch-dashboards",
+         "OPENSEARCH_DASHBOARDS_CHART_VERSION", "opensearch-dashboard-values.yaml"),
+        ("otel-demo", "otel-demo", otel, "open-telemetry/opentelemetry-demo",
+         "OTEL_DEMO_CHART_VERSION", "otel-demo-values.yaml"),
+    ]
+    for namespace, name, directory, chart, pin, values in charts:
+        flags = ["--version", legacy_version(directory, pin), "-f", directory / values]
+        if name == "prometheus":
+            flags.extend(["--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true"])
+        yield namespace, name, chart, flags
+
+
+def stable_values(name):
+    return ["--set", "grafana.adminPassword=synthetic-fixture-password"] if name == "prometheus" else []
 
 
 class ManifestLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
@@ -94,7 +119,7 @@ def objects(render):
 def compare(namespace, name, chart, flags, fixture):
     # Grafana normally generates or looks up its admin password. Supply a public,
     # deterministic value to both offline template invocations.
-    stable_input = ["--set", "grafana.adminPassword=synthetic-fixture-password"] if name == "prometheus" else []
+    stable_input = stable_values(name)
     expected = objects(run("helm", "template", name, chart, "--namespace", namespace, *TARGET, *flags, *stable_input))
     payload = run("helmfile", "-f", STATE, "--state-values-file", fixture, "--skip-deps",
                          "-l", f"namespace={namespace},name={name}", "template", "--skip-needs", *TARGET, *stable_input)
@@ -123,25 +148,8 @@ def main():
     with tempfile.TemporaryDirectory() as temp:
         fixture = Path(temp) / "images.json"
         fixture.write_text(json.dumps({"images": IMAGES}))
-        manifests = [
-            compare("default", "jaeger", CHART, legacy_jaeger("oci"), fixture),
-            compare("jaeger", "jaeger", CHART, legacy_jaeger("otel"), fixture),
-        ]
-        charts = [
-            ("default", "prometheus", OCI, "prometheus-community/kube-prometheus-stack",
-             "PROMETHEUS_STACK_CHART_VERSION", "monitoring-values.yaml"),
-            ("opensearch", "opensearch", OTEL, "opensearch/opensearch",
-             "OPENSEARCH_CHART_VERSION", "opensearch-values.yaml"),
-            ("opensearch", "opensearch-dashboards", OTEL, "opensearch/opensearch-dashboards",
-             "OPENSEARCH_DASHBOARDS_CHART_VERSION", "opensearch-dashboard-values.yaml"),
-            ("otel-demo", "otel-demo", OTEL, "open-telemetry/opentelemetry-demo",
-             "OTEL_DEMO_CHART_VERSION", "otel-demo-values.yaml"),
-        ]
-        for namespace, name, directory, chart, pin, values in charts:
-            flags = ["--version", legacy_version(directory, pin), "-f", directory / values]
-            if name == "prometheus":
-                flags.extend(["--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true"])
-            manifests.append(compare(namespace, name, chart, flags, fixture))
+        manifests = [compare(namespace, name, chart, flags, fixture)
+                     for namespace, name, chart, flags in legacy_inputs(ROOT)]
 
         out = Path(temp) / "selected"
         run("helmfile", "-f", STATE, "--state-values-file", fixture, "--skip-deps",

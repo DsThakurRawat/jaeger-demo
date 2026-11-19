@@ -64,3 +64,28 @@ This credential-free check uses the extracted scripts' chart versions and equiva
 ## Public health checks
 
 Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
+
+## Pull request render summary
+
+The **Rendered resource changes** pull request job renders the exact base and head
+commits using the head’s pinned toolchain and the public image and Grafana
+fixtures from the equivalence rehearsal. Each checkout supplies its own Jaeger
+chart pin, chart versions, values, templates and supplemental objects. For the
+initial migration, the base projection uses the six script-era release arguments
+and the twelve supplemental resources in their existing namespaces. The summary
+identifies that fallback.
+
+The GitHub Actions job summary lists added, modified and removed resource
+identities. Comparison includes Secret contents in process memory. The job
+publishes only counts and resource identities. Its children have an isolated
+home and Helm configuration, an empty kubeconfig, no cloud credentials and no
+access to a GitHub write token. Both checkouts disable credential persistence.
+
+To reproduce, supply separate clean checkouts for the old and new commits. Run in
+the candidate checkout with PyYAML installed. The pinned chart repositories need
+public network access.
+
+```sh
+python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/pr_render_diff.py \
+  --base /path/to/base --head "$PWD"
+```
