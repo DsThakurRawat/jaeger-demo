@@ -4,6 +4,7 @@
 
 """Render the six hosted application releases both ways with public fixture inputs."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -95,8 +96,9 @@ def compare(namespace, name, chart, flags, fixture):
     # deterministic value to both offline template invocations.
     stable_input = ["--set", "grafana.adminPassword=synthetic-fixture-password"] if name == "prometheus" else []
     expected = objects(run("helm", "template", name, chart, "--namespace", namespace, *TARGET, *flags, *stable_input))
-    actual = objects(run("helmfile", "-f", STATE, "--state-values-file", fixture, "--skip-deps",
-                         "-l", f"namespace={namespace},name={name}", "template", "--skip-needs", *TARGET, *stable_input))
+    payload = run("helmfile", "-f", STATE, "--state-values-file", fixture, "--skip-deps",
+                         "-l", f"namespace={namespace},name={name}", "template", "--skip-needs", *TARGET, *stable_input)
+    actual = objects(payload)
     differences = sorted(k for k in expected.keys() | actual.keys() if expected.get(k) != actual.get(k))
     if not expected or differences:
         raise ValueError(f"{namespace}/{name} render differs at {differences}")
@@ -109,14 +111,22 @@ def compare(namespace, name, chart, flags, fixture):
                        and c["imagePullPolicy"] == img["pullPolicy"] for c in containers):
                 raise ValueError(f"Unexpected {stack}/{component} image or pull policy")
     print(f"{namespace}/{name}: {len(actual)} matching objects", flush=True)
+    output = fixture.parent / f"{namespace}-{name}.yaml"
+    output.write_bytes(payload)
+    return output
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--validate", action="store_true", help="Schema-check application and companion renders")
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temp:
         fixture = Path(temp) / "images.json"
         fixture.write_text(json.dumps({"images": IMAGES}))
-        compare("default", "jaeger", CHART, legacy_jaeger("oci"), fixture)
-        compare("jaeger", "jaeger", CHART, legacy_jaeger("otel"), fixture)
+        manifests = [
+            compare("default", "jaeger", CHART, legacy_jaeger("oci"), fixture),
+            compare("jaeger", "jaeger", CHART, legacy_jaeger("otel"), fixture),
+        ]
         charts = [
             ("default", "prometheus", OCI, "prometheus-community/kube-prometheus-stack",
              "PROMETHEUS_STACK_CHART_VERSION", "monitoring-values.yaml"),
@@ -131,7 +141,7 @@ def main():
             flags = ["--version", legacy_version(directory, pin), "-f", directory / values]
             if name == "prometheus":
                 flags.extend(["--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true"])
-            compare(namespace, name, chart, flags, fixture)
+            manifests.append(compare(namespace, name, chart, flags, fixture))
 
         out = Path(temp) / "selected"
         run("helmfile", "-f", STATE, "--state-values-file", fixture, "--skip-deps",
@@ -144,6 +154,15 @@ def main():
         if rendered != planned:
             raise ValueError(f"Helmfile rendered {rendered}, selected {planned}")
         print("OpenTelemetry application and its transitive prerequisites matched the selection.")
+
+        if args.validate:
+            companion_values = Path(temp) / "companions.json"
+            companion_values.write_bytes(run("python3", ROOT / "scripts/demo/companion_values.py"))
+            companions = Path(temp) / "companions.yaml"
+            companions.write_bytes(run("helmfile", "-f", ROOT / "helmfile-resources.yaml.gotmpl",
+                                       "--state-values-file", companion_values, "template", "--skip-deps"))
+            subprocess.run(["python3", ROOT / "scripts/demo/validate_helmfile.py", *manifests, companions], check=True)
+
 
 
 if __name__ == "__main__":

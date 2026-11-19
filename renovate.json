@@ -126,7 +126,8 @@
     {
       "description": "Require review for OTel Demo Helm chart upgrades",
       "matchManagers": [
-        "custom.regex"
+        "custom.regex",
+        "helmfile"
       ],
       "matchPackageNames": [
         "opentelemetry-demo"
@@ -136,7 +137,8 @@
     {
       "description": "Keep the OTel demo OpenSearch charts on supported 3.x releases and update them together",
       "matchManagers": [
-        "custom.regex"
+        "custom.regex",
+        "helmfile"
       ],
       "matchDatasources": [
         "helm"
@@ -218,7 +220,11 @@
       "matchDatasources": [
         "helm"
       ],
-      "groupName": "OTel demo application"
+      "groupName": "OTel demo application",
+      "matchManagers": [
+        "custom.regex",
+        "helmfile"
+      ]
     },
     {
       "matchPackageNames": [
@@ -281,6 +287,34 @@
         "helm/helm"
       ],
       "allowedVersions": "<5.0.0"
+    },
+    {
+      "description": "Keep script and Helmfile monitoring pins together during adoption",
+      "matchManagers": [
+        "custom.regex",
+        "helmfile"
+      ],
+      "matchDatasources": [
+        "helm"
+      ],
+      "matchPackageNames": [
+        "kube-prometheus-stack"
+      ],
+      "groupName": "Hosted demo monitoring chart"
+    },
+    {
+      "description": "Keep script and Helmfile application pins together during adoption",
+      "matchManagers": [
+        "custom.regex",
+        "helmfile"
+      ],
+      "matchDatasources": [
+        "helm"
+      ],
+      "matchPackageNames": [
+        "opentelemetry-demo"
+      ],
+      "groupName": "Hosted OpenTelemetry demo chart"
     }
   ]
 }

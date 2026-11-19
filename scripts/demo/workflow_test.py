@@ -243,7 +243,7 @@ class WorkflowTests(unittest.TestCase):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
         self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])
         script = (ROOT / 'scripts/utils/renovate-discovery.sh').read_text()
-        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements', script)
+        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements,helmfile ', script)
         self.assertIn('python3 scripts/demo/check-renovate-extraction.py', script)
 
 

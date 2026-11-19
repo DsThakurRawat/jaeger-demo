@@ -1,7 +1,7 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-.PHONY: test lint renovate-discovery check helmfile-tools validate-manifests
+.PHONY: test lint renovate-discovery check helmfile-tools validate validate-manifests
 
 RUFF ?= ruff
 
@@ -24,3 +24,6 @@ helmfile-tools:
 
 validate-manifests:
 	python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/validate_helmfile.py $(MANIFESTS)
+
+validate: lint
+	python3 scripts/demo/helmfile_tools.py run -- bash scripts/demo/validate-helmfile.sh

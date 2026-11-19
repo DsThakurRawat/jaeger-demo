@@ -27,6 +27,8 @@ expected = {
     ("scripts/demo/jaeger-chart.sh", "https://github.com/jaegertracing/helm-charts.git"),
     ("scripts/utils/lint-requirements.txt", "ruff"),
 }
+expected.update(("helmfile.yaml", chart) for chart in (
+    "kube-prometheus-stack", "opensearch", "opensearch-dashboards", "opentelemetry-demo"))
 monitoring_hooks = {
     "docker.io/library/busybox",
     "registry.k8s.io/kubectl",
