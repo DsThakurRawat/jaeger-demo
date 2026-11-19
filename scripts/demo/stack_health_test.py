@@ -31,6 +31,23 @@ class StackHealthTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 stack_health.recent_spans(body, "checkout", now)
 
+    def test_empty_traffic_is_distinct_from_stream_and_metrics_failures(self):
+        now = datetime.now(timezone.utc)
+        sample = now - timedelta(seconds=100)
+        with self.assertRaises(stack_health.TrafficPending):
+            stack_health.recent_spans(b"", "frontend", now)
+        with self.assertRaises(stack_health.TrafficPending):
+            stack_health.check_metrics(metric(sample, 0), {}, now)
+        for fn, args in (
+            (stack_health.recent_spans, (b'{"error":"failed"}', "frontend", now)),
+            (stack_health.check_metrics, (metric(sample, 2), metric(sample, "NaN"), now)),
+            (stack_health.check_metrics, (metric(sample, "NaN"), metric(sample, 2), now)),
+            (stack_health.check_metrics, ({"error":"failed"}, {}, now)),
+        ):
+            with self.subTest(fn=fn, args=args), self.assertRaises(ValueError) as error:
+                fn(*args)
+            self.assertNotIsInstance(error.exception, stack_health.TrafficPending)
+
     def test_spm_requires_finite_latency_in_recent_completed_positive_bucket(self):
         now = datetime.now(timezone.utc)
         sample = now - timedelta(seconds=100)

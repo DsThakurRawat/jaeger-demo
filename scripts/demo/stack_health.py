@@ -28,9 +28,13 @@ PAGES = {
 }
 
 
-def fetch(url):
+class TrafficPending(ValueError):
+    """A valid response has no recent evidence of application traffic yet."""
+
+
+def fetch(url, *, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "Jaeger-demo-release-verification"})
-    with urllib.request.urlopen(req, timeout=15) as conn:
+    with urllib.request.urlopen(req, timeout=timeout) as conn:
         source, target = urllib.parse.urlsplit(url), urllib.parse.urlsplit(conn.url)
         if conn.status != 200 or target.scheme != "https" or target.netloc != source.netloc:
             raise ValueError(f"Unexpected HTTP response or destination for {source.hostname}{source.path}")
@@ -59,11 +63,13 @@ def recent_spans(payload, service, now):
                     if minimum <= at <= now.timestamp() and span.get("traceId"):
                         latest = max(at, latest or 0)
     if latest is None:
-        raise ValueError(f"No recent matching spans for {service}")
+        raise TrafficPending(f"No recent matching spans for {service}")
     return round(now.timestamp() - latest, 3)
 
 
 def samples_by_timestamp(payload, now):
+    if "error" in payload:
+        raise ValueError("Jaeger metrics returned an error")
     values = {}
     for series in payload.get("metrics", []):
         for point in series.get("metricPoints", []):
@@ -85,7 +91,9 @@ def check_metrics(calls, latency, now):
             if samples and all(math.isfinite(v) and v >= 0 for v in samples):
                 return int(timestamp.timestamp()) // 60 * 60
             raise ValueError("Non-finite or missing SPM latency during observed traffic")
-    raise ValueError("No recent completed SPM bucket with positive calls")
+    if any(not math.isfinite(v) or v < 0 for bucket in rates.values() for v in bucket):
+        raise ValueError("Invalid SPM call rate")
+    raise TrafficPending("No recent completed SPM bucket with positive calls")
 
 
 def check(stack, read=fetch, *, tracking=None):
@@ -107,8 +115,12 @@ def check(stack, read=fetch, *, tracking=None):
         dashboards = json.loads(read("https://opensearch.demo.jaegertracing.io/api/status"))
         if dashboards["status"]["overall"]["state"] != "green":
             raise ValueError("OpenSearch Dashboards is unhealthy")
-    if service not in json.loads(read(base + "/api/v3/services")).get("services", []):
-        raise ValueError(f"{service} is missing from Jaeger")
+    catalog = json.loads(read(base + "/api/v3/services"))
+    services = catalog.get("services", [])
+    if "error" in catalog or not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        raise ValueError("Invalid Jaeger service catalog")
+    if service not in services:
+        raise TrafficPending(f"{service} is missing from Jaeger")
     now = datetime.now(timezone.utc)
     criteria = {"query.service_name": service, "query.start_time_min": (now - timedelta(minutes=10)).isoformat(),
                 "query.start_time_max": now.isoformat(), "query.search_depth": "20"}
