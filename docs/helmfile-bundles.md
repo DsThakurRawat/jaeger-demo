@@ -94,17 +94,31 @@ digest, safe archive structure, source tree, selection, tool and chart pins and
 recorded recovery targets. Neither CLI command deploys or exports decrypted files.
 
 The live runner entry point is `consume(path, cipher, approved, checkout, expected,
-render_frozen, read_live, apply)`. Acquire the deployment lock before calling it.
+render_frozen, read_live, reconcile, verify_stack)`. Acquire the deployment lock before calling it.
 The trusted renderer receives the plan and read-only frozen bytes. It must use the
 bundled local charts, values and rendering context, verify its running toolchain,
 and return exact rendered bytes per release. Use private scratch storage for tools
 that require paths and remove it afterward. The library compares every render,
-then calls the observer with the cluster and resource identities, including
-specific rollback revisions. A fresh matching projection is required before the
-executor receives any inputs. The executor uses the same frozen charts, values
-and Helm parameters, performs OCI verification before any OTel write, and applies
-resource preconditions at mutation boundaries. Other actors can change Kubernetes
-objects between a read and a write.
+then calls the observer with the cluster, resource identities and rollback
+revisions. It compares the entire selection to the approved observation before
+the first write. Before each stack, it compares that stack's projection again.
+If both stacks reference a resource that OCI deliberately changed, stop and
+review a fresh OTel plan for that change.
+
+The runner calls `reconcile(row, method, files)` in prerequisite order with the
+local chart, values and render for that release. Use native Helmfile `apply` for
+deployed releases. A failed release gets `sync` even when the diff is empty.
+An unexpected absence or pending operation blocks all selected releases.
+`verify_stack(stack)` must return true after the required checks pass. OCI
+verification also gates an OTel-only run. A healthy no-op still runs the stack
+checks. Keep the lock through verification and record last-known-good only on
+successful completion. Kubernetes actors outside that lock can still change
+objects. Enforce resource preconditions at each mutation boundary.
+
+The [phase rehearsal](../scripts/demo/rehearsals/release-phases/exercise.py)
+uses two synthetic Helm releases on disposable Kubernetes. It checks a failed
+release with an empty diff, pending-state rejection before writes, zero new
+revisions on a healthy no-op and failed OCI verification before OTel.
 
 The bundle library and synthetic rehearsals are available for integrating the
 read-only planner and the restricted executor. Production observation, the actual

@@ -82,13 +82,13 @@ def exercise(checkout, chart, temp):
     def rerender(plan, files):
         return {RELEASE:render(files[PREFIX+"chart.tgz"], files[PREFIX+"values.yaml"],
                                plan["renderContext"]["kubernetesVersion"])}
-    def apply(_, files):
-        if files[PREFIX+"chart.tgz"] != chart or files[PREFIX+"rendered.yaml"] != manifests:
+    def apply(row, method, files):
+        assert row["id"] == RELEASE and method == "apply"
+        if files["chart.tgz"] != chart or files["rendered.yaml"] != manifests:
             raise AssertionError("Executor received unexpected bytes")
-        return "observed locally"
     def consume():
-        return bundle.consume(sealed, cipher, approved, checkout, commit, rerender, lambda scope:live, apply)
-    assert consume() == "observed locally"
+        return bundle.consume(sealed, cipher, approved, checkout, commit, rerender, lambda scope:live, apply, lambda stack: stack == "oci")
+    assert consume()["verifiedStacks"] == ["oci"]
     target["revision"] += 1
     try:
         consume()

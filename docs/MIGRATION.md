@@ -110,7 +110,7 @@ Credential-free implementation and rehearsal are in progress.
 
 Issues: [jaeger-demo#1](https://github.com/jaegertracing/jaeger-demo/issues/1).
 
-The candidate configuration renders all six application releases and four namespace-local companion releases. `make validate` compares the application manifests against the extracted scripts and schema-checks both sets. The first local ownership rehearsal used an isolated Kubernetes API server and the existing chart inputs. The first scheduled deployment, complete live-equivalence inventory and production adoption are outstanding. [Application releases](helmfile-applications.md) · [Companion rehearsal](helmfile-companions.md)
+The candidate configuration renders all six application releases and four namespace-local companion releases. `make validate` compares the application manifests against the extracted scripts and schema-checks both sets. The ownership rehearsal runs on a full Kubernetes node in PR CI. The frozen-bundle tests cover image compatibility, private inputs, drift rejection and stack ordering. The release phase rehearsal covers healthy no-op applies, retry after a failed release, and pending-state blocking. The first scheduled deployment, complete live-equivalence inventory and production adoption are outstanding. [Application releases](helmfile-applications.md) · [Companion rehearsal](helmfile-companions.md)
 
 Requires: verbatim-script-handover, core-hotrod-fixture.
 

@@ -24,6 +24,8 @@ import zipfile
 from cryptography.fernet import Fernet, InvalidToken
 import yaml
 
+import release_phases
+
 
 FORMAT = "jaeger-demo-helmfile-plan-v1"
 # A complete six-release render is about 6 MiB. Bound memory before reading or decrypting.
@@ -486,7 +488,7 @@ def unseal(path, cipher, approved, expected):
     return plan, live, files
 
 
-def consume(path, cipher, approved, checkout, expected, render_frozen, read_live, apply):
+def consume(path, cipher, approved, checkout, expected, render_frozen, read_live, reconcile, verify_stack):
     """Called inside the deployment lock. The observer gets identities only, never old hashes."""
     verify_source(checkout, expected)
     plan, previous, files = unseal(path, cipher, approved, expected)
@@ -496,13 +498,15 @@ def consume(path, cipher, approved, checkout, expected, render_frozen, read_live
     keys = {row["id"] for row in plan["releases"]}
     require(rendered.keys() == keys and all(rendered[key] == files[f"releases/{key}/rendered.yaml"] for key in keys),
             "Frozen inputs do not reproduce the reviewed renders")
-    scope = {"cluster": previous["cluster"], "releases": [row["id"] for row in plan["releases"]],
-             "objects": sorted(previous["objects"]), "imageStacks": sorted(plan["images"]),
-             "rollbackRevisions": {row["id"]: row["rollback"]["revision"] for row in plan["releases"]}}
+    scope = release_phases.observation_scope(plan["releases"], previous["cluster"], plan["images"])
     current = read_live(scope)
     require(canonical(current) == canonical(previous), "Live state drifted since approval")
-    # Expose frozen inputs in memory only, after the fresh read. No reusable mutation token.
-    return apply(plan, files)
+    def run_release(row, method):
+        prefix = f"releases/{row['id']}/"
+        inputs = {name: files[prefix + name] for name in ("chart.tgz", "values.yaml", "rendered.yaml")}
+        reconcile(row, method, MappingProxyType(inputs))
+
+    return release_phases.run(plan, previous, read_live, run_release, verify_stack)
 
 
 def main():

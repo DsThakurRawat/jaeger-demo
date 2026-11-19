@@ -116,35 +116,39 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
         self.assertNotIn(b"fixture-private-value", path.read_bytes())
         observer = Mock(return_value=self.live)
-        def apply(plan, files):
-            observer.assert_called_once()
+        def apply(row, method, files):
+            self.assertEqual(2, observer.call_count)
             self.assertNotIn("stateSHA256", str(observer.call_args))
-            self.assertEqual(self.plan, plan)
-            self.assertEqual(self.chart, files["releases/default/prometheus/chart.tgz"])
-            self.assertIn(b"fixture-private-value", files["releases/default/prometheus/rendered.yaml"])
-            return "applied"
-        self.assertEqual("applied", b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, observer, apply))
+            self.assertEqual(self.row, row)
+            self.assertEqual("apply", method)
+            self.assertEqual({"chart.tgz", "values.yaml", "rendered.yaml"}, set(files))
+            self.assertEqual(self.chart, files["chart.tgz"])
+            self.assertIn(b"fixture-private-value", files["rendered.yaml"])
+        health = Mock(return_value=True)
+        receipt = b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, observer, apply, health)
+        self.assertEqual({"releases": {self.key: "apply"}, "verifiedStacks": ["oci"]}, receipt)
+        health.assert_called_once_with("oci")
 
     def test_drift_approval_key_source_and_read_failure_block_executor(self):
         path, sha = self.build()
         apply = Mock()
         with self.assertRaisesRegex(b.BundleError, "reproduce"):
-            b.consume(path, self.cipher, sha, self.checkout, self.commit, lambda plan, files: {}, self.fail, apply)
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, lambda plan, files: {}, self.fail, apply, self.fail)
         changed = copy.deepcopy(self.live)
         changed["objects"][self.obj]["uid"] = "replacement"
         with self.assertRaisesRegex(b.BundleError, "drifted"):
-            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, lambda scope: changed, apply)
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, lambda scope: changed, apply, self.fail)
         broken = Mock(side_effect=OSError("API denied"))
         with self.assertRaises(OSError):
-            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, broken, apply)
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, broken, apply, self.fail)
         for cipher, expected in ((self.cipher, "a"*64), (Fernet(Fernet.generate_key()), sha)):
             with self.assertRaises((InvalidToken, b.BundleError)):
-                b.consume(path, cipher, expected, self.checkout, self.commit, self.render, self.fail, apply)
+                b.consume(path, cipher, expected, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
         with self.assertRaisesRegex(b.BundleError, "checkout"):
-            b.consume(path, self.cipher, sha, self.checkout, "a"*40, self.render, self.fail, apply)
+            b.consume(path, self.cipher, sha, self.checkout, "a"*40, self.render, self.fail, apply, self.fail)
         (self.checkout / "unexpected").write_text("dirty")
         with self.assertRaisesRegex(b.BundleError, "local changes"):
-            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply)
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
         apply.assert_not_called()
 
     def test_bundle_rejects_unexpected_duplicate_link_compressed_missing_or_modified_members(self):
