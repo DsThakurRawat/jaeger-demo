@@ -1,0 +1,63 @@
+{
+  "helm": "v4.3.2",
+  "clusterAccess": false,
+  "jaegerChartCommit": "28017780d96bd42f371bef635e2d4bbf938170e7",
+  "scope": "real chart packages; synthetic image provenance and Grafana password; client-side upgrade renders",
+  "releases": {
+    "oci-monitoring": {
+      "chart": "kube-prometheus-stack",
+      "helmObjects": 129,
+      "trackedLiveObjects": 119,
+      "supplementalObjects": 2,
+      "changedObjects": [],
+      "snapshotPlatform": "linux/amd64"
+    },
+    "oci-jaeger": {
+      "chart": "jaeger",
+      "helmObjects": 10,
+      "trackedLiveObjects": 14,
+      "supplementalObjects": 4,
+      "changedObjects": [
+        "apps/v1:Deployment:default:jaeger",
+        "apps/v1:Deployment:default:jaeger-hotrod"
+      ],
+      "snapshotPlatform": "linux/amd64"
+    },
+    "opensearch": {
+      "chart": "opensearch",
+      "helmObjects": 5,
+      "trackedLiveObjects": 5,
+      "supplementalObjects": 0,
+      "changedObjects": [],
+      "snapshotPlatform": "linux/amd64"
+    },
+    "opensearch-dashboards": {
+      "chart": "opensearch-dashboards",
+      "helmObjects": 5,
+      "trackedLiveObjects": 5,
+      "supplementalObjects": 0,
+      "changedObjects": [],
+      "snapshotPlatform": "linux/amd64"
+    },
+    "otel-jaeger": {
+      "chart": "jaeger",
+      "helmObjects": 12,
+      "trackedLiveObjects": 18,
+      "supplementalObjects": 6,
+      "changedObjects": [
+        "apps/v1:Deployment:jaeger:jaeger",
+        "apps/v1:Deployment:jaeger:jaeger-hotrod"
+      ],
+      "snapshotPlatform": "linux/amd64"
+    },
+    "otel-demo": {
+      "chart": "opentelemetry-demo",
+      "helmObjects": 51,
+      "trackedLiveObjects": 51,
+      "supplementalObjects": 0,
+      "changedObjects": [],
+      "snapshotPlatform": "linux/amd64"
+    }
+  },
+  "supplementalObjects": 12
+}

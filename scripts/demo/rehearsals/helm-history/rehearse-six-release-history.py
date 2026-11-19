@@ -68,6 +68,8 @@ def main():
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--storage-charts", type=Path,
                         help="Also exercise the two pinned storage charts from this archive directory")
+    parser.add_argument("--frozen-transaction", action="store_true", help="Exercise the scripts-v1 signed-render Helm transaction")
+    parser.add_argument("--monitoring-lookup", type=Path, help="Verify full chart dry-run and real Grafana Secret lookup")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -523,6 +525,12 @@ def main():
             )
             report["unrestrictedSecretReadsInReleaseNamespaces"] = True
             report["historyLimitUsed"] = 3
+            if args.frozen_transaction:
+                from frozen_transaction import exercise
+                report["frozenTransaction"] = exercise(root, cfg, kubectl, chart, WRITER)
+            if args.monitoring_lookup:
+                from frozen_transaction import monitoring_lookup
+                report["monitoringLookup"] = monitoring_lookup(root, cfg, kubectl, kube, apply, args.monitoring_lookup)
             report["kubernetesEnforcedAdmission"] = True
             if args.storage_charts:
                 from storage_charts import rehearse

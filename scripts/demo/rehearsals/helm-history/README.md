@@ -44,3 +44,27 @@ The [storage chart rehearsal](storage-chart-rehearsal.md) extends this isolated 
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.
+
+## Scheduled adapter rehearsal
+
+Render all six application packages with the existing public script inputs.
+Place the four packages listed in `docs/all-five-chart-access.json` in one
+directory and prepare the pinned Jaeger Git chart checkout, including its
+packaged dependencies. Run the following command from the repository root.
+
+```sh
+python3 scripts/demo/rehearsals/helm-history/all_five_candidates.py \
+  --charts "$CHARTS" --jaeger-checkout "$JAEGER_CHART_CHECKOUT"
+```
+
+The fixture compares old tag-only snapshots with new digest references, checks
+the exact named resource inventory and compares protected manifests. The six
+charts contain 212 Helm transaction objects. The scripts also handle 12
+supplemental objects. Monitoring's ten static CRDs are checked separately
+against the embedded hook archive by the live adapter.
+[Offline six-chart receipt](all-five-candidates.json)
+
+Add `--frozen-transaction` to the private history rehearsal to run the signed
+post-renderer with a restricted writer. Add `--monitoring-lookup /path/to/kube-prometheus-stack-82.10.4.tgz`
+to seed the chart CRDs and a synthetic Grafana Secret, then exercise its actual
+server-side dry-run using a read-only local identity.

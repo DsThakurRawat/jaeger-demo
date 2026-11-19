@@ -110,11 +110,12 @@ def check_scheduled_releases(component):
             raise ScheduledReleaseError(f"Cannot schedule {namespace}/{name} with Helm status {status}")
 
 
-def opensearch_data_binding():
-    def get(kind, name):
+def opensearch_data_binding(get=None):
+    def read_object(kind, name):
         return json.loads(run(["kubectl", "-n", "opensearch", "get", kind, name, "-o", "json"],
                               capture_output=True).stdout)
 
+    get = get or read_object
     pod = get("pod", "opensearch-cluster-single-0")
     spec = pod.get("spec", {})
     mounts = {mount["name"] for container in spec.get("containers", []) if container["name"] == "opensearch"

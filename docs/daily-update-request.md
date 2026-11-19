@@ -62,3 +62,59 @@ The command checks the authenticated username, both observed identities and vers
 ## Local verification
 
 The [API rehearsal](../scripts/demo/rehearsals/scheduled-request/README.md) tests independent principals, native admission, expiry, idempotency and contention with a manual holder. The [monitoring rehearsal](../scripts/demo/rehearsals/monitoring-writer/README.md) tests the pinned chart hooks, chart Secret continuity and rollback on a schedulable node. Production acceptance additionally requires the full five-component adapter, actual identity and permission checks, successful first scheduled run and public functional checks.
+
+## The scripts-v1 execution adapter
+
+The protected preparer calls `scheduled_adapter.prepare(slot, configuration_sha)`.
+It obtains the verified configuration tree, six chart packages and independent
+Jaeger and HotROD registry digests from `scheduled_inputs.acquire`. The adapter
+reads the checked-in script inputs as data. It freezes all five component
+fingerprints, selects both snapshot releases every day, and also selects each
+component with a changed or missing fingerprint. OpenSearch and Dashboards share
+one component checkpoint.
+
+The private bundle contains `plan.json`, six chart archives, six merged values
+files, six complete Helm dry-run renders and five supplemental manifest files.
+The plan includes all referenced workload images. The Jaeger snapshots and
+monitoring hook images use digests. Other chart image tags retain the reviewed
+chart policy and can move in their registries. Server-side dry-run performs live
+chart lookups, including Grafana credentials. Keep both the bundle and renderer
+output in private custody.
+
+Both processes require Helm 4.3.2, the reviewed Kubernetes v1.36.1 and a
+matching `SCHEDULED_CLUSTER_UID` for the `kube-system` Namespace. The executor
+calls `scheduled_adapter.apply(files, slot=..., configuration_sha=..., assert_locked=...)`.
+It compares all six Helm histories and named resource projections before its
+first write. A selected component is checked again immediately before upgrade.
+Helm receives a local chart archive, frozen values, an existing release name
+and the signed-manifest post-renderer. It cannot install a release or namespace.
+The post-renderer compares the real transaction stream, including hooks, before
+Helm persists changes. A previous failed Jaeger release requires an operator.
+For an eligible failed non-Jaeger release, the adapter reads every stored
+revision back to the highest verified success.
+
+OCI monitoring and Jaeger run before OTel. Component verification includes
+stored Helm state, protected resource UIDs, Service addresses/selectors and
+the OpenSearch PVC UID and bound PV. Both Jaeger upgrades check Ready Pod owner
+chains and the registry or platform digest. The storage component checks the
+two actual package app versions and writes and reads a synthetic trace through
+the in-cluster Jaeger services. The adapter uses service HTTP for these probes.
+Rollout status requires workload GET and WATCH, and Pod verification requires
+Pod LIST and named ReplicaSet GET. Read-only public checks verify routes,
+fresh traffic and finite SPM. A failed step raises to the receiver before
+advancing the affected component's checkpoint. Its durable lock remains held.
+
+The adapter compares privileged roles, bindings, Secrets, admission webhooks
+and monitoring workloads and hooks against existing successful release data.
+It checks all ten established CRD schemas and the admission certificate's CA.
+It rejects automatic additions and removals of Helm resource identities. A
+sensitive change needs a reviewed operator transaction establishing the new
+baseline, including its hook images, CA, CRDs and rollback record, before
+the scheduler can use it. Install and verify the independent RBAC and admission
+guards before granting workload writes.
+
+The offline rehearsal renders all six real chart packages, previous and
+candidate, against fixture image tags and a synthetic Grafana credential. The
+private API rehearsal uses real Helm history and a restricted Kubernetes
+identity to test frozen output, failed writes and rollback-target selection.
+[Rehearsal commands and evidence](../scripts/demo/rehearsals/helm-history/README.md)
