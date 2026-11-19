@@ -94,7 +94,9 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         first = a.helm_transaction("oci-monitoring", package, values)
         rendered = a.release_docs(first)
         confirmed = a.release_docs(a.helm_transaction("oci-monitoring", package, values, expected=rendered))
-        assert a.index(rendered, "default") == a.index(confirmed, "default")
+        baseline, fresh = a.index(rendered, "default"), a.index(confirmed, "default")
+        assert baseline.keys() == fresh.keys()
+        assert baseline == fresh, [k for k in baseline if baseline[k] != fresh[k]]
         grafana = next(o for o in rendered if o["kind"] == "Secret" and o["metadata"]["name"] == "prometheus-grafana")
         assert grafana["data"]["admin-password"] == marker
         assert len(a.release_docs(first)) == 129 and len(first["hooks"]) == 12

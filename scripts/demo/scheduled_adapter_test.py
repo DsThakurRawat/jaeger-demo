@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import ExitStack
-from copy import deepcopy
 import json
+import os
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -49,7 +50,7 @@ class SimulatedCluster:
         bind("history", self.history)
         bind("helm_transaction", self.transaction)
         bind("baseline", self.baseline)
-        bind("patch_supplemental", lambda o, prior: self.seen.append(("patch", o["kind"])))
+        bind("patch_supplemental", lambda o, prior, locked: self.seen.append(("patch", o["kind"])))
         bind("ready_images", lambda key, sources: self.seen.append(("ready-images", key)))
         bind("rollout", lambda key: self.seen.append(("rollout", key)))
         bind("verify_upgrade", lambda *args: self.seen.append(("verified", args[0])))
@@ -85,7 +86,7 @@ class SimulatedCluster:
         self.seen.append(("health", stack))
         return True
 
-    def patch(self, key, wanted, expected):
+    def patch(self, key, wanted, expected, assert_locked):
         assert expected == ("state-uid", self.checks)
         self.checks[key] = wanted
         self.seen.append(("checkpoint", key))
@@ -187,6 +188,58 @@ class AdapterTests(unittest.TestCase):
                 a.validate_change(ns, [state], [dict(state, spec=spec)], images())
         with self.assertRaisesRegex(a.AdapterError, "inventory"):
             a.inventory("opensearch-dashboards", [state], [])
+
+    def test_real_helm_metadata_normalization_ignores_only_empty_top_level_annotations(self):
+        plain = obj("ConfigMap", "x", data={"key": "value"})
+        def annotated(value):
+            return dict(plain, metadata={"name": "x", "annotations": value})
+        for value in (None, {}):
+            self.assertEqual(a.index([plain], "default"), a.index([annotated(value)], "default"))
+        self.assertNotEqual(a.index([plain], "default"), a.index([annotated({"owner": "changed"})], "default"))
+
+    def test_context_must_match_independent_target_cluster_and_pinned_tools(self):
+        with patch.object(a, "command", return_value=b"v4.3.2"), patch.object(a, "get_object", return_value={"metadata":{"uid":"right"}}), \
+             patch.object(a, "kube", return_value=b'{"gitVersion":"v1.36.1"}'):
+            for uid in ("", "wrong"):
+                with patch.dict(os.environ, {"SCHEDULED_CLUSTER_UID": uid}), self.assertRaisesRegex(a.AdapterError, "target"):
+                    a.check_context()
+            with patch.dict(os.environ, {"SCHEDULED_CLUSTER_UID": "right"}):
+                self.assertEqual(a.check_context()["clusterUID"], "right")
+
+    def test_command_bounds_memory_time_and_failure_diagnostics(self):
+        with patch.object(a, "LIMIT", 100), self.assertRaisesRegex(a.AdapterError, "Oversized"):
+            a.command([sys.executable, "-c", "print('private' * 10000)"])
+        with self.assertRaisesRegex(a.AdapterError, "timed out"):
+            a.command([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.1)
+        payload = b"x" * 200000
+        self.assertEqual(a.command([sys.executable, "-c", "import sys; print(len(sys.stdin.buffer.read()))"], body=payload),
+                         b"200000\n")
+
+    def test_readiness_binds_registry_or_platform_digest_and_pod_owner(self):
+        sources = images()
+        selected = {"jaeger": sources["jaeger"], "jaeger-hotrod": sources["hotrod"]}
+        for image in selected.values():
+            image["platformManifest"] = "sha256:" + "f" * 64
+        def get(ident):
+            name = ident.split(":")[-1]
+            if ":ReplicaSet:" in ident:
+                return {"metadata": {"uid": name, "ownerReferences": [{"controller": True, "kind":"Deployment", "apiVersion":"apps/v1",
+                        "uid": name.removesuffix("-rs"), "name": name.removesuffix("-rs")}]}}
+            return {"metadata":{"generation":1, "uid":name}, "spec":{"replicas":1, "selector":{"matchLabels":{"release":name}}},
+                    "status":{"observedGeneration":1,"replicas":1,"updatedReplicas":1,"availableReplicas":1,"readyReplicas":1}}
+        running_digest = "sha256:" + "f" * 64
+        def pods(*args):
+            name = next(a for a in args if a.startswith("release=")).split("=")[-1]
+            pod = {"metadata":{"ownerReferences":[{"controller":True, "kind":"ReplicaSet", "apiVersion":"apps/v1", "uid":name+"-rs", "name":name+"-rs"}]},
+                   "spec":{"containers":[{"name":name, "image":selected[name]["reference"]}]},
+                   "status":{"phase":"Running", "conditions":[{"type":"Ready","status":"True"}],
+                             "containerStatuses":[{"name": name, "ready":True,"imageID":"docker.io/test@"+running_digest}]}}
+            return a.encode({"items":[pod]})
+        with patch.object(a, "get_object", side_effect=get), patch.object(a, "kube", side_effect=pods):
+            a.ready_images("oci-jaeger", sources)
+            running_digest = "sha256:" + "e" * 64
+            with self.assertRaisesRegex(a.AdapterError, "registry digest"):
+                a.ready_images("oci-jaeger", sources)
 
     def test_patch_drift_and_preserve_defaulted_fields(self):
         old = {"spec": {"ports": [{"port": 80}], "retired": "yes", "marker": "ok"}}

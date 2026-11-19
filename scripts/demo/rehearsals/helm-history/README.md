@@ -65,6 +65,17 @@ post-renderer with a restricted writer. Add `--monitoring-lookup /path/to/kube-p
 to seed the chart CRDs and a synthetic Grafana Secret, then exercise its actual
 server-side dry-run using a read-only local identity.
 
+The Helm 4.3.2 writer in the loopback fixture upgraded a synthetic existing
+release from revision 6 to 7. A tampered render stopped before a revision was
+written. An incompatible immutable-field upgrade created failed revision 8,
+and the adapter identified revision 7 as the successful recovery target. A
+separate reader with no Secret patch access obtained the full 129-object
+monitoring upgrade, including 12 hooks and the synthetic Grafana password
+from the real Kubernetes Secret. Re-rendering through the transaction guard
+preserved all 129 objects and left the monitoring release at revision 6.
+The private API had no real controllers, scheduled pods, or cloud volumes.
+[Private API outcome](frozen-transaction-receipt.json)
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

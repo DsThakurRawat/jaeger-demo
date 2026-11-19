@@ -9,8 +9,11 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import subprocess
 import tempfile
+import time
 import zlib
 
 import yaml
@@ -94,7 +97,15 @@ def identity(obj, namespace):
 
 
 def index(objs, ns):
-    by_id = {identity(obj, ns): obj for obj in objs}
+    by_id = {}
+    for obj in objs:
+        # Helm 4 annotates the entire stream for post-rendering and removes its
+        # filename afterwards. Null, empty and omitted annotation maps are the
+        # same Kubernetes metadata and can be encoded differently on readback.
+        meta = obj["metadata"]
+        if not meta.get("annotations"):
+            obj = dict(obj, metadata={k: v for k, v in meta.items() if k != "annotations"})
+        by_id[identity(obj, ns)] = obj
     need(len(by_id) == len(objs), "Duplicate rendered object")
     return by_id
 
@@ -204,12 +215,54 @@ def validate_change(key, observed, candidate, images):
 
 
 def command(args, *, body=None, timeout=90, env=None):
+    # kubectl and Helm can print entire Secrets. Bound stdout in RAM while it
+    # is being read and discard stderr. A timeout or oversized stream stops
+    # the whole command group, including a spawned post-renderer.
     try:
-        p = subprocess.run(args, input=body, capture_output=True, timeout=timeout, env=env)
+        with subprocess.Popen(args, stdin=subprocess.PIPE if body else subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, start_new_session=True) as p:
+            try:
+                output = bytearray()
+                deadline = time.monotonic() + timeout
+                with selectors.DefaultSelector() as selector:
+                    os.set_blocking(p.stdout.fileno(), False)
+                    selector.register(p.stdout, selectors.EVENT_READ)
+                    if body:
+                        pending = memoryview(body)
+                        os.set_blocking(p.stdin.fileno(), False)
+                        selector.register(p.stdin, selectors.EVENT_WRITE)
+                    while selector.get_map():
+                        remaining = deadline - time.monotonic()
+                        need(remaining > 0, "Scheduled command timed out")
+                        events = selector.select(remaining)
+                        need(events, "Scheduled command timed out")
+                        for handle, event in events:
+                            stream = handle.fileobj
+                            if event == selectors.EVENT_READ:
+                                chunk = os.read(stream.fileno(), 65536)
+                                if chunk:
+                                    need(len(output) + len(chunk) <= LIMIT, "Oversized scheduled command output")
+                                    output.extend(chunk)
+                                    continue
+                            else:
+                                try:
+                                    pending = pending[os.write(stream.fileno(), pending[:65536]):]
+                                    if pending:
+                                        continue
+                                except BrokenPipeError:
+                                    pass
+                            selector.unregister(stream)
+                            stream.close()
+                need(p.wait(timeout=max(0, deadline - time.monotonic())) == 0, "Scheduled command failed")
+                return bytes(output)
+            finally:
+                if p.poll() is None:
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
     except (OSError, subprocess.TimeoutExpired):
         raise AdapterError("Scheduled command unavailable or timed out") from None
-    need(p.returncode == 0 and len(p.stdout) <= LIMIT, "Scheduled command failed or returned oversized output")
-    return p.stdout
 
 
 def kube(*args, body=None, timeout=90):
@@ -358,12 +411,15 @@ def storage_health(version, dashboards_version):
     verify_trace.check_trace("http://jaeger-collector.jaeger.svc:4318", "http://jaeger-query.jaeger.svc:16686")
 
 
-def patch_state(name, fingerprint, expected):
+def patch_state(name, fingerprint, expected, assert_locked):
     obj = get_object("v1:ConfigMap:default:" + deploy.STATE)
     uid, data = expected
     need(obj["metadata"]["uid"] == uid and all(obj.get("data", {}).get(k) == data[k] for k in COMPONENTS),
          "Deployment checkpoint drifted")
-    ops = tests(obj) + [{"op": "add", "path": "/data/" + name, "value": fingerprint}]
+    change = ({"op": "add", "path": "/data/" + name, "value": fingerprint} if "data" in obj
+              else {"op": "add", "path": "/data", "value": {name: fingerprint}})
+    ops = tests(obj) + [change]
+    assert_locked()
     kube("-n", "default", "patch", "configmap", deploy.STATE, "--type=json", "--patch-file=/dev/stdin", body=encode(ops))
 
 
@@ -391,7 +447,7 @@ def edits(prior, desired, live, path=""):
     return changes
 
 
-def patch_supplemental(obj, baseline):
+def patch_supplemental(obj, baseline, assert_locked):
     ns = obj["metadata"]["namespace"]
     ident = identity(obj, ns)
     live = get_object(ident)
@@ -412,6 +468,7 @@ def patch_supplemental(obj, baseline):
     if changes:
         api, kind, _, name = ident.split(":")
         resource = kind.lower() + ("." + api.split("/")[0] if "/" in api else "")
+        assert_locked()
         kube("-n", ns, "patch", resource, name, "--type=json", "--patch-file=/dev/stdin", body=encode(tests(live) + changes))
     need(subset(obj, get_object(ident)), "Supplement repair did not restore the frozen desired fields")
 
@@ -670,7 +727,7 @@ def apply(files, *, slot, configuration_sha, assert_locked):
             raise
         for obj in extras:
             assert_locked()
-            patch_supplemental(obj, row["states"][identity(obj, RELEASES[key][0])])
+            patch_supplemental(obj, row["states"][identity(obj, RELEASES[key][0])], assert_locked)
         rollout(key)
         verify_upgrade(key, row, candidate)
         if key.endswith("-jaeger"):
@@ -685,7 +742,7 @@ def apply(files, *, slot, configuration_sha, assert_locked):
         stack = "oci" if key.startswith("oci-") else "otel"
         stack_health.check(stack, tracking=tracking[stack + "-jaeger"])
         assert_locked()
-        patch_state(part, plan["fingerprints"][part], (plan["checkpointUID"], previous))
+        patch_state(part, plan["fingerprints"][part], (plan["checkpointUID"], previous), assert_locked)
         previous[part] = plan["fingerprints"][part]
     need(checkpoint() == (plan["checkpointUID"], previous), "Final fingerprints differ from the verified selection")
     assert_locked()
