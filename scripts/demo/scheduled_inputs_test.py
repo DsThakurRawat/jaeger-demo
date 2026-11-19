@@ -82,6 +82,24 @@ class InputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "matching executor"):
                 inputs.verify_runtime(Path(tmp))
 
+    def test_approval_and_preview_changes_require_a_matching_runtime_image(self):
+        paths = {
+            "scripts/demo/scheduled_approvals.py", "scripts/demo/scheduled_approval_types.py",
+            "ops/executor/preview/main.go", "ops/executor/preview/go.mod", "ops/executor/preview/go.sum",
+            "ops/executor/preview/check-abi.py", "ops/executor/Containerfile",
+        }
+        self.assertTrue(paths.issubset(inputs.GUARDED))
+        with tempfile.TemporaryDirectory() as temp:
+            baked, reviewed = Path(temp) / "image", Path(temp) / "reviewed"
+            for name in paths:
+                for root, value in ((baked, "original"), (reviewed, "changed")):
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(value)
+                with self.subTest(name=name), patch.object(inputs, "ROOT", baked), patch.object(inputs, "GUARDED", (name,)):
+                    with self.assertRaisesRegex(ValueError, "matching executor"):
+                        inputs.verify_runtime(reviewed)
+
     def test_chart_updates_require_the_reviewed_archive_checksum(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "chart-1.0.0.tgz"

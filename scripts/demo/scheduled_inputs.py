@@ -35,11 +35,13 @@ GUARDED = (
     "examples/oci/deploy-all.sh", "examples/otel-demo/deploy-all.sh", RESOLVER,
     "scripts/demo/jaeger-chart.sh", "scripts/demo/deploy.py", "scripts/demo/handover.py",
     "scripts/demo/recovery_policy.py", "scripts/demo/scheduled_adapter.py", "scripts/demo/scheduled_bundle.py",
+    "scripts/demo/scheduled_approvals.py", "scripts/demo/scheduled_approval_types.py",
     "scripts/demo/scheduled_inputs.py", "scripts/demo/scheduled_receiver.py", "scripts/demo/scheduled_request.py",
     "scripts/demo/stack_health.py", "scripts/demo/verify_trace.py",
     "scripts/demo/helm-plugins/verify-frozen-manifests/plugin.yaml",
     "scripts/demo/helm-plugins/verify-frozen-manifests/verify.py", "ops/executor/Containerfile",
-    "ops/executor/requirements.lock", "docs/all-five-chart-access.json",
+    "ops/executor/preview/go.mod", "ops/executor/preview/go.sum", "ops/executor/preview/main.go",
+    "ops/executor/preview/check-abi.py", "ops/executor/requirements.lock", "docs/all-five-chart-access.json",
 )
 LOCK = "ops/executor/chart-archives.json"
 

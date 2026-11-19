@@ -1,5 +1,15 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS helm-preview
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+WORKDIR /src
+COPY ops/executor/preview/go.mod ops/executor/preview/go.sum ./
+RUN go mod download && go mod verify
+COPY ops/executor/preview/main.go ./
+RUN --network=none GOOS=linux GOARCH="$TARGETARCH" go build -mod=readonly -trimpath -buildvcs=false \
+      -ldflags="-s -w" -o /out/jaeger-helm-preview .
+
 FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates curl git jq \
@@ -15,6 +25,9 @@ RUN set -eu; case "$TARGETARCH" in \
     install -m 0755 "linux-${TARGETARCH}/helm" kubectl /usr/local/bin/; \
     rm -rf "linux-${TARGETARCH}" helm.tgz kubectl
 WORKDIR /opt/jaeger-demo
+COPY --from=helm-preview /out/jaeger-helm-preview /usr/local/bin/jaeger-helm-preview
+COPY ops/executor/preview/ ops/executor/preview/
+RUN python3 ops/executor/preview/check-abi.py /usr/local/bin/jaeger-helm-preview
 COPY ops/executor/requirements.lock ops/executor/requirements.lock
 RUN pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes -r ops/executor/requirements.lock
 COPY scripts/demo/ scripts/demo/
