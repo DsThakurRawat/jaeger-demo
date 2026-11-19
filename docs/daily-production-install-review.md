@@ -55,6 +55,17 @@ jq -r '.stages[] | select(.file) | "\(.sha256)  \(.file)"' review.json | shasum 
 jq -r '.stages[] | [.phase, .objects, (.gate // .pending)] | @tsv' review.json
 ```
 
+From a separate checkout of the reviewed release commit, verify the source
+hashes in the packet. Use the full commit and installation image from the
+successful main-branch publication run. Record its URL alongside the packet
+digest so a second maintainer can trace the image and manifests to the release.
+
+```bash
+test "$(git rev-parse HEAD)" = "$reviewed_main_sha" &&
+  jq -r '.rendererSources | to_entries[] | .value + "  " + .key' "$packet_directory/review.json" |
+  shasum -a 256 -c
+```
+
 Use the stage numbers for **review and dependency order**. Confirm the live prerequisites in the index.
 The target cluster, bootstrap resource UIDs, existing protocol and empty lock,
 effective permissions, release baselines, key projections and budgeted capacity
