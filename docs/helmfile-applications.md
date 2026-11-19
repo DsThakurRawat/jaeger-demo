@@ -63,7 +63,7 @@ This credential-free check uses the extracted scripts' chart versions and equiva
 
 ## Public health checks
 
-Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
+Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. Calls and latency use the same UTC end time and must have matching sample timestamps. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
 
 ## Pull request render summary
 
