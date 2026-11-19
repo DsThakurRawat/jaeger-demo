@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Installable native controls for independently planned, private daily parameters."""
 
+import copy
 import json
 from pathlib import Path
 import sys
@@ -15,8 +16,9 @@ API = t.GROUP + "/" + t.VERSION
 PREPARER = f"system:serviceaccount:{p.OPS}:{p.PREPARER}"
 SPEC = {
     "type": "object",
-    "required": ["scope", "slot", "configurationSHA", "bundleSHA256", "requestUID", "changes"],
+    "required": ["scope", "partition", "slot", "configurationSHA", "bundleSHA256", "requestUID", "changes"],
     "properties": {
+        "partition": {"type": "string", "enum": list(t.PARTITIONS)},
         "scope": {"type": "string", "enum": list(t.SCOPES)},
         "slot": {"type": "string", "pattern": "^" + t.DATE + "$"},
         "configurationSHA": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -82,10 +84,11 @@ def seeds():
         p.resource(
             API,
             t.KIND,
-            t.name(scope),
+            t.name(part),
             p.OPS,
             spec={
-                "scope": scope,
+                "scope": t.namespace(part),
+                "partition": part,
                 "slot": "1970-01-01T13:00:00Z",
                 "configurationSHA": "0" * 40,
                 "bundleSHA256": "0" * 64,
@@ -93,14 +96,43 @@ def seeds():
                 "changes": {},
             },
         )
-        for scope in t.SCOPES
+        for part in t.PARTITIONS
     ]
 
 
-def typed_binding(pair, scope):
+def typed_binding(pair, part):
     pair[0]["spec"]["paramKind"] = {"apiVersion": API, "kind": t.KIND}
-    pair[1]["spec"]["paramRef"]["name"] = t.name(scope)
+    pair[1]["spec"]["paramRef"]["name"] = t.name(part)
     return pair
+
+
+def workload_bindings(pair, namespace, group, resource, names):
+    # One shared content policy. Bind each exact target name to one independent
+    # parameter; no CEL hash function or dynamic parameter name is required.
+    policy, template = pair
+    policy["spec"]["paramKind"] = {"apiVersion": API, "kind": t.KIND}
+    by_part = defaultdict(list)
+    for name in sorted(names):
+        handle = (group or "core") + "/" + resource + "/" + name
+        by_part[t.partition(namespace, handle)].append(name)
+    result = [policy]
+    for part, selected in sorted(by_part.items()):
+        binding = copy.deepcopy(template)
+        binding["metadata"]["name"] += "-" + part
+        binding["spec"]["paramRef"]["name"] = t.name(part)
+        binding["spec"]["matchResources"] = {
+            "resourceRules": [
+                {
+                    "apiGroups": [group],
+                    "apiVersions": ["v1"],
+                    "operations": ["UPDATE"],
+                    "resources": [resource],
+                    "resourceNames": selected,
+                }
+            ]
+        }
+        result.append(binding)
+    return result
 
 
 def verify_receipt_guards():
@@ -110,13 +142,13 @@ def verify_receipt_guards():
         ' && object.data.state in ["ready","requested","running"]'
     )
     # Each binding must pass, and the admission controller denies missing parameters.
-    for scope in t.SCOPES:
+    for part in t.PARTITIONS:
         expr = (
-            f'params.spec.scope == "{scope}" && params.spec.requestUID == object.metadata.uid && '
+            f'params.spec.scope == "{t.namespace(part)}" && params.spec.partition == "{part}" && params.spec.requestUID == object.metadata.uid && '
             '["configurationSHA","bundleSHA256","slot"].all(k, dyn(params.spec)[k] == object.data[k])'
         )
         pair = p.policies(
-            "jaeger-demo-required-approval-" + scope,
+            "jaeger-demo-required-approval-" + part,
             "",
             "configmaps",
             ["UPDATE"],
@@ -126,7 +158,7 @@ def verify_receipt_guards():
             running=False,
         )
         pair[0]["spec"]["matchConditions"] = pair[0]["spec"]["matchConditions"][1:]
-        result += typed_binding(pair, scope)
+        result += typed_binding(pair, part)
     return result
 
 
@@ -134,7 +166,7 @@ def publication_guard():
     expr = (
         'request.operation == "UPDATE" && request.userInfo.username == '
         + json.dumps(PREPARER)
-        + ' && object.spec.scope == oldObject.spec.scope && object.metadata.name == "daily-approved-" + object.spec.scope'
+        + ' && object.spec.scope == oldObject.spec.scope && object.spec.partition == oldObject.spec.partition && object.metadata.name == "daily-approved-" + object.spec.partition'
         " && object.spec.requestUID == params.metadata.uid && "
         + p.same_except(
             "oldObject.metadata", "object.metadata", ["resourceVersion", "generation", "managedFields"]
@@ -158,7 +190,7 @@ def publication_guard():
             "expression": "request.namespace == "
             + json.dumps(p.OPS)
             + " && request.name in "
-            + json.dumps([t.name(n) for n in t.SCOPES]),
+            + json.dumps([t.name(n) for n in t.PARTITIONS]),
         }
     ]
     pair[0]["spec"]["matchConstraints"]["resourceRules"][0]["apiVersions"] = [t.VERSION]
@@ -204,7 +236,7 @@ def preview_controls():
 
 
 def approval_roles():
-    names = [t.name(n) for n in t.SCOPES]
+    names = [t.name(n) for n in t.PARTITIONS]
     return p.bindings(
         "jaeger-demo-approval-stage",
         p.OPS,

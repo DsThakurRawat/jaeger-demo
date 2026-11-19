@@ -14,6 +14,8 @@ VERSION = "v1alpha1"
 KIND = "DailyWorkloadApproval"
 RESOURCE = "dailyworkloadapprovals"
 SCOPES = ("default", "jaeger", "opensearch", "otel-demo", "kube-system")
+DEFAULT_BUCKETS = 8
+PARTITIONS = tuple(f"default-{n}" for n in range(DEFAULT_BUCKETS)) + SCOPES[1:]
 MAX_PART = 640 * 1024
 MAX_CHANGES = 100
 SYSTEM_META = {"resourceVersion", "managedFields", "generation", "creationTimestamp", "uid"}
@@ -29,10 +31,24 @@ def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def name(scope):
+def partition(scope, handle):
     if scope not in SCOPES:
-        raise ValueError("Unknown workload approval namespace")
-    return "daily-approved-" + scope
+        raise ValueError("Unknown approval namespace")
+    if scope != "default":
+        return scope
+    prefix = hashlib.sha256(handle.encode()).digest()[:4]
+    return f"default-{int.from_bytes(prefix, 'big') % DEFAULT_BUCKETS}"
+
+
+def namespace(part):
+    if part not in PARTITIONS:
+        raise ValueError("Unknown workload approval partition")
+    return "default" if part.startswith("default-") else part
+
+
+def name(part):
+    namespace(part)
+    return "daily-approved-" + part
 
 
 def eligible(row):

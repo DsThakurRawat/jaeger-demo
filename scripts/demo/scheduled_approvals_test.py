@@ -91,9 +91,11 @@ class ProjectionTests(unittest.TestCase):
         parts = {
             t.name(s): {
                 "metadata": {"uid": "id-" + s},
-                "spec": dict(scope=s, slot=SLOT, **RECEIPT, requestUID="control", changes={}),
+                "spec": dict(
+                    scope=t.namespace(s), partition=s, slot=SLOT, **RECEIPT, requestUID="control", changes={}
+                ),
             }
-            for s in t.SCOPES
+            for s in t.PARTITIONS
         }
         parts["daily-hosted-update"] = {"metadata": {"uid": "control"}}
         get = lambda kind, name, ns: parts[name]
@@ -181,7 +183,8 @@ class ProjectionTests(unittest.TestCase):
         ):
             wanted = {"uid": "actual", "variants": [t.variant(live), t.variant(future)]}
             self.assertEqual(
-                a.prepare_variants({}, SLOT, RECEIPT)["default"], {"core/configmaps/user-config": wanted}
+                a.prepare_variants({}, SLOT, RECEIPT)[t.partition("default", "core/configmaps/user-config")],
+                {"core/configmaps/user-config": wanted},
             )
             preview.assert_called_once_with(old, new, live, "default", "jaeger", "csa")
             fake.projection.return_value = {"uid": "foreign", "state": "wrong"}
@@ -193,7 +196,7 @@ class ProjectionTests(unittest.TestCase):
                 a.prepare_variants({}, SLOT, RECEIPT)
             fake.history.return_value = records, rollback, rollback
             plan["selected"] = []
-            self.assertEqual(a.prepare_variants({}, SLOT, RECEIPT), {s: {} for s in t.SCOPES})
+            self.assertEqual(a.prepare_variants({}, SLOT, RECEIPT), {s: {} for s in t.PARTITIONS})
 
     def test_csa_uses_frozen_success_or_failed_original_and_never_downloads(self):
         obj = {
@@ -219,3 +222,22 @@ class ProjectionTests(unittest.TestCase):
             fake.command.return_value = t.canonical({"type": "unsafe", "patch": {}})
             with self.assertRaisesRegex(ValueError, "Invalid offline"):
                 a.preview(obj, obj, live, "default", "jaeger", "csa")
+
+    def test_shuffled_handle_or_missing_bucket_aborts_signed_readback(self):
+        with self.assertRaisesRegex(ValueError, "Unknown"):
+            t.partition("bogus", "core/configmaps/x")
+        desired = {
+            p: dict(scope=t.namespace(p), partition=p, slot=SLOT, **RECEIPT, requestUID="control", changes={})
+            for p in t.PARTITIONS
+        }
+        handle = "core/configmaps/user-config"
+        expected = t.partition("default", handle)
+        wrong = next(p for p in t.PARTITIONS if p.startswith("default-") and p != expected)
+        desired[wrong]["changes"][handle] = {}
+
+        def get(kind, name, ns):
+            p = name.removeprefix("daily-approved-")
+            return {"metadata": {"uid": "fixed-" + p}, "spec": desired[p]}
+
+        with patch.object(a, "get", side_effect=get), self.assertRaisesRegex(ValueError, "incorrect"):
+            a.aggregate(SLOT, RECEIPT, "control")

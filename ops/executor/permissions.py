@@ -318,7 +318,7 @@ def regular(review=None, *, daily=False):
                 vars_ = [{"name":"id","expression":json.dumps((group or "core")+"/"+target+"/")+" + request.name"}]
                 pair = policies(label,group,target,["UPDATE"],expression,"Unreviewed change to hosted workload contents",
                                 condition=condition,variables=vars_,running=False)
-                guards += daily_policies.typed_binding(pair,ns)
+                guards += daily_policies.workload_bindings(pair, ns, group, target, selected)
             else:
                 guards += policies(label,group,target,["UPDATE"],expr,
                                    "Unreviewed change to hosted workload contents",condition=condition,variables=variables)

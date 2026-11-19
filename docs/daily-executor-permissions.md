@@ -31,7 +31,7 @@ components. For each selected release the independent preparer reads the
 specific live UID, the frozen history hashes and the reviewed render. When a
 chart manifest differs, it submits the proposed operation with server-side
 dry-run. The Kubernetes API runs its usual defaulting and admission. The
-preparer records the existing and returned states for that UID in one of five
+preparer records the existing and returned states for that UID in one of twelve
 private DailyWorkloadApproval resources. Unchanged chart objects retain the
 ordinary no-change path. Trace-generator changes use the exact same JSON Patch
 builder as the writer. Application images are bound to the exact admitted digest
@@ -51,7 +51,7 @@ verified with `go.sum`.
 
 Install stages in this order on a deployment approved for the service accounts.
 The operator creates the CRD with `approval-schema`, waits for its Established
-condition, seeds the five fixed names with `approval-seeds`, then installs
+condition, seeds the twelve fixed names with `approval-seeds`, then installs
 `approval-guards`, `daily-guards` and the separate history and hook guards.
 Verify the bindings and their rejection cases before installing the
 `approval-grants`, `daily-grants`, read, hook and history roles. The
@@ -63,7 +63,7 @@ policy blocks the new path. Each stage is rendered locally by
 The daily operation reuses the same CRD, admission policies and roles for each
 slot.
 
-The preparer can read and patch only the five named private projection
+The preparer can read and patch only the twelve named private projection
 resources in the operations namespace. Its listed workload patch rights
 require Kubernetes `request.dryRun`. The API denies an actual update. It cannot
 create or delete workloads. The executor may change an existing named ordinary
@@ -82,6 +82,16 @@ native parameter to match the control object's UID, date, configuration commit
 and sealed bundle digest. A running or failed slot blocks replacement. An
 expired, unclaimed slot can be superseded after the trusted preparer checks
 expiry. The requester needs access only to its existing request ConfigMap.
+Eight fixed partitions serve the default namespace, which contains the monitoring
+dashboards and rules. An object handle is the API group (or `core`), plural
+resource and name, joined with slashes. The first four SHA-256 bytes, read as an
+unsigned big-endian integer modulo eight, select `default-0` through `default-7`.
+The other four namespaces each have one partition. The admission bindings use
+exact resource names to select the same fixed parameter as the publisher.
+All twelve records, including empty partitions, participate in the signed
+aggregate and every ready, requested and running transition. The API refuses a
+signal when any one bucket is missing or belongs to another slot.
+
 Each private partition is limited to 100 changed identities and 640 KiB of
 spec. A larger change needs operator handling before any daily mutation.
 Keep read access private because chart configuration and pod metadata can

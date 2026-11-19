@@ -282,7 +282,7 @@ def preview(original, desired, live, ns, release, method):
 def prepare_variants(files, slot, receipt):
     adapter = client()
     plan = adapter.validate_plan(files, slot, receipt["configurationSHA"])
-    values = {ns: {} for ns in t.SCOPES}
+    values = {part: {} for part in t.PARTITIONS}
     allowed = t.allowed()
     for key, row in plan["releases"].items():
         if adapter.component(key) not in plan["selected"]:
@@ -335,10 +335,11 @@ def prepare_variants(files, slot, receipt):
             safe_transition(live, after)
             namespace, group, resource, name = rid
             handle = (group or "core") + "/" + resource + "/" + name
-            require(handle not in values[namespace], "Duplicate independent approval target")
+            part = t.partition(namespace, handle)
+            require(handle not in values[part], "Duplicate independent approval target")
             # For the existent deployed baseline, the original admitted object is the
             # rollback expectation. Any different recovered output needs operator review.
-            values[namespace][handle] = {
+            values[part][handle] = {
                 "uid": live["metadata"]["uid"],
                 "variants": [t.variant(live), t.variant(after)],
             }
@@ -350,17 +351,21 @@ def prepare_variants(files, slot, receipt):
 
 def aggregate(slot, receipt, uid):
     all_parts = {}
-    for scope in t.SCOPES:
-        obj = get(TYPE, t.name(scope), t.OPS)
+    for bucket in t.PARTITIONS:
+        scope = t.namespace(bucket)
+        obj = get(TYPE, t.name(bucket), t.OPS)
         part = obj["spec"]
         require(
-            set(part) == {"scope", "slot", "requestUID", "configurationSHA", "bundleSHA256", "changes"}
-            and (part["scope"], part["slot"], part["requestUID"]) == (scope, slot, uid)
+            set(part)
+            == {"scope", "partition", "slot", "requestUID", "configurationSHA", "bundleSHA256", "changes"}
+            and (part["scope"], part["partition"], part["slot"], part["requestUID"])
+            == (scope, bucket, slot, uid)
+            and all(t.partition(scope, handle) == bucket for handle in part["changes"])
             and all(part[k] == v for k, v in receipt.items())
             and len(t.canonical(part)) <= t.MAX_PART,
             "Missing, oversized or incorrect daily approval parameter",
         )
-        all_parts[scope] = {"uid": obj["metadata"]["uid"], "spec": part}
+        all_parts[bucket] = {"uid": obj["metadata"]["uid"], "spec": part}
     return t.digest(all_parts)
 
 
@@ -384,17 +389,25 @@ def publish_approvals(files, slot, receipt):
         )
     changes = prepare_variants(files, slot, receipt)
     desired = {}
-    for scope in t.SCOPES:
-        spec = dict(scope=scope, slot=slot, requestUID=uid, **receipt, changes=changes[scope])
+    for bucket in t.PARTITIONS:
+        scope = t.namespace(bucket)
+        spec = dict(
+            scope=scope, partition=bucket, slot=slot, requestUID=uid, **receipt, changes=changes[bucket]
+        )
         require(
-            len(t.canonical(spec)) <= t.MAX_PART and len(changes[scope]) <= t.MAX_CHANGES,
+            len(t.canonical(spec)) <= t.MAX_PART
+            and len(changes[bucket]) <= t.MAX_CHANGES
+            and all(t.partition(scope, handle) == bucket for handle in changes[bucket]),
             "Daily approval exceeds private resource limit",
         )
-        desired[scope] = spec
+        desired[bucket] = spec
     staged = {}
-    for scope, spec in desired.items():
-        previous = get(TYPE, t.name(scope), t.OPS)
-        require(previous["spec"]["scope"] == scope, "Misdirected daily approval partition")
+    for bucket, spec in desired.items():
+        previous = get(TYPE, t.name(bucket), t.OPS)
+        require(
+            previous["spec"]["scope"] == t.namespace(bucket) and previous["spec"]["partition"] == bucket,
+            "Misdirected daily approval partition",
+        )
         patched = previous
         if previous["spec"] != spec:
             operations = client().tests(previous) + [{"op": "replace", "path": "/spec", "value": spec}]
@@ -404,7 +417,7 @@ def publish_approvals(files, slot, receipt):
                     t.OPS,
                     "patch",
                     TYPE,
-                    t.name(scope),
+                    t.name(bucket),
                     "--type=json",
                     "--patch-file=/dev/stdin",
                     "-o",
@@ -416,7 +429,7 @@ def publish_approvals(files, slot, receipt):
             patched["spec"] == spec and patched["metadata"]["uid"] == previous["metadata"]["uid"],
             "Native admission did not preserve the staged projection",
         )
-        staged[scope] = {"uid": patched["metadata"]["uid"], "spec": spec}
+        staged[bucket] = {"uid": patched["metadata"]["uid"], "spec": spec}
     calculated = t.digest(staged)
     require(aggregate(slot, receipt, uid) == calculated, "Incomplete private staging readback")
     return calculated

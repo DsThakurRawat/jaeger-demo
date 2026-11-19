@@ -59,3 +59,32 @@ class PermissionTests(unittest.TestCase):
         review["changes"][0]["states"].append(candidate)
         with self.assertRaises(ValueError):
             p.workload(review)
+
+    def test_each_eligible_name_has_one_native_binding_to_its_publisher_partition(self):
+        import sys
+        from collections import Counter
+        sys.path.insert(0,str(Path(__file__).resolve().parents[2] / "ops/executor"))
+        import approval_policies
+        import scheduled_approval_types as t
+        guards,_=p.regular(daily=True)
+        observed=Counter()
+        for binding in guards:
+            if binding["kind"]!="ValidatingAdmissionPolicyBinding" or "matchResources" not in binding["spec"]:
+                continue
+            part=binding["spec"]["paramRef"]["name"].removeprefix("daily-approved-")
+            scope=t.namespace(part)
+            for rule in binding["spec"]["matchResources"]["resourceRules"]:
+                self.assertEqual(rule["operations"],["UPDATE"])
+                group,=rule["apiGroups"]
+                resource,=rule["resources"]
+                for name in rule["resourceNames"]:
+                    handle=(group or "core")+"/"+resource+"/"+name
+                    self.assertEqual(t.partition(scope,handle),part)
+                    observed[scope,group,resource,name]+=1
+        self.assertTrue(all(observed[row]==1 for row in t.allowed()))
+        parts={s["spec"]["partition"] for s in approval_policies.seeds()}
+        record_names={b["spec"]["paramRef"]["name"] for b in approval_policies.verify_receipt_guards()
+                      if b["kind"]=="ValidatingAdmissionPolicyBinding"}
+        self.assertEqual(parts,set(t.PARTITIONS))
+        self.assertEqual({t.name(p) for p in parts},record_names)
+        self.assertEqual(len(parts),12)

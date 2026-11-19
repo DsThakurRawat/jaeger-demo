@@ -153,11 +153,14 @@ def exercise(cfg, context):
                     for k in ("uid", "resourceVersion")
                 ]
 
-        specs = {s: dict(scope=s, slot=slot, requestUID=uid, changes={}, **receipt) for s in t.SCOPES}
+        specs = {
+            s: dict(scope=t.namespace(s), partition=s, slot=slot, requestUID=uid, changes={}, **receipt)
+            for s in t.PARTITIONS
+        }
         for (ns, n), old in zip(refs, live):
             candidate = patch(prep, ns, "configmap", n, {"data": {"settings": "changed"}}, dry=True)
             patch(prep, ns, "configmap", n, {"data": {"settings": "changed"}}, denied="server-side dry-run")
-            specs[ns]["changes"]["core/configmaps/" + n] = {
+            specs[t.partition(ns, "core/configmaps/" + n)]["changes"]["core/configmaps/" + n] = {
                 "uid": old["metadata"]["uid"],
                 "variants": [t.variant(old), t.variant(candidate)],
             }
@@ -209,14 +212,16 @@ def exercise(cfg, context):
             ):
                 candidate = app.preview(doc, desired, before, ns, release, method)
             app.safe_transition(before, candidate)
-            specs[ns]["changes"]["apps/deployments/" + n] = {
+            specs[t.partition(ns, "apps/deployments/" + n)]["changes"]["apps/deployments/" + n] = {
                 "uid": before["metadata"]["uid"],
                 "variants": [t.variant(before), t.variant(candidate)],
             }
             tmpl.write_bytes(t.canonical(desired))
             helm_objects.append((ns, release, chart, n, before, candidate))
         ready = {"data": dict(state="ready", engine="scripts-v1", slot=slot, **receipt)}
-        for scope in t.SCOPES[:-1]:
+        for scope in t.PARTITIONS:
+            if scope == "default-7":
+                continue
             patch(prep, p.OPS, t.RESOURCE, t.name(scope), {"spec": specs[scope]})
         patch(prep, p.OPS, "cm", "daily-hosted-update", ready, denied="Every daily parameter")
         # The public receipt goes into the control plane only after readback of every
@@ -237,7 +242,7 @@ def exercise(cfg, context):
             prep,
             p.OPS,
             t.RESOURCE,
-            t.name("default"),
+            t.name("default-0"),
             {"spec": {"bundleSHA256": "f" * 64}},
             denied="before advertisement",
         )
@@ -267,7 +272,7 @@ def exercise(cfg, context):
         print(
             json.dumps(
                 {
-                    "fiveParameterBindings": True,
+                    "twelveParameterBindings": True,
                     "fourNamespaces": True,
                     "nativeDryRun": True,
                     "exactForwardAndRollback": True,
