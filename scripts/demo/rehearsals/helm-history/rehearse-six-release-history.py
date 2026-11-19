@@ -365,9 +365,10 @@ def main():
                 result = execute([sys.executable, probe, "--kubeconfig", cfg, "--context", "fixture"], timeout=480)
                 evidence = json.loads(result.stdout)
                 assert evidence["exactForwardAndRollback"] and evidence["realHelmSSAAndCSA"]
+                assert evidence["rollbackAfterControllerRevisionUpdate"]
                 with receipt.open("x") as file:
                     json.dump({"productionAccess": False, "typedApprovals": evidence, "passed": True}, file, indent=2)
-                print("PASS: two native identities and five per-slot approval partitions")
+                print("PASS: native approval partitions, both Helm apply modes and rollback after a controller revision change")
                 return
             for ns in ("jaeger", "opensearch", "otel-demo"):
                 kube(["create", "namespace", ns])

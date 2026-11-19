@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import scheduled_adapter as adapter
 import scheduled_approval_types as t
 import scheduled_approvals as a
 
@@ -35,6 +36,28 @@ class ProjectionTests(unittest.TestCase):
             "metadata": meta,
             "spec": {"template": {"spec": {"serviceAccountName": "read-only", "containers": [c]}}},
         }
+
+    def test_only_top_level_deployment_revision_can_advance_between_helm_calls(self):
+        revision = t.DEPLOYMENT_REVISION
+        deployment = self.fixture()
+        deployment["kind"] = "Deployment"
+        with_revision = copy.deepcopy(deployment)
+        with_revision["metadata"]["annotations"] = {revision: "2"}
+        for projection in (t.variant, adapter.projection):
+            with self.subTest(projection=projection.__name__):
+                self.assertEqual(projection(deployment), projection(with_revision))
+                updated = copy.deepcopy(with_revision)
+                updated["metadata"]["annotations"][revision] = "3"
+                self.assertEqual(projection(with_revision), projection(updated))
+                self.assertEqual(with_revision["metadata"]["annotations"], {revision: "2"})
+                updated["metadata"]["annotations"]["example.com/owner"] = "fixture"
+                self.assertNotEqual(projection(with_revision), projection(updated))
+                nested = copy.deepcopy(with_revision)
+                nested["spec"]["template"]["metadata"] = {"annotations": {revision: "2"}}
+                self.assertNotEqual(projection(with_revision), projection(nested))
+                for other_kind in ("DaemonSet", "StatefulSet"):
+                    self.assertNotEqual(projection(dict(deployment, kind=other_kind)),
+                                        projection(dict(with_revision, kind=other_kind)))
 
     def test_collector_identity_command_injected_env_and_image_origin(self):
         old = self.fixture()

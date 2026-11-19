@@ -314,10 +314,10 @@ def regular(review=None, *, daily=False):
                 # Every meaningful daily write, including a legitimate snapshot image,
                 # must match exactly what this independent slot authorized.
                 expression = same
-                # Public routing and certificate/controller ownership are operator-managed.
-                # Even an independently staged candidate cannot open that boundary.
+                # Public routes and certificate settings remain fixed after the slot is staged.
                 if (group, target) != ("networking.k8s.io", "ingresses"):
-                    expression = "("+expression+") || (request.name in "+json.dumps(sorted(mutable))+" && "+daily_policies.exact_variant()+")"
+                    approval = daily_policies.exact_variant(deployment=(group, target) == ("apps", "deployments"))
+                    expression = "("+expression+") || (request.name in "+json.dumps(sorted(mutable))+" && "+approval+")"
                 vars_ = [{"name":"id","expression":json.dumps((group or "core")+"/"+target+"/")+" + request.name"}]
                 pair = policies(label,group,target,["UPDATE"],expression,"Unreviewed change to hosted workload contents",
                                 condition=condition,variables=vars_,running=False)

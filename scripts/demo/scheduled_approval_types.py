@@ -15,6 +15,7 @@ KIND = "DailyWorkloadApproval"
 RESOURCE = "dailyworkloadapprovals"
 SCOPES = ("default", "jaeger", "opensearch", "otel-demo", "kube-system")
 DEFAULT_BUCKETS = 8
+DEPLOYMENT_REVISION = "deployment.kubernetes.io/revision"
 PARTITIONS = tuple(f"default-{n}" for n in range(DEFAULT_BUCKETS)) + SCOPES[1:]
 MAX_PART = 640 * 1024
 MAX_CHANGES = 100
@@ -70,10 +71,23 @@ def allowed():
     return {(r["scope"], r["apiGroup"], r["resource"], r["name"]) for r in rows if eligible(r)}
 
 
+def workload_metadata(obj):
+    metadata = obj["metadata"]
+    if (obj.get("apiVersion"), obj.get("kind")) != ("apps/v1", "Deployment") or "annotations" not in metadata:
+        return metadata
+    # The Deployment controller advances the revision independently of Helm.
+    # An empty annotation map and an absent map encode the same Kubernetes state.
+    annotations = {k: v for k, v in (metadata["annotations"] or {}).items() if k != DEPLOYMENT_REVISION}
+    rest = {k: v for k, v in metadata.items() if k != "annotations"}
+    if annotations:
+        rest["annotations"] = annotations
+    return rest
+
+
 def variant(obj):
     return {
         "body": {k: v for k, v in obj.items() if k not in {"apiVersion", "kind", "metadata", "status"}},
-        "metadata": {k: v for k, v in obj["metadata"].items() if k not in SYSTEM_META},
+        "metadata": {k: v for k, v in workload_metadata(obj).items() if k not in SYSTEM_META},
     }
 
 

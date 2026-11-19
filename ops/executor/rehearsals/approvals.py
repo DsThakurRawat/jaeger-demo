@@ -101,6 +101,9 @@ def exercise(cfg, context):
             denied=denied,
         )
 
+    def revision(value):
+        return {"metadata": {"annotations": {t.DEPLOYMENT_REVISION: value}}}
+
     with tempfile.TemporaryDirectory() as tmp:
 
         def client(who):
@@ -198,6 +201,10 @@ def exercise(cfg, context):
                 "--server-side=" + ("true" if method == "ssa" else "false"),
                 "--wait=hookOnly",
             )
+            # Envtest has an API server and etcd. Replay the Deployment controller's
+            # independent revision writes before planning and after the Helm upgrade.
+            patch(prep, ns, "deployment", n, revision("1"), dry=True, denied="server-side dry-run")
+            patch(admin, ns, "deployment", n, revision("1"))
             before = call(prep, "-n", ns, "get", "deployment", n, "-o", "json")
             desired = copy.deepcopy(doc)
             desired["spec"]["template"]["spec"]["containers"][0]["image"] = "registry.invalid/reviewed"
@@ -261,9 +268,19 @@ def exercise(cfg, context):
             call(helm, "upgrade", release, str(chart), "--server-side=auto", "--wait=hookOnly")
             changed = call(admin, "-n", ns, "get", "deployment", n, "-o", "json")
             assert t.variant(changed) == t.variant(candidate)
+            patch(admin, ns, "deployment", n, revision("2"))
+            for candidate_patch in [
+                revision("3"),
+                revision(None),
+                {"metadata": {"annotations": {"demo.jaegertracing.io/fixture": "unapproved"}}},
+                {"metadata": {"labels": {"fixture": "unapproved"}}},
+                {"spec": {"template": {"metadata": {"annotations": {t.DEPLOYMENT_REVISION: "2"}}}}},
+            ]:
+                patch(actor, ns, "deployment", n, candidate_patch, denied="Unreviewed change")
             call(helm, "rollback", release, "1", "--wait=hookOnly")
             restored = call(admin, "-n", ns, "get", "deployment", n, "-o", "json")
             assert t.variant(restored) == t.variant(before)
+            assert restored["metadata"]["annotations"][t.DEPLOYMENT_REVISION] == "2"
         for ns, n in refs:
             patch(actor, ns, "cm", n, {"data": {"settings": "changed"}})
             patch(actor, ns, "cm", n, {"data": {"settings": "unreviewed"}}, denied="Unreviewed change")
@@ -277,6 +294,7 @@ def exercise(cfg, context):
                     "nativeDryRun": True,
                     "exactForwardAndRollback": True,
                     "realHelmSSAAndCSA": True,
+                    "rollbackAfterControllerRevisionUpdate": True,
                     "preparerPodAndReplicaSetScope": True,
                     "partialOrSubstitutedPreparationDenied": True,
                 }

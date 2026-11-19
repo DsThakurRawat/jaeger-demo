@@ -197,6 +197,18 @@ def publication_guard():
     return pair
 
 
+def annotations(obj):
+    return f"(has({obj}.metadata.annotations) ? dyn({obj}.metadata.annotations) : {{}})"
+
+
+def preserves_deployment_revision():
+    old, new = annotations("oldObject"), annotations("object")
+    return (
+        f"[{json.dumps(t.DEPLOYMENT_REVISION)}].all(k, (k in {old}) == (k in {new})"
+        f" && (!(k in {old}) || {old}[k] == {new}[k]))"
+    )
+
+
 def preview_controls():
     by = defaultdict(set)
     for scope, g, r, n in t.allowed():
@@ -205,13 +217,18 @@ def preview_controls():
     for (scope, g, r), names in sorted(by.items()):
         roles[scope].append(p.rule(g, r, ["patch"], names))
         tag = t.digest([scope, g, r])[:18]
+        expression = "has(request.dryRun) && request.dryRun"
+        message = "Preparer workload patches must use server-side dry-run"
+        if (g, r) == ("apps", "deployments"):
+            expression += " && " + preserves_deployment_revision()
+            message += " and preserve the Deployment controller revision"
         pair = p.policies(
             "jaeger-demo-preview-" + tag,
             g,
             r,
             ["UPDATE"],
-            "has(request.dryRun) && request.dryRun",
-            "Preparer workload patches must use server-side dry-run",
+            expression,
+            message,
             running=False,
         )
         # Cover all target names in this GVR/namespace, even if a separate role is mistakenly widened.
@@ -245,18 +262,34 @@ def approval_roles():
     )
 
 
-def exact_variant():
-    # Admission CEL's dyn maps allow symmetric field enumeration, including custom GVR bodies.
+def exact_variant(*, deployment):
+    # Compare both approved variants against the live old and new objects. Status
+    # and the controller's Deployment revision may advance between Helm calls,
+    # but the executor must preserve both within each individual patch.
     top = '["apiVersion","kind","metadata","status"]'
-    ignored = json.dumps(sorted(t.SYSTEM_META))
+    volatile = t.SYSTEM_META | ({"annotations"} if deployment else set())
+    same_field = "k in dyn({b}.metadata) && dyn({a}.metadata)[k] == dyn({b}.metadata)[k]"
+    in_approved = same_field.format(a="s", b="v")
+    in_live = same_field.format(a="v", b="s")
+    annotations_key = 'k == "annotations" || ' if deployment else ""
+    metadata_matches = (
+        f"dyn(s.metadata).all(k, k in {json.dumps(sorted(volatile))} || ({in_approved})) && "
+        f"dyn(v.metadata).all(k, {annotations_key}({in_live}))"
+    )
+    controller_fields = (
+        "has(oldObject.status) == has(object.status) && "
+        "(!has(oldObject.status) || dyn(oldObject.status) == dyn(object.status))"
+    )
+    if deployment:
+        metadata_matches += " && " + p.same_except(annotations("s"), annotations("v"), [t.DEPLOYMENT_REVISION])
+        controller_fields += " && " + preserves_deployment_revision()
     equality = (
         f"dyn(s).all(k,k in {top} || (k in dyn(v.body) && dyn(s)[k] == dyn(v.body)[k])) && "
         "dyn(v.body).all(k,k in dyn(s) && dyn(s)[k] == dyn(v.body)[k]) && "
-        f"dyn(s.metadata).all(k,k in {ignored} || (k in dyn(v.metadata) && dyn(s.metadata)[k] == dyn(v.metadata)[k])) && "
-        "dyn(v.metadata).all(k,k in dyn(s.metadata) && dyn(s.metadata)[k] == dyn(v.metadata)[k])"
+        + metadata_matches
     )
     return (
-        "(has(oldObject.status) == has(object.status) && (!has(oldObject.status) || dyn(oldObject.status) == dyn(object.status))) && "
+        f"({controller_fields}) && "
         "variables.id in params.spec.changes && [oldObject,object].all(s, s.metadata.uid == params.spec.changes[variables.id].uid "
         "&& params.spec.changes[variables.id].variants.exists(v, " + equality + "))"
     )

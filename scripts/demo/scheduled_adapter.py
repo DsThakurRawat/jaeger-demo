@@ -19,6 +19,7 @@ import zlib
 import yaml
 
 import deploy
+import scheduled_approval_types
 import stack_health
 import verify_trace
 
@@ -284,7 +285,8 @@ def get_object(ident):
 
 
 def projection(obj):
-    meta = {k: v for k, v in obj["metadata"].items() if k not in {"managedFields", "resourceVersion", "generation", "creationTimestamp"}}
+    meta = {k: v for k, v in scheduled_approval_types.workload_metadata(obj).items()
+            if k not in {"managedFields", "resourceVersion", "generation", "creationTimestamp"}}
     core = {k: v for k, v in obj.items() if k not in {"status", "metadata"}}
     state = {"uid": meta["uid"], "state": sha(encode(dict(core, metadata=meta)))}
     if obj["kind"] == "Service":
