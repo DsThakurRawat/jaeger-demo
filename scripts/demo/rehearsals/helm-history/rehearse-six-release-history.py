@@ -71,6 +71,7 @@ def main():
     parser.add_argument("--frozen-transaction", action="store_true", help="Exercise the scripts-v1 signed-render Helm transaction")
     parser.add_argument("--monitoring-lookup", type=Path, help="Verify full chart dry-run and real Grafana Secret lookup")
     parser.add_argument("--monitoring-hook-access", type=Path, help="Verify RBAC/admission using the twelve pinned monitoring hooks")
+    parser.add_argument("--jaeger-patch-methods", type=Path, help="Audit real Jaeger chart SSA/CSA upgrade patch permissions")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -284,7 +285,7 @@ def main():
                 "etcd",
             )
             audit = []
-            if args.storage_charts:
+            if args.storage_charts or args.jaeger_patch_methods:
                 audit_policy = root / "audit-policy.json"
                 audit_policy.write_text(json.dumps({
                     "apiVersion": "audit.k8s.io/v1", "kind": "Policy",
@@ -535,6 +536,9 @@ def main():
             if args.monitoring_lookup:
                 from frozen_transaction import monitoring_lookup
                 report["monitoringLookup"] = monitoring_lookup(root, cfg, kubectl, kube, apply, args.monitoring_lookup)
+            if args.jaeger_patch_methods:
+                from jaeger_patch_methods import exercise as exercise_jaeger_patches
+                report["jaegerPatchMethods"] = exercise_jaeger_patches(root, cfg, kube, apply, args.jaeger_patch_methods)
             report["kubernetesEnforcedAdmission"] = True
             if args.storage_charts:
                 from storage_charts import rehearse

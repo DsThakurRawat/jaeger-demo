@@ -50,6 +50,7 @@ class SimulatedCluster:
         bind("history", self.history)
         bind("helm_transaction", self.transaction)
         bind("baseline", self.baseline)
+        bind("check_jaeger_patch_access", lambda ns, candidate: self.seen.append(("patch-access", ns)))
         bind("patch_supplemental", lambda o, prior, locked: self.seen.append(("patch", o["kind"])))
         bind("rollback_policy", lambda k, r: (False, {}))
         bind("ready_images", lambda key, sources: self.seen.append(("ready-images", key)))
@@ -116,6 +117,38 @@ class AdapterTests(unittest.TestCase):
         c = SimulatedCluster(self, {k: a.deploy.fingerprint(k) for k in a.COMPONENTS})
         self.assertTrue(c.apply())
         self.assertEqual([k for action, k in c.seen if action == "upgrade"], ["oci-jaeger", "otel-jaeger"])
+        self.assertLess(c.seen.index(("patch-access", "jaeger")), c.seen.index(("upgrade", "oci-jaeger")))
+
+    def test_snapshot_rbac_preflight_names_every_object_and_requires_a_conclusive_allow(self):
+        objects = [obj("Service", "jaeger-query"),
+                   dict(obj("Deployment", "jaeger"), apiVersion="apps/v1")]
+        with patch.object(a, "kube", return_value=b'{"status":{"allowed":true}}') as request:
+            a.check_jaeger_patch_access("jaeger", objects)
+            attrs = [json.loads(call.kwargs["body"])["spec"]["resourceAttributes"] for call in request.call_args_list]
+            self.assertEqual(attrs, [
+                dict(namespace="jaeger", verb="patch", group="apps", resource="deployments", name="jaeger"),
+                dict(namespace="jaeger", verb="patch", group="", resource="services", name="jaeger-query")])
+        for status in ({"allowed": False}, {"allowed": True, "evaluationError": "timeout"}, {"allowed": True, "denied": True}):
+            with self.subTest(status=status), patch.object(a, "kube", return_value=a.encode({"status": status})):
+                with self.assertRaisesRegex(a.AdapterError, "lacks reviewed PATCH"):
+                    a.check_jaeger_patch_access("jaeger", objects)
+        with self.assertRaisesRegex(a.AdapterError, "Unreviewed"):
+            a.check_jaeger_patch_access("jaeger", [obj("Secret", "private")])
+
+    def test_inherits_recorded_apply_method_and_rejects_drift_before_any_write(self):
+        for previous, expected in (({}, "csa"), ({"apply_method": ""}, "csa"),
+                                   ({"apply_method": "csa"}, "csa"), ({"apply_method": "ssa"}, "ssa")):
+            self.assertEqual(a.apply_method(previous), expected)
+        with self.assertRaisesRegex(a.AdapterError, "Unknown Helm"):
+            a.apply_method({"apply_method": "unreviewed"})
+        c = SimulatedCluster(self)
+        plan = json.loads(c.files["plan.json"])
+        self.assertEqual({row["applyMethod"] for row in plan["releases"].values()}, {"csa"})
+        plan["releases"]["otel-jaeger"]["applyMethod"] = "ssa"
+        c.files["plan.json"] = a.encode(plan)
+        with self.assertRaisesRegex(a.AdapterError, "apply method"):
+            c.apply()
+        self.assertNotIn("upgrade", dict(c.seen))
 
     def test_late_release_drift_and_replaced_pvc_prevent_the_first_write(self):
         c = SimulatedCluster(self)

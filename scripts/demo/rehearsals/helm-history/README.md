@@ -78,6 +78,22 @@ The private API had no real controllers, scheduled pods, or cloud volumes.
 
 The same API fixture exercised both initial Jaeger recovery modes. With automatic rollback disabled, an incompatible upgrade left revision 7 failed. An explicit fixture operator rollback established revision 8. A later incompatible upgrade with automatic rollback enabled recorded failure at 9 and restored the release at 10. Independent adapter tests cover selecting that mode from both stored image references and verifying Ready Pod digests.
 
+Add `--jaeger-patch-methods "$JAEGER_CHART_CHECKOUT"` to install the actual
+Jaeger chart four times. The fixture uses the OCI and OTel values, each with
+both inherited Helm apply methods. It impersonates the executor and checks
+its named PATCH rights with Kubernetes SelfSubjectAccessReviews. It then
+attempts each upgrade with Deployment-only and full named permissions,
+restoring the prior release between attempts. The API audit records only
+request metadata. The receipt lists attempted and denied resource names,
+and the paths whose values changed after admission.
+
+In all four upgrades, the only stored fields that changed were the two
+workload container images. Comparison covers status and all metadata except
+`managedFields`, `resourceVersion` and `generation`. This rehearsal checks
+RBAC and actual server-defaulted objects using `--wait=hookOnly`; it has no
+Pod controllers, production certificates or external endpoints.
+[Two-stack Helm PATCH receipt](jaeger-patch-methods.json)
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

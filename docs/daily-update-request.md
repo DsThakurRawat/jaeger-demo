@@ -136,3 +136,19 @@ at planning time. The routine trace generator restart changes only its pod
 template's `kubectl.kubernetes.io/restartedAt` to the frozen slot. An unchanged
 supplement receives no patch. Changes to the desired supplemental manifest
 require the independently authorized non-routine admission policy.
+
+Every frozen release records its existing Helm apply method. Helm 4 uses
+client-side apply for older records with an empty method. The adapter inherits
+the release method with `--server-side=auto` and checks it in the preview and
+the resulting record. The public handover inventory omits this field. The
+protected plan obtains it from current Helm storage.
+
+Before its first workload write, the executor checks its own named PATCH
+access for every object rendered by the two Jaeger releases. In a local
+rehearsal, server-side apply patched all ten OCI and twelve OTel objects,
+even though only the Jaeger and HotROD image fields changed. Client-side
+apply also patched the agent and collector Services, plus the OTel cleanup
+CronJob. Installation therefore requires named PATCH access across these
+existing chart objects and independent admission that checks the actual
+content. A successful Helm dry-run alone does not exercise this permission.
+[API audit and live field comparison](../scripts/demo/rehearsals/helm-history/jaeger-patch-methods.json)

@@ -322,6 +322,13 @@ def helm_record(ns, name, revision, status):
     return {"revision": revision, "status": status, "uid": secret["metadata"]["uid"], "sha256": sha(raw)}, record
 
 
+def apply_method(release):
+    # Helm 4 --server-side=auto treats an empty pre-Helm-4 record as CSA.
+    method = release.get("apply_method", "")
+    need(method in ("", "csa", "ssa"), "Unknown Helm release apply method")
+    return method or "csa"
+
+
 def history(key):
     ns, name, _ = RELEASES[key]
     rows = json.loads(command(["helm", "history", name, "-n", ns, "--max", "256", "-o", "json"]))
@@ -354,7 +361,7 @@ def helm_transaction(key, chart, values, *, expected=None, dry=True, atomic=Fals
         (path / "values.json").write_bytes(values)
         env = dict(os.environ, HELM_DRIVER="secret", HELM_PLUGINS=str(Path(__file__).parent / "helm-plugins"))
         args = ["helm", "upgrade", name, str(path / "chart.tgz"), "--namespace", ns, "--values", str(path / "values.json"),
-                "--install=false", "--create-namespace=false", "--reset-values", "--skip-crds", "--wait=watcher",
+                "--install=false", "--create-namespace=false", "--reset-values", "--skip-crds", "--server-side=auto", "--wait=watcher",
                 "--history-max=10", "--timeout", str(timeout) + "s", "--rollback-on-failure=" + str(atomic).lower(), "-o", "json"]
         if dry:
             args.append("--dry-run=server")
@@ -622,6 +629,8 @@ def prepare_inputs(slot, configuration_sha, root, charts, images):
         values = encode(values_for(k, root, images))
         atomic, prior_images = rollback_policy(k, rollback)
         prepared = helm_transaction(k, chart, values, atomic=atomic)
+        method = apply_method(current)
+        need(apply_method(prepared) == method, "Helm preview changed the existing release apply method")
         candidate = release_docs(prepared)
         extras = json.loads(files["supplemental/" + component(k) + ".json"]) if k != "opensearch-dashboards" else []
         states = baseline(k, current, rollback, candidate, extras, images)
@@ -629,7 +638,7 @@ def prepare_inputs(slot, configuration_sha, root, charts, images):
         plan["releases"][k] = {"records": records, "states": states, "chartVersion": prepared["chart"]["metadata"]["version"],
                                "appVersion": prepared["chart"]["metadata"].get("appVersion", ""), "chartSHA256": sha(chart),
                                "rollbackRenderSHA256": sha(encode(index(release_docs(rollback), ns))),
-                               "atomicRollback": atomic, "priorSnapshotPods": prior_images,
+                               "atomicRollback": atomic, "priorSnapshotPods": prior_images, "applyMethod": method,
                                "imageReferences": sorted(image_references(candidate + extras))}
         files.update({"charts/" + k + ".tgz": chart, "values/" + k + ".json": values, "renders/" + k + ".json": encode(candidate)})
     need((uid, previous) == checkpoint() and plan["binding"] == bindings(), "Checkpoint or storage changed during preparation")
@@ -658,11 +667,31 @@ def material(files, key):
             json.loads(files["supplemental/" + component(key) + ".json"]) if key != "opensearch-dashboards" else [])
 
 
+def check_jaeger_patch_access(namespace, candidate):
+    # Helm may patch even semantically unchanged Services and CronJobs under
+    # CSA, or every object under SSA. Dry-run rendering cannot check RBAC.
+    resources = {("v1", "ConfigMap"): "configmaps", ("v1", "ServiceAccount"): "serviceaccounts",
+                 ("v1", "Service"): "services", ("apps/v1", "Deployment"): "deployments",
+                 ("batch/v1", "CronJob"): "cronjobs"}
+    for ident in sorted(index(candidate, namespace)):
+        api, kind, ns, name = ident.split(":")
+        resource = resources.get((api, kind))
+        need(resource and namespace == ns, "Unreviewed ordinary Jaeger chart write")
+        attrs = {"namespace": namespace, "verb": "patch", "group": api.rpartition("/")[0],
+                 "resource": resource, "name": name}
+        review = {"apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectAccessReview",
+                  "spec": {"resourceAttributes": attrs}}
+        status = json.loads(kube("create", "--raw=/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
+                                 "-f", "-", body=encode(review)))["status"]
+        need(status["allowed"] is True and not status.get("denied") and not status.get("evaluationError"),
+             "Executor lacks reviewed PATCH access to a named Jaeger chart object")
+
+
 def preconditions(files, key, plan, *, dry=True):
     row = plan["releases"][key]
     chart, values, candidate, extras = material(files, key)
     records, current, rollback = history(key)
-    need(records == row["records"], "Helm revision or stored rollback data drifted")
+    need(records == row["records"] and apply_method(current) == row["applyMethod"], "Helm revision, apply method or stored rollback data drifted")
     need(rollback_policy(key, rollback) == (row["atomicRollback"], row["priorSnapshotPods"]),
          "Rollback image reference, digest or eligibility changed")
     need(baseline(key, current, rollback, candidate, extras, plan["images"]) == row["states"],
@@ -671,14 +700,16 @@ def preconditions(files, key, plan, *, dry=True):
         preview = helm_transaction(key, chart, values, expected=candidate, atomic=row["atomicRollback"])
         ns = RELEASES[key][0]
         need(index(release_docs(preview), ns) == index(candidate, ns) and
-             preview["chart"]["metadata"]["version"] == row["chartVersion"], "Server-side render differs from the signed plan")
+             preview["chart"]["metadata"]["version"] == row["chartVersion"] and apply_method(preview) == row["applyMethod"],
+             "Server-side render or apply method differs from the signed plan")
 
 
 def verify_upgrade(key, row, candidate):
     ns, _, _ = RELEASES[key]
     records, current, _ = history(key)
     need(records[0]["status"] == "deployed" and records[0]["revision"] == row["records"][0]["revision"] + 1
-         and index(release_docs(current), ns) == index(candidate, ns), "Stored upgrade differs from the frozen transaction")
+         and apply_method(current) == row["applyMethod"] and index(release_docs(current), ns) == index(candidate, ns),
+         "Stored upgrade differs from the frozen transaction")
     if key == "oci-monitoring":
         monitoring_guards(candidate)
     for ident, before in row["states"].items():
@@ -770,6 +801,8 @@ def apply(files, *, slot, configuration_sha, assert_locked):
     for key in RELEASES:
         assert_locked()
         preconditions(files, key, plan, dry=component(key) in plan["selected"])
+        if key.endswith("-jaeger") and key in plan["selected"]:
+            check_jaeger_patch_access(RELEASES[key][0], json.loads(files["renders/" + key + ".json"]))
     tracking = dict(plan["priorTracking"])
     for stack in ("oci", "otel"):
         stack_health.check(stack, tracking=tracking[stack + "-jaeger"])
@@ -792,7 +825,8 @@ def apply(files, *, slot, configuration_sha, assert_locked):
                 raise AdapterError("Initial digest promotion failed; partial changes may remain. Automatic tag-based rollback was disabled; operator recovery required") from None
             if row["atomicRollback"]:
                 records, result, _ = history(key)
-                need(records[0]["revision"] == row["records"][0]["revision"] + 2 and
+                need(records[0]["status"] == "deployed" and records[0]["revision"] == row["records"][0]["revision"] + 2 and
+                     apply_method(result) == row["applyMethod"] and
                      sha(encode(index(release_docs(result), RELEASES[key][0]))) == row["rollbackRenderSHA256"] and
                      snapshot_pods(key) == row["priorSnapshotPods"],
                      "Upgrade failed; automatic rollback remains unverified")
