@@ -85,6 +85,9 @@ def read_access():
     reads["cluster"].append({"nonResourceURLs": ["/version"], "verbs": ["get"]})
     for scope, rules in reads.items():
         yield from bindings("jaeger-demo-workload-observe", scope, rules, (PREPARER, EXECUTOR))
+    for scope in ("default", "jaeger"):
+        yield from bindings("jaeger-demo-prior-snapshot-pods", scope,
+                            [rule("", "pods", ["list"]), rule("apps", "replicasets", ["get"])], (PREPARER,))
     for scope in NAMESPACES:
         # Helm history LIST returns every Secret payload in that namespace; resourceNames cannot constrain it.
         yield from bindings("jaeger-demo-release-ledger-read", scope, [rule("", "secrets", ["get", "list"])], (PREPARER, EXECUTOR))

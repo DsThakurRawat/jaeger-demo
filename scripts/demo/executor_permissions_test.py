@@ -19,6 +19,11 @@ class PermissionTests(unittest.TestCase):
         ledger = [r for r in roles if r["metadata"]["name"] == "jaeger-demo-release-ledger-read"]
         self.assertEqual({r["metadata"]["namespace"] for r in ledger}, set(p.NAMESPACES))
         self.assertTrue(all(r["rules"] == [p.rule("", "secrets", ["get", "list"])] for r in ledger))
+        snapshot = [o for o in out if o["metadata"]["name"] == "jaeger-demo-prior-snapshot-pods"]
+        self.assertEqual({o["metadata"]["namespace"] for o in snapshot}, {"default", "jaeger"})
+        self.assertEqual({s["name"] for o in snapshot for s in o.get("subjects", [])}, {p.PREPARER})
+        self.assertTrue(all(o["rules"] == [p.rule("", "pods", ["list"]), p.rule("apps", "replicasets", ["get"])]
+                            for o in snapshot if o["kind"] == "Role"))
         all_rules = [r for o in roles for r in o["rules"]]
         self.assertFalse(any("pods/exec" in r.get("resources", []) or "*" in r.get("resources", []) for r in all_rules))
         self.assertEqual(sum(len(r["resourceNames"]) for r in all_rules if r.get("resources") == ["customresourcedefinitions"]), 10)
