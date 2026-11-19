@@ -272,6 +272,21 @@ class BundleTests(unittest.TestCase):
         with self.assertRaisesRegex(b.BundleError, "rendered resource"):
             self.build()
 
+    def test_installed_companion_uses_de_adoption_in_every_namespace(self):
+        for ns in ("default", "jaeger", "opensearch", "otel-demo"):
+            with self.subTest(namespace=ns):
+                release = ns + "/demo-resources"
+                row = copy.deepcopy(self.row)
+                row["id"] = release
+                row["rollback"]["strategy"] = "de-adopt"
+                live = copy.deepcopy(self.live)
+                for field in ("releases", "rollbackTargets"):
+                    live[field][release] = live[field].pop(self.key)
+                b.check_live(live, {release: row})
+                row["rollback"]["strategy"] = "operator"
+                with self.assertRaisesRegex(b.BundleError, "recovery strategy"):
+                    b.check_live(live, {release: row})
+
     def test_insecure_keys_and_plaintext_working_directories_fail(self):
         key = self.root / "key"
         key.write_bytes(Fernet.generate_key())

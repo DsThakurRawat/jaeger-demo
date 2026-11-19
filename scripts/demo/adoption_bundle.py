@@ -315,7 +315,12 @@ def check_live(live, rows):
             if rollback["revision"] == revision:
                 require(status == "deployed" and rollback["recordSHA256"] == state["recordSHA256"],
                         "Rollback target must be a verified successful record")
-            strategy = "operator" if key.startswith("opensearch/") else "de-adopt" if key.endswith("/demo-resources") else "helm-rollback"
+            if key.endswith("/demo-resources"):
+                strategy = "de-adopt"
+            elif key.startswith("opensearch/"):
+                strategy = "operator"
+            else:
+                strategy = "helm-rollback"
             require(rollback["strategy"] == strategy, "Invalid release recovery strategy")
 
 
