@@ -168,6 +168,8 @@ def main():
         directory = Path(temp)
         for tool, entry in tools.items():
             install(tool, entry, system, CACHE, directory)
+        guard = LOCK.parent / "helm-plugins" / "verify-frozen-manifests"
+        shutil.copytree(guard, directory / "plugins" / guard.name)
         env = dict(os.environ, PATH=str(directory / "bin") + os.pathsep + os.environ["PATH"],
                    HELM_PLUGINS=str(directory / "plugins"))
         env.setdefault("HELM_CACHE_HOME", str(CACHE.parent / "helm-cache"))
