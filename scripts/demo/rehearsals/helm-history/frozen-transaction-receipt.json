@@ -1,6 +1,6 @@
 {
-  "startedAt": "2026-11-19T13:06:41.286020+00:00",
-  "finishedAt": "2026-11-19T13:06:59.141941+00:00",
+  "startedAt": "2026-11-19T13:15:26.207588+00:00",
+  "finishedAt": "2026-11-19T13:15:43.009047+00:00",
   "productionAccess": false,
   "endpoint": "ephemeral 127.0.0.1",
   "helm": "v4.3.2+g8346aaa",
@@ -10,6 +10,9 @@
   "frozenTransaction": {
     "identity": "fixture-helm-writer",
     "immutableChartAndValues": true,
+    "tagOnlyPolicyFailureHeldAtRevision": 7,
+    "operatorRecoveryRevision": 8,
+    "pinnedPolicyAutomaticRollbackRevision": 10,
     "serverDryRunMatchedStoredUpgrade": true,
     "changedManifestBlockedBeforeHelmHistory": true,
     "priorRevision": 6,

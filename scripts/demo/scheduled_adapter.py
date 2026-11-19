@@ -345,8 +345,9 @@ def history(key):
     return records, current, successful
 
 
-def helm_transaction(key, chart, values, *, expected=None, dry=True):
+def helm_transaction(key, chart, values, *, expected=None, dry=True, atomic=False):
     ns, name, timeout = RELEASES[key]
+    need(type(atomic) is bool and (not atomic or key.endswith("-jaeger")), "Unsupported automatic rollback")
     with tempfile.TemporaryDirectory(prefix="jaeger-script-release-") as folder:
         path = Path(folder)
         (path / "chart.tgz").write_bytes(chart)
@@ -354,14 +355,14 @@ def helm_transaction(key, chart, values, *, expected=None, dry=True):
         env = dict(os.environ, HELM_DRIVER="secret", HELM_PLUGINS=str(Path(__file__).parent / "helm-plugins"))
         args = ["helm", "upgrade", name, str(path / "chart.tgz"), "--namespace", ns, "--values", str(path / "values.json"),
                 "--install=false", "--create-namespace=false", "--reset-values", "--skip-crds", "--wait=watcher",
-                "--history-max=10", "--timeout", str(timeout) + "s", "--rollback-on-failure=" + str(key.endswith("-jaeger")).lower(), "-o", "json"]
+                "--history-max=10", "--timeout", str(timeout) + "s", "--rollback-on-failure=" + str(atomic).lower(), "-o", "json"]
         if dry:
             args.append("--dry-run=server")
         if expected is not None:
             env["JAEGER_APPROVED_MANIFEST"] = str(path / "expected.yaml")
             (path / "expected.yaml").write_bytes(b"\n---\n".join(encode(o) for o in expected))
             args.extend(["--post-renderer", "verify-frozen-manifests"])
-        release = json.loads(command(args, env=env, timeout=timeout * (2 if key.endswith("-jaeger") else 1) + 90))
+        release = json.loads(command(args, env=env, timeout=timeout * (2 if atomic else 1) + 90))
         need(release["name"] == name and release["namespace"] == ns and release["chart"]["metadata"]["name"] == CHARTS[key],
              "Unexpected Helm release or chart")
         return release
@@ -447,24 +448,61 @@ def edits(prior, desired, live, path=""):
     return changes
 
 
+LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
+RESTARTED = "kubectl.kubernetes.io/restartedAt"
+
+
+def supplemental_changes(obj, live):
+    ns = obj["metadata"]["namespace"]
+    ident = identity(obj, ns)
+    stored = (live["metadata"].get("annotations") or {}).get(LAST_APPLIED)
+    need(stored, "Supplement lacks its previous declarative configuration")
+    prior = json.loads(stored)
+    need(identity(prior, ns) == ident and obj["kind"] in {"Deployment", "Service", "Ingress", "ConfigMap"}
+         and set(obj["metadata"]) <= {"name", "namespace", "labels", "annotations"} and "status" not in obj,
+         "Unexpected supplemental object or ownership metadata")
+
+    def declarative(value):
+        clean = json.loads(encode(value))
+        # Earlier kubectl --dry-run=client versions emit null creationTimestamp.
+        # It is server-owned and must never appear in a patch.
+        meta = clean["metadata"]
+        for field in ("creationTimestamp", "generation", "managedFields", "uid", "resourceVersion"):
+            meta.pop(field, None)
+        meta["namespace"] = ns
+        annotations = meta.get("annotations") or {}
+        annotations.pop(LAST_APPLIED, None)
+        if not annotations:
+            meta.pop("annotations", None)
+        if clean["kind"] == "Deployment" and meta["name"] == "trace-generator":
+            podmeta = clean["spec"]["template"]["metadata"]
+            (podmeta.get("annotations") or {}).pop(RESTARTED, None)
+            if not podmeta.get("annotations"):
+                podmeta.pop("annotations", None)
+        return clean
+
+    old, want = declarative(prior), declarative(obj)
+    desired = json.loads(encode(want))
+    # A slot-specific rollout restart changes only the pod template. Do not
+    # manufacture or rewrite an arbitrary last-applied annotation every day.
+    if old != want:
+        desired["metadata"].setdefault("annotations", {})[LAST_APPLIED] = encode(want).decode()
+    if obj["kind"] == "Deployment" and obj["metadata"]["name"] == "trace-generator":
+        stamp = obj["spec"]["template"]["metadata"]["annotations"][RESTARTED]
+        desired["spec"]["template"]["metadata"].setdefault("annotations", {})[RESTARTED] = stamp
+    if obj["kind"] == "Service":
+        for field in ("clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy", "selector"):
+            need(field not in desired["spec"] or desired["spec"][field] == live["spec"].get(field),
+                 "Supplemental Service binding change requires operator review")
+    return edits(old, desired, live)
+
+
 def patch_supplemental(obj, baseline, assert_locked):
     ns = obj["metadata"]["namespace"]
     ident = identity(obj, ns)
     live = get_object(ident)
     need(projection(live) == baseline, "Supplemental object drifted")
-    annotation = "kubectl.kubernetes.io/last-applied-configuration"
-    stored = (live["metadata"].get("annotations") or {}).get(annotation)
-    need(stored, "Supplement lacks its previous declarative configuration")
-    prior = json.loads(stored)
-    need(identity(prior, ns) == ident and obj["kind"] in {"Deployment", "Service", "Ingress", "ConfigMap"},
-         "Unexpected supplemental object")
-    desired = json.loads(encode(obj))
-    desired["metadata"].setdefault("annotations", {})[annotation] = encode(obj).decode()
-    changes = edits(prior, desired, live)
-    if desired["kind"] == "Service":
-        for field in ("clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy", "selector"):
-            need(field not in desired["spec"] or desired["spec"][field] == live["spec"].get(field),
-                 "Supplemental Service binding change requires operator review")
+    changes = supplemental_changes(obj, live)
     if changes:
         api, kind, _, name = ident.split(":")
         resource = kind.lower() + ("." + api.split("/")[0] if "/" in api else "")
@@ -523,8 +561,8 @@ def baseline(key, current, rollback, candidate, extras, images):
         if desired["kind"] in {"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"}:
             for field in ("rules", "aggregationRule", "subjects", "roleRef"):
                 need(desired.get(field) == live.get(field), "Live RBAC differs from the protected baseline")
-        if ident in extra_ids and desired["kind"] == "Service":
-            need(desired["spec"].get("selector") == live["spec"].get("selector"), "Supplemental Service selector differs")
+        if ident in extra_ids:
+            supplemental_changes(desired, live)  # Reject unavailable management history before any Helm write.
         if desired["kind"] == "Secret":
             need(desired.get("data", {}) == live.get("data", {}) and not desired.get("stringData"),
                  "Chart-owned Secret payload differs from the protected baseline")
@@ -582,7 +620,8 @@ def prepare_inputs(slot, configuration_sha, root, charts, images):
             plan["priorTracking"][k] = json.loads(current["config"]["uiconfig"])["tracking"]
         chart = charts[ns + "/" + name]
         values = encode(values_for(k, root, images))
-        prepared = helm_transaction(k, chart, values)
+        atomic, prior_images = rollback_policy(k, rollback)
+        prepared = helm_transaction(k, chart, values, atomic=atomic)
         candidate = release_docs(prepared)
         extras = json.loads(files["supplemental/" + component(k) + ".json"]) if k != "opensearch-dashboards" else []
         states = baseline(k, current, rollback, candidate, extras, images)
@@ -590,6 +629,7 @@ def prepare_inputs(slot, configuration_sha, root, charts, images):
         plan["releases"][k] = {"records": records, "states": states, "chartVersion": prepared["chart"]["metadata"]["version"],
                                "appVersion": prepared["chart"]["metadata"].get("appVersion", ""), "chartSHA256": sha(chart),
                                "rollbackRenderSHA256": sha(encode(index(release_docs(rollback), ns))),
+                               "atomicRollback": atomic, "priorSnapshotPods": prior_images,
                                "imageReferences": sorted(image_references(candidate + extras))}
         files.update({"charts/" + k + ".tgz": chart, "values/" + k + ".json": values, "renders/" + k + ".json": encode(candidate)})
     need((uid, previous) == checkpoint() and plan["binding"] == bindings(), "Checkpoint or storage changed during preparation")
@@ -623,10 +663,12 @@ def preconditions(files, key, plan, *, dry=True):
     chart, values, candidate, extras = material(files, key)
     records, current, rollback = history(key)
     need(records == row["records"], "Helm revision or stored rollback data drifted")
+    need(rollback_policy(key, rollback) == (row["atomicRollback"], row["priorSnapshotPods"]),
+         "Rollback image reference, digest or eligibility changed")
     need(baseline(key, current, rollback, candidate, extras, plan["images"]) == row["states"],
          "Live object content, identity or binding drifted")
     if dry:
-        preview = helm_transaction(key, chart, values, expected=candidate)
+        preview = helm_transaction(key, chart, values, expected=candidate, atomic=row["atomicRollback"])
         ns = RELEASES[key][0]
         need(index(release_docs(preview), ns) == index(candidate, ns) and
              preview["chart"]["metadata"]["version"] == row["chartVersion"], "Server-side render differs from the signed plan")
@@ -647,10 +689,10 @@ def verify_upgrade(key, row, candidate):
             need(before["state"] == after["state"], "Protected security or schema object changed during upgrade")
 
 
-def ready_images(key, sources):
+def snapshot_pods(key):
     ns = RELEASES[key][0]
+    evidence = {}
     for workload, image in (("jaeger", "jaeger"), ("jaeger-hotrod", "hotrod")):
-        src = sources[image]
         deployment = get_object(f"apps/v1:Deployment:{ns}:{workload}")
         meta, spec, status = deployment["metadata"], deployment["spec"], deployment["status"]
         count = spec.get("replicas", 1)
@@ -667,19 +709,47 @@ def ready_images(key, sources):
             refs = [r for r in obj["metadata"].get("ownerReferences", []) if r.get("controller") is True]
             need(len(refs) == 1 and refs[0]["kind"] == kind and refs[0]["apiVersion"] == "apps/v1", "Unexpected Pod owner")
             return refs[0]
+        spec_refs = [c["image"].removeprefix("docker.io/") for c in spec["template"]["spec"]["containers"] if c["name"] == workload]
+        need(len(spec_refs) == 1, "Snapshot Deployment has an unexpected container")
+        digests = set()
         for pod in active:
             parent = controller(pod, "ReplicaSet")
             rs = get_object("apps/v1:ReplicaSet:" + ns + ":" + parent["name"])
             owner = controller(rs, "Deployment")
             need(rs["metadata"]["uid"] == parent["uid"] and owner["name"] == workload and owner["uid"] == meta["uid"],
                  "Pod does not belong to the intended Deployment")
-            wanted = src["reference"].removeprefix("docker.io/")
             containers = [c["image"].removeprefix("docker.io/") for c in pod["spec"]["containers"] if c["name"] == workload]
             actual = [c for c in pod["status"].get("containerStatuses", []) if c["name"] == workload]
-            need(containers == [wanted] and pod["status"]["phase"] == "Running" and
+            need(containers == spec_refs and pod["status"]["phase"] == "Running" and
                  any(c["type"] == "Ready" and c["status"] == "True" for c in pod["status"].get("conditions", [])) and
-                 len(actual) == 1 and actual[0]["ready"] is True and actual[0]["imageID"].split("@")[-1].removeprefix("docker://")
-                 in (src["digest"], src["platformManifest"]), "Running snapshot Pod image differs from the verified registry digest")
+                 len(actual) == 1 and actual[0]["ready"] is True, "Snapshot Pod is not ready on its declared image")
+            observed = actual[0]["imageID"].split("@")[-1].removeprefix("docker://")
+            need(re.fullmatch(r"sha256:[a-f0-9]{64}", observed), "Snapshot Pod lacks an immutable runtime digest")
+            digests.add(observed)
+        evidence[image] = {"reference": spec_refs[0], "runtimeDigests": sorted(digests)}
+    return evidence
+
+
+def ready_images(key, sources):
+    for role, observed in snapshot_pods(key).items():
+        src = sources[role]
+        need(observed["reference"] == src["reference"].removeprefix("docker.io/") and
+             set(observed["runtimeDigests"]) <= {src["digest"], src["platformManifest"]},
+             "Running snapshot Pod image differs from the verified registry digest")
+
+
+def rollback_policy(key, release):
+    if not key.endswith("-jaeger"):
+        return False, {}
+    workloads = index(release_docs(release), RELEASES[key][0])
+    observed = snapshot_pods(key)
+    pinned = True
+    for role, name in (("jaeger", "jaeger"), ("hotrod", "jaeger-hotrod")):
+        obj = workloads[f"apps/v1:Deployment:{RELEASES[key][0]}:{name}"]
+        refs = [c["image"].removeprefix("docker.io/") for c in obj["spec"]["template"]["spec"]["containers"] if c["name"] == name]
+        need(refs == [observed[role]["reference"]], "Ready snapshot Pods differ from the stored successful rollback manifest")
+        pinned = pinned and bool(re.search(r"@sha256:[a-f0-9]{64}$", refs[0]))
+    return pinned, observed
 
 
 def rollout(key):
@@ -716,12 +786,15 @@ def apply(files, *, slot, configuration_sha, assert_locked):
         preconditions(files, key, plan, dry=False)
         assert_locked()
         try:
-            helm_transaction(key, chart, values, expected=candidate, dry=False)
+            helm_transaction(key, chart, values, expected=candidate, dry=False, atomic=row["atomicRollback"])
         except AdapterError:
-            if key.endswith("-jaeger"):
+            if key.endswith("-jaeger") and not row["atomicRollback"]:
+                raise AdapterError("Initial digest promotion failed; partial changes may remain. Automatic tag-based rollback was disabled; operator recovery required") from None
+            if row["atomicRollback"]:
                 records, result, _ = history(key)
                 need(records[0]["revision"] == row["records"][0]["revision"] + 2 and
-                     sha(encode(index(release_docs(result), RELEASES[key][0]))) == row["rollbackRenderSHA256"],
+                     sha(encode(index(release_docs(result), RELEASES[key][0]))) == row["rollbackRenderSHA256"] and
+                     snapshot_pods(key) == row["priorSnapshotPods"],
                      "Upgrade failed; automatic rollback remains unverified")
                 raise AdapterError("Upgrade failed; Helm restored the prior render; operator recovery required") from None
             raise

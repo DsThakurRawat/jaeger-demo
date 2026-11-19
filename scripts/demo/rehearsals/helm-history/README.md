@@ -76,6 +76,8 @@ preserved all 129 objects and left the monitoring release at revision 6.
 The private API had no real controllers, scheduled pods, or cloud volumes.
 [Private API outcome](frozen-transaction-receipt.json)
 
+The same API fixture exercised both initial Jaeger recovery modes. With automatic rollback disabled, an incompatible upgrade left revision 7 failed. An explicit fixture operator rollback established revision 8. A later incompatible upgrade with automatic rollback enabled recorded failure at 9 and restored the release at 10. Independent adapter tests cover selecting that mode from both stored image references and verifying Ready Pod digests.
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

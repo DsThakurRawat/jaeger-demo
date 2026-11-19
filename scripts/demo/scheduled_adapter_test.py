@@ -51,6 +51,7 @@ class SimulatedCluster:
         bind("helm_transaction", self.transaction)
         bind("baseline", self.baseline)
         bind("patch_supplemental", lambda o, prior, locked: self.seen.append(("patch", o["kind"])))
+        bind("rollback_policy", lambda k, r: (False, {}))
         bind("ready_images", lambda key, sources: self.seen.append(("ready-images", key)))
         bind("rollout", lambda key: self.seen.append(("rollout", key)))
         bind("verify_upgrade", lambda *args: self.seen.append(("verified", args[0])))
@@ -66,7 +67,7 @@ class SimulatedCluster:
                    "chart": {"metadata": {"name": a.CHARTS[key], "version": "3.7.0", "appVersion": "3.7.1"}}, "hooks": [], "config": {"uiconfig": '{"tracking":{}}'}}
         return [{"revision": self.versions[key], "uid": "fixture", "status": "deployed", "sha256": "d" * 64}], release, release
 
-    def transaction(self, key, chart, values, *, expected=None, dry=True):
+    def transaction(self, key, chart, values, *, expected=None, dry=True, atomic=False):
         assert chart == self.charts["/".join(a.RELEASES[key][:2])]
         assert json.loads(values) == a.values_for(key, a.ROOT, self.image_map)
         self.seen.append(("dry" if dry else "upgrade", key))
@@ -189,6 +190,73 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(a.AdapterError, "inventory"):
             a.inventory("opensearch-dashboards", [state], [])
 
+    def test_first_tag_only_promotion_fails_without_automatic_rollback_or_checkpoint(self):
+        c = SimulatedCluster(self)
+        c.fail_writes = "oci-jaeger"
+        with self.assertRaisesRegex(a.AdapterError, "partial changes may remain"):
+            c.apply()
+        self.assertIn(("upgrade", "oci-jaeger"), c.seen)
+        self.assertNotIn(("checkpoint", "oci-jaeger"), c.seen)
+        self.assertNotIn(("upgrade", "opensearch"), c.seen)
+
+    def test_rollback_is_atomic_only_when_both_ready_prior_images_are_digest_pinned(self):
+        import yaml
+        refs = {r: s["reference"] for r, s in images().items()}
+        sources = images()
+        def verify():
+            docs, evidence = [], {}
+            for role, name in (("jaeger", "jaeger"), ("hotrod", "jaeger-hotrod")):
+                docs.append({"apiVersion":"apps/v1", "kind":"Deployment","metadata":{"name":name},
+                             "spec":{"template":{"spec":{"containers":[{"name":name,"image":refs[role]}]}}}})
+                evidence[role] = {"reference":refs[role], "runtimeDigests":[sources[role]["platformManifest"]]}
+            release = {"manifest": yaml.safe_dump_all(docs), "hooks":[]}
+            with patch.object(a, "snapshot_pods", return_value=evidence):
+                return a.rollback_policy("oci-jaeger", release)
+        self.assertTrue(verify()[0])
+        refs["hotrod"] = refs["hotrod"].split("@")[0]
+        self.assertFalse(verify()[0])
+        refs["jaeger"] = refs["jaeger"].split("@")[0]
+        self.assertFalse(verify()[0])
+
+    def test_verified_atomic_failure_requires_original_running_digests(self):
+        c = SimulatedCluster(self)
+        c.fail_writes = "oci-jaeger"
+        plan = json.loads(c.files["plan.json"])
+        row = plan["releases"]["oci-jaeger"]
+        row["atomicRollback"] = True
+        row["priorSnapshotPods"] = {"jaeger":{"reference":"pinned", "runtimeDigests":["exact"]}}
+        c.files["plan.json"] = a.encode(plan)
+        original = c.history
+        def history(key):
+            records, current, fallback = original(key)
+            if key == "oci-jaeger" and ("upgrade", key) in c.seen:
+                records[0]["revision"] += 2
+            return records, current, fallback
+        with patch.object(a, "history", side_effect=history), \
+             patch.object(a, "rollback_policy", side_effect=lambda k, _: (True, row["priorSnapshotPods"]) if k == "oci-jaeger" else (False, {})), \
+             patch.object(a, "snapshot_pods", return_value={"other":"image"}):
+            with self.assertRaisesRegex(a.AdapterError, "rollback remains unverified"):
+                c.apply()
+        self.assertNotIn(("checkpoint", "oci-jaeger"), c.seen)
+
+    def test_only_the_slot_restart_changes_and_unchanged_supplements_skip_patch(self):
+        desired = next(o for o in a.supplemental_for("oci-jaeger", a.ROOT) if o["kind"] == "Deployment")
+        prior = json.loads(a.encode(desired))
+        prior["metadata"].pop("namespace", None)
+        prior["metadata"]["creationTimestamp"] = None
+        live = json.loads(a.encode(desired))
+        live["metadata"]["creationTimestamp"] = "2026-11-01T00:00:00Z"
+        live["metadata"].setdefault("annotations", {})[a.LAST_APPLIED] = json.dumps(prior, indent=2)
+        live["spec"]["template"]["metadata"].setdefault("annotations", {})[a.RESTARTED] = "yesterday"
+        desired["spec"]["template"]["metadata"].setdefault("annotations", {})[a.RESTARTED] = SLOT
+        self.assertEqual(a.supplemental_changes(desired, live), [
+            {"op":"add","path":"/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt","value":SLOT}])
+        live["spec"]["template"]["metadata"]["annotations"][a.RESTARTED] = SLOT
+        self.assertEqual(a.supplemental_changes(desired, live), [])
+        del live["metadata"]["annotations"][a.LAST_APPLIED]
+        with self.assertRaisesRegex(a.AdapterError, "previous declarative"):
+            a.supplemental_changes(desired, live)
+
     def test_real_helm_metadata_normalization_ignores_only_empty_top_level_annotations(self):
         plain = obj("ConfigMap", "x", data={"key": "value"})
         def annotated(value):
@@ -225,7 +293,8 @@ class AdapterTests(unittest.TestCase):
             if ":ReplicaSet:" in ident:
                 return {"metadata": {"uid": name, "ownerReferences": [{"controller": True, "kind":"Deployment", "apiVersion":"apps/v1",
                         "uid": name.removesuffix("-rs"), "name": name.removesuffix("-rs")}]}}
-            return {"metadata":{"generation":1, "uid":name}, "spec":{"replicas":1, "selector":{"matchLabels":{"release":name}}},
+            return {"metadata":{"generation":1, "uid":name}, "spec":{"replicas":1, "selector":{"matchLabels":{"release":name}},
+                    "template":{"spec":{"containers":[{"name":name, "image":selected[name]["reference"]}]}}},
                     "status":{"observedGeneration":1,"replicas":1,"updatedReplicas":1,"availableReplicas":1,"readyReplicas":1}}
         running_digest = "sha256:" + "f" * 64
         def pods(*args):

@@ -118,3 +118,21 @@ candidate, against fixture image tags and a synthetic Grafana credential. The
 private API rehearsal uses real Helm history and a restricted Kubernetes
 identity to test frozen output, failed writes and rollback-target selection.
 [Rehearsal commands and evidence](../scripts/demo/rehearsals/helm-history/README.md)
+
+For each Jaeger release, the preparer also records the current Ready Pods’
+image digests and checks the Deployment references against the last successful
+Helm record. On the first promotion from tag-only images, the adapter disables
+Helm's automatic rollback for that release. Replaying its previous tags could
+pull different bytes. An interrupted or failed promotion can leave a partial
+upgrade; the executor leaves the lock held and the checkpoint unchanged for
+operator recovery. Once both stored Jaeger and HotROD references are
+digest-pinned, rollback-on-failure is allowed. A rollback must restore the
+previous render and the observed Ready Pod digests before the receiver can
+describe the recovery as verified. The daily operation still fails and holds
+its lock for review.
+
+Every supplemental object must have a valid previous declarative configuration
+at planning time. The routine trace generator restart changes only its pod
+template's `kubectl.kubernetes.io/restartedAt` to the frozen slot. An unchanged
+supplement receives no patch. Changes to the desired supplemental manifest
+require the independently authorized non-routine admission policy.

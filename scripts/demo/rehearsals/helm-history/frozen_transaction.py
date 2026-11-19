@@ -54,7 +54,27 @@ def exercise(root, config, kubectl, chart, writer):
             raise AssertionError("The private API allowed the immutable fixture change")
         failure, _, rollback = a.history("opensearch")
         assert failure[0]["status"] == "failed" and rollback["version"] == after[0]["revision"]
-    return {"identity": writer, "immutableChartAndValues": True, "serverDryRunMatchedStoredUpgrade": True,
+        # Exercise the two Jaeger recovery modes with a real immutable field.
+        # The fixture operator explicitly recovers the first failed transaction.
+        (package / "Chart.yaml").write_text("apiVersion: v2\nname: jaeger\nversion: 0.1.0\n")
+        a.command(["helm", "package", str(package), "--destination", str(root)])
+        jaeger_pkg = (root / "jaeger-0.1.0.tgz").read_bytes()
+        for atomic in (False, True):
+            try:
+                a.helm_transaction("oci-jaeger", jaeger_pkg, a.encode({"marker":"incompatible"}), dry=False, atomic=atomic)
+            except a.AdapterError:
+                pass
+            else:
+                raise AssertionError("Expected immutable-field failure")
+            ledger = json.loads(a.command(["helm", "history", "jaeger", "-n", "default", "-o", "json"]))
+            if not atomic:
+                assert (ledger[-1]["revision"], ledger[-1]["status"]) == (7, "failed")
+                a.command(["helm", "rollback", "jaeger", "6", "-n", "default", "--wait", "--timeout=30s"])
+            else:
+                assert [(r["revision"], r["status"]) for r in ledger[-2:]] == [(9, "failed"), (10, "deployed")]
+    return {"identity": writer, "immutableChartAndValues": True,
+            "tagOnlyPolicyFailureHeldAtRevision": 7, "operatorRecoveryRevision": 8,
+            "pinnedPolicyAutomaticRollbackRevision": 10, "serverDryRunMatchedStoredUpgrade": True,
             "changedManifestBlockedBeforeHelmHistory": True, "priorRevision": initial[0]["revision"],
             "deployedRevision": after[0]["revision"], "failedRevision": failure[0]["revision"], "recoveryTarget": rollback["version"],
             "workloads": "synthetic ConfigMap", "realNetworkHealth": False}
