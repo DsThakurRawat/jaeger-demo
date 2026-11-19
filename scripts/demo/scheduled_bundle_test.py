@@ -179,6 +179,23 @@ class CustodyTests(unittest.TestCase):
             self.publish(slot=self.tomorrow)
         self.assertEqual(b.load(self.store, self.slot, receipt, **self.read), self.files)
 
+    def test_before_index_must_complete_for_new_slot_and_is_not_replayed_on_resume(self):
+        operations = []
+        def publish(callback):
+            return b.publish(self.store, self.slot, self.sha, self.files, before_index=callback, **self.prepare)
+        def failed(receipt):
+            self.assertTrue((self.store / (receipt["bundleSHA256"] + ".hpke")).is_file())
+            with self.assertRaises(b.SlotNotFound):
+                b.trusted_receipt(self.store, self.slot, **self.verify)
+            raise RuntimeError("fixture approval write stopped")
+        with self.assertRaises(RuntimeError):
+            publish(failed)
+        with self.assertRaises(b.SlotNotFound):
+            b.trusted_receipt(self.store, self.slot, **self.verify)
+        result = publish(operations.append)
+        self.assertEqual(publish(failed), result)
+        self.assertEqual(operations, [result])
+
     def test_fixed_members_no_traversal_or_unbounded_expansion(self):
         for wrong in ({}, dict(self.files, **{"../other": b"x"}), dict(self.files, **{"plan.json": b""})):
             with self.assertRaises(b.CustodyError):

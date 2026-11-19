@@ -210,7 +210,7 @@ def write_once(fd, name, content):
         os.unlink(temp, dir_fd=fd)
 
 
-def publish(store, slot, configuration_sha, files, *, signing_key, recipient_key):
+def publish(store, slot, configuration_sha, files, *, signing_key, recipient_key, before_index=None):
     signer = key_file(signing_key, ed25519.Ed25519PrivateKey, private=True)
     recipient = key_file(recipient_key, x25519.X25519PublicKey)
     info = context(slot, configuration_sha, recipient)
@@ -241,6 +241,10 @@ def publish(store, slot, configuration_sha, files, *, signing_key, recipient_key
         encrypted = SUITE.encrypt(private, recipient, canonical(info))
         claim = {**info, "inputCommitment": commitment, "bundleSHA256": digest(encrypted)}
         write_once(fd, claim["bundleSHA256"] + ".hpke", encrypted)
+        # Once the dated index is visible, the preparer can resume without decrypting or
+        # re-resolving. Finish independent in-cluster publication before that commit point.
+        if before_index is not None:
+            before_index(receipt(claim))
         signed = canonical({"claim": claim, "signature": signer.sign(canonical(claim)).hex()})
         write_once(fd, slot_name(slot), signed)
         return receipt(claim)
