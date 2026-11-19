@@ -10,8 +10,7 @@ runtime into separate, ordered Kubernetes Lists. Each artifact has a SHA-256
 in `review.json`. The generator runs offline. Use a private directory outside
 Git for the inputs, hook output, review packet and operator records.
 
-Capture the exact Kubernetes usernames from authenticated `kubectl auth whoami
--o json` in each intended context. Put the `status.userInfo.username` values
+Capture the existing actor usernames with `kubectl auth whoami -o json` in each intended context. If the two workload ServiceAccounts are new, enter their exact planned Kubernetes usernames for the proposal. After approved foundation creation, verify both with short-lived tokens before staging rights. A mismatch requires a corrected packet. Put the verified or planned values
 in a private JSON file with keys `requester`, `preparer`, `executor`,
 `recovery` and `bootstrap`. The preparer and executor must match the service
 accounts in the workload manifest. The other three identities must be distinct
@@ -72,9 +71,7 @@ effective permissions, release baselines, key projections and budgeted capacity
 all require verification. Seed only absent objects. Preserve an existing
 control or dated parameter record. Create or server-side apply the immutable
 monitoring hook archive to avoid the client-side annotation size limit. Wait
-for the CRD and all admission policies and bindings to be effective before any
-write grants. Verify actual dry-run denial under each relevant identity and on
-every serving API endpoint.
+for the CRD and admission policies and bindings to be effective. Verify fingerprints and parameter references on each serving API endpoint. Exercise the bootstrap request barrier before granting its binding. With runtime actors idle, check effective rights and admission-policy denials under each real subject as its approved binding is staged. An RBAC denial occurs before admission and cannot establish that a named admission policy ran.
 
 The requester RoleBinding in phase 21 is a **proposal**. After approved guard
 installation, run the existing `access.py --phase verified-binding` from the
@@ -84,7 +81,21 @@ in phase 21. Confirm the recovery principal's pre-existing, separately reviewed
 access to the named checkpoint through its recovery guards. Review the
 preparer and executor's full Secret get/list scope in four namespaces, the
 history writer and privileged monitoring hook permissions. Provision custody
-keys through their separate private procedure. Activation, the first dated run
-and Slack verification are distinct operator decisions. [Request and recovery
+keys through their separate private procedure.
+
+Keep the GitHub signal off while commissioning. Start the receiver when the
+existing request and checkpoint are clear. Its Pod must be Ready before the
+preparer can schedule on the same worker. During the UTC preparation window,
+run an approved one-off preparer from the suspended CronJob and verify its
+real dated receipt, six-release plan and matching configuration SHA. Confirm
+the scheduled environment has the failure webhook by name. With maintainer
+approval, enable the preparer and then the GitHub switch for the intended
+13:00 UTC event. If the event has passed, use a fresh slot.
+
+After that event, compare the actual workflow, receipt, unlocked checkpoint,
+component outcomes and public functional checks. Only failures generate a
+Slack message. Compare a failed run ID with the message in
+`#jaeger-operations`. The packet records these criteria under
+`activationAndFirstRun`. [Request and recovery
 procedure](daily-update-request.md) · [Admission and grants](daily-executor-permissions.md)
 · [Private custody](daily-bundle-custody.md)

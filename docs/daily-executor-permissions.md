@@ -55,8 +55,10 @@ Install stages in this order on a deployment approved for the service accounts.
 The operator creates the CRD with `approval-schema`, waits for its Established
 condition, seeds the twelve fixed names with `approval-seeds`, then installs
 `approval-guards`, `daily-guards` and the separate history and hook guards.
-Verify the bindings and their rejection cases before installing the
-`approval-grants`, `daily-grants`, read, hook and history roles. The
+Read back the guard definitions and bindings against the review packet. Verify
+the independent request barrier first. Stage the approved read and write bindings
+with the runtime idle. Check effective rights and named policy denials under each
+now-authorized identity before activation. The
 `daily-guards` stage includes the ordinary content guards. It replaces
 `routine-guards` for this installation. Existing installations must reconcile
 the rendered policies and bindings by name and verify that no stale overlapping

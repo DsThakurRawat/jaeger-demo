@@ -157,6 +157,13 @@ updates may succeed in the same run. A failed component keeps its preceding
 fingerprint. Inspect each component outcome and its live Helm history before a
 retry, especially when OpenSearch upgraded before Dashboards failed.
 
+During commissioning, verify the prepared slot and receipt with the GitHub
+signal disabled. After activation, use the first actual scheduled run to accept
+the deployment. Record its run URL and receipt, reconcile the six releases
+and five component fingerprints, and verify fresh traces, public health, TLS
+and storage bindings. The scheduled failure notification includes the run ID in
+`#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
+
 ## Failure handling
 
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
