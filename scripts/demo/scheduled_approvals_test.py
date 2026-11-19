@@ -210,6 +210,19 @@ class ProjectionTests(unittest.TestCase):
                 {"core/configmaps/user-config": wanted},
             )
             preview.assert_called_once_with(old, new, live, "default", "jaeger", "csa")
+            # The live value already changed before preparation. Only the
+            # real Helm preview can distinguish a no-op from drift repair.
+            fake.inventory.return_value = {ident: old}
+            fake.material.return_value = b"chart", b"values", [old], []
+            fake.get_object.return_value = future
+            preview.return_value = live
+            with self.assertRaisesRegex(ValueError, "Unchanged chart input"):
+                a.prepare_variants({}, SLOT, RECEIPT)
+            preview.return_value = future
+            self.assertEqual(a.prepare_variants({}, SLOT, RECEIPT), dict.fromkeys(t.PARTITIONS, {}))
+            fake.inventory.return_value = {ident: new}
+            fake.material.return_value = b"chart", b"values", [new], []
+            fake.get_object.return_value = live
             fake.projection.return_value = {"uid": "foreign", "state": "wrong"}
             with self.assertRaisesRegex(ValueError, "drifted"):
                 a.prepare_variants({}, SLOT, RECEIPT)

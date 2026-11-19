@@ -323,9 +323,6 @@ def prepare_variants(files, slot, receipt):
             if rid not in allowed:
                 require(not extra and original[ident] == obj, "Change outside the ordinary preview inventory")
                 continue
-            # Semantically identical chart inputs use the installed no-op guard.
-            if not extra and original[ident] == obj:
-                continue
             live = adapter.get_object(ident)
             require(
                 adapter.projection(live) == row["states"][ident],
@@ -340,6 +337,11 @@ def prepare_variants(files, slot, receipt):
                 after = preview(original[ident], obj, live, ns, release, row["applyMethod"])
             if t.variant(live) == t.variant(after):
                 continue
+            # Even an unchanged chart may overwrite earlier live drift. The
+            # no-op admission lane cannot authorize such a repair. Stop before
+            # publishing any parameter or starting a partially applied upgrade.
+            require(extra or original[ident] != obj,
+                    "Unchanged chart input would modify existing live state; operator reconciliation required")
             safe_transition(live, after)
             namespace, group, resource, name = rid
             handle = (group or "core") + "/" + resource + "/" + name
