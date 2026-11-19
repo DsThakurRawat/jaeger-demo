@@ -115,6 +115,38 @@ status to unavailable. These API rehearsals supply controller status and
 leave Pod scheduling, network traffic and the installed operator's live
 status for cluster commissioning.
 
+## Six-chart approval rehearsal
+
+Use the same verified public chart packages and pinned Jaeger chart checkout
+as the offline six-chart render. Put the locally built Helm 4.3.2 preview
+helper on PATH. `TOOLS` is a writable binary directory. `ENVTEST_ASSETS`
+contains the local kube-apiserver, etcd and kubectl. Choose a fresh receipt
+path. The fixture verifies the four chart archives and the four Jaeger
+dependency archives against `ops/executor/chart-archives.json`.
+
+```sh
+(cd ops/executor/preview && go build -mod=readonly -o "$TOOLS/jaeger-helm-preview" .)
+PATH="$TOOLS:$PATH" python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
+  --assets "$ENVTEST_ASSETS" --receipt "$RECEIPT" \
+  --six-chart-approvals "$CHARTS" "$JAEGER_CHART_CHECKOUT"
+```
+
+The fixture installs native policy, all twelve private approval objects and
+the named RBAC in a fresh loopback Kubernetes API. It seeds all ordinary
+eligible objects from actual chart renders and previews changes with
+short-lived scoped credentials. It compares SSA and CSA across the six
+releases, verifies that prior drift prevents a new publication, then stages
+three representative variants for every eligible identity. An executor
+update and rollback on a large Grafana dashboard exercise the native CEL
+checks with those parameters present.
+
+The Helm records, private Secret, cluster identity, PVC binding and previous
+Ready Pod evidence are synthetic. No controller schedules workloads in this
+API fixture. Production commissioning covers its actual cloud volume,
+controller status, health endpoints and installed policy. The receiver and
+bundle-custody tests separately exercise signing, encryption and decryption.
+[Six-chart native receipt](six-chart-approvals-receipt.json)
+
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.

@@ -30,9 +30,12 @@ The [native API rehearsal](../ops/executor/rehearsals/permissions.py) uses two s
 
 The installed daily path accepts the existing six Helm releases across all five
 components. For each selected release the independent preparer reads the
-specific live UID, the frozen history hashes and the reviewed render. When a
-chart manifest differs, it submits the proposed operation with server-side
-dry-run. The Kubernetes API runs its usual defaulting and admission. The
+specific live UID, the frozen history hashes and the reviewed render. It
+previews every eligible ordinary chart object in the release's existing Helm
+apply mode. A nonempty patch goes through Kubernetes dry-run, defaulting and
+admission. If Helm would change a live field despite an unchanged chart body,
+preparation stops before publishing any partition. The operator can reconcile
+that drift and prepare a new slot. The
 preparer records the existing and returned states for that UID in one of twelve
 private DailyWorkloadApproval resources. Unchanged chart objects retain the
 ordinary no-change path. Trace-generator changes use the exact same JSON Patch
@@ -133,6 +136,14 @@ independent preview and verifies the original UID and contents after real
 rollback. The rehearsal also checks denial of partial and altered projections,
 out-of-scope Pod and ReplicaSet reads, workload writes by the preparer, and
 unapproved ordinary mutations.
+
+The full chart rehearsal also prepares all six actual chart renders, packs
+and unpacks their 24 members, and verifies the native approval digest for
+changes in all five components. It exercises all 174 eligible chart identities with three
+current-size states per object. The 99 identities in `default` are split
+across eight named partitions. Kubernetes accepted the largest dashboard's
+reviewed update and rollback under the executor account.
+[Reproduction and scope](../scripts/demo/rehearsals/helm-history/README.md#six-chart-approval-rehearsal)
 
 ## Monitoring hook identities
 

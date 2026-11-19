@@ -1,0 +1,96 @@
+{
+  "productionAccess": false,
+  "sixChartApprovals": {
+    "configurationSHA": "38a76c695171134faceb0385acbf7bba66d37dd9",
+    "testedSources": {
+      "scripts/demo/rehearsals/helm-history/six_chart_approvals.py": "44040f08219a4fae179a9924e02b1d5c920fccd4f2b25aa7c9744ed63052a65f",
+      "scripts/demo/rehearsals/helm-history/all_five_candidates.py": "c1fb9a232470795621e75d41727cdc28539500d4a8aa8beca0eda62e7ab45ab7",
+      "scripts/demo/scheduled_bundle.py": "4161fe5a0f94413b11a6bc077ec6cbe8c1863e4705e351119a4d3639f87c9800",
+      "scripts/demo/scheduled_approvals.py": "421e17713a5fe5efe1e31072df84338f3f58719ae468e85debf47f14e586258a",
+      "scripts/demo/scheduled_approval_types.py": "28add42dbf27428d8ebd1eece69e38f0294a9f8fe20b5ee744b0bf72549b29e6",
+      "scripts/demo/scheduled_adapter.py": "4548ce364624ee62cfd2f0240bde3ed0eabc1ecee57d12cdd08a6d81486e510b",
+      "ops/executor/approval_policies.py": "ceef2f304ad433758e68911e503d102005e54b78f8ff36afdcbe7ac67992ae57",
+      "ops/executor/permissions.py": "152be3c1b51a3063c46caebbf872490ea926afb13e10fba41473d0c6bf40f8d8"
+    },
+    "members": 24,
+    "largestMember": "renders/oci-monitoring.json",
+    "largestMemberBytes": 951681,
+    "archiveBytes": 3004988,
+    "selected": [
+      "oci-monitoring",
+      "oci-jaeger",
+      "opensearch",
+      "otel-jaeger",
+      "otel-demo"
+    ],
+    "partitionCounts": {
+      "default-0": 2,
+      "default-1": 0,
+      "default-2": 0,
+      "default-3": 0,
+      "default-4": 2,
+      "default-5": 0,
+      "default-6": 0,
+      "default-7": 0,
+      "jaeger": 3,
+      "opensearch": 2,
+      "otel-demo": 1,
+      "kube-system": 0
+    },
+    "partitionBytes": {
+      "default-0": 10852,
+      "default-1": 282,
+      "default-2": 282,
+      "default-3": 282,
+      "default-4": 5839,
+      "default-5": 282,
+      "default-6": 282,
+      "default-7": 282,
+      "jaeger": 17492,
+      "opensearch": 3189,
+      "otel-demo": 5597,
+      "kube-system": 288
+    },
+    "targets": {
+      "default-0": [
+        "apps/deployments/jaeger",
+        "apps/deployments/jaeger-hotrod"
+      ],
+      "default-1": [],
+      "default-2": [],
+      "default-3": [],
+      "default-4": [
+        "apps/deployments/trace-generator",
+        "core/configmaps/prometheus-grafana-config-dashboards"
+      ],
+      "default-5": [],
+      "default-6": [],
+      "default-7": [],
+      "jaeger": [
+        "apps/deployments/jaeger",
+        "apps/deployments/jaeger-hotrod",
+        "apps/deployments/trace-generator"
+      ],
+      "opensearch": [
+        "core/configmaps/opensearch-cluster-single-config",
+        "core/configmaps/opensearch-dashboards-config"
+      ],
+      "otel-demo": [
+        "core/configmaps/otel-collector-agent"
+      ],
+      "kube-system": []
+    },
+    "syntheticCapture": true,
+    "nativePreparerDryRunAndPartitionWrites": true,
+    "priorDriftBlockedBeforePublication": true,
+    "broad": {
+      "nativePartitions": 12,
+      "changes": 174,
+      "largest": 387885,
+      "largeDashboard": "core/configmaps/prometheus-kube-prometheus-k8s-resources-namespace",
+      "nativeForwardRollbackPassed": true,
+      "unapprovedRejected": true
+    }
+  },
+  "passed": true
+}

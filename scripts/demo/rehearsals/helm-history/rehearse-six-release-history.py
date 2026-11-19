@@ -75,6 +75,8 @@ def main():
     parser.add_argument("--jaeger-patch-methods", type=Path, help="Audit real Jaeger chart SSA/CSA upgrade patch permissions")
     parser.add_argument("--typed-approval-rehearsal", action="store_true",
                         help="Use a fresh API exclusively for the per-slot workload admission rehearsal")
+    parser.add_argument("--six-chart-approvals", nargs=2, type=Path, metavar=("CHARTS", "JAEGER_CHART_CHECKOUT"),
+                        help="Exercise actual public chart renders and broad native approval partitions on a fresh API")
     args = parser.parse_args()
     assets = args.assets.resolve()
     receipt = args.receipt.absolute()
@@ -357,6 +359,17 @@ def main():
                 time.sleep(0.4)
             else:
                 raise RuntimeError("Local API timeout: " + (root / "apiserver.log").read_text()[-1500:])
+            if args.six_chart_approvals:
+                if any((args.typed_approval_rehearsal, args.storage_charts, args.monitoring_lookup, args.monitoring_hook_access,
+                        args.frozen_transaction, args.jaeger_patch_methods)):
+                    raise ValueError("The six-chart preparation fixture requires its own empty API")
+                from six_chart_approvals import run
+                evidence = run(cfg, root, kube, *(p.resolve() for p in args.six_chart_approvals))
+                with receipt.open("x") as output:
+                    json.dump({"productionAccess": False, "sixChartApprovals": evidence, "passed": True}, output, indent=2)
+                    output.write("\n")
+                print("PASS: six real chart renders, pre-existing drift, and twelve broad approval partitions")
+                return
             if args.typed_approval_rehearsal:
                 if any((args.storage_charts, args.monitoring_lookup, args.monitoring_hook_access,
                         args.frozen_transaction, args.jaeger_patch_methods)):
