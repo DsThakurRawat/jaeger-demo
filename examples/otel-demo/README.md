@@ -15,7 +15,7 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 
 ## Prerequisites
 - Kubernetes cluster reachable via `kubectl`
-- Installed CLIs: `bash`, `git`, `curl`, `kubectl`, `helm`
+- Install `bash`, `git`, `curl`, `kubectl`, `helm`, `python3` and `jq`. The deployment script uses Python for recovery policy selection, and the manual recovery and structured diagnostics use jq.
 - Network access to Helm repositories
 
 ## Quick start
@@ -121,12 +121,26 @@ in GA4 Realtime, then verify the Hostname breakdown after the data is processed.
 A hostname may only become selectable for a saved comparison after GA4 has
 received events for it.
 
-### OpenSearch recovery gate
+### Scheduled OpenSearch updates
 
-The isolated OpenSearch upgrade scope fails closed unless a recent OCI CSI
-volume snapshot has passed an isolated restore test against the exact live
-OpenSearch image. Run the manual `Verify OTel Demo OpenSearch Recovery`
-workflow before an OpenSearch version upgrade. The workflow:
+The 13:00 UTC hosted job treats generated demo traces as disposable. When
+OpenSearch inputs change, it upgrades the existing OpenSearch StatefulSet and
+Dashboards Deployment in that order. It checks the live source PVC binding
+before and after the operation, waits for readiness, verifies the running
+database and public Dashboards versions, and sends a fresh trace through Jaeger.
+The job creates no snapshot, restore PVC or restore Pod. Routine upgrades
+preserve storage. If an incompatible database change makes historical traces
+unusable, recovery of those traces is not guaranteed. Pause further updates
+and get approval before resetting or replacing a volume.
+
+### Manual recovery option
+
+A manual OpenSearch deployment defaults to `opensearch_recovery=required`. The
+reconciler runs a retained OCI CSI backup and an isolated restore test against
+the live OpenSearch and Jaeger image digests, then checks that the tested
+recovery point matches the live engine before upgrading. The standalone
+`Verify OTel Demo OpenSearch Recovery` workflow can also prepare a recovery
+point. It uses independently authorized storage access and follows these steps:
 
 1. verifies that the live volume uses the OCI Block Volume CSI driver;
 2. flushes OpenSearch and creates a retained `VolumeSnapshot`;
@@ -139,7 +153,7 @@ workflow before an OpenSearch version upgrade. The workflow:
    before marking the snapshot tested.
 
 Ingestion remains active, so the flushed provider backup is crash-consistent,
-not application-consistent. The isolated restore test is therefore mandatory.
+not application-consistent. Always run the isolated restore test when a manual operation requires a recovery point.
 The restore pod requests the target OpenSearch memory sizing and must run on a
 different worker from the live OpenSearch pod, so it also proves that current
 cluster capacity can host the recovery test without colocating both databases.
@@ -154,17 +168,14 @@ instead. See the
 [OpenSearch recovery procedure](./OPENSEARCH_RECOVERY.md) for both intact- and
 replaced-namespace recovery.
 
-If the trace data is disposable, a maintainer may explicitly select
-`opensearch_recovery=waive` for a manual workflow dispatch from `main` whose
-other inputs are exactly `demo_stack=otel`, `deploy_mode=upgrade`, and
-`otel_deploy_scope=opensearch`. No other event, branch, stack, mode, or scope
-accepts the waiver. This skips only the recovery-point check: it does not run
-`clean`, delete data or storage, change the OpenSearch-before-Dashboards rollout
-order, or remove health waits. The waived upgrade has no tested rollback or
-data-recovery path if the existing persistent data becomes unusable.
+During a manual dispatch from `main`, a maintainer can explicitly select
+`opensearch_recovery=waive` for `demo_stack=otel`, `deploy_mode=upgrade` and
+`otel_deploy_scope=opensearch`. Direct script use defaults to required recovery.
+The hosted daily job derives its own disposable-trace policy. A failure of a
+requested manual restore test blocks that protected upgrade.
 
-The waiver does not waive cluster-capacity checks. Confirm sufficient memory
-and disk headroom separately before dispatching the upgrade.
+Check the existing database workload's memory and disk headroom before either
+upgrade path.
 
 ### OpenSearch volume expansion
 
@@ -206,9 +217,9 @@ persistent-storage wiring, while the Jaeger runtime config points at OpenSearch.
 
 ## Clean-up
 
-> **Warning:** This is not an upgrade or recovery path. It removes namespaced
-> recovery objects. Confirm that the retained `VolumeSnapshotContent` and its
-> private recovery record are available before using it.
+> These teardown examples delete workloads and namespaced recovery objects.
+> Use them only for an explicitly approved teardown. If the operator needs a
+> retained backup, verify its content and private recovery record beforehand.
 
 - Clean uninstall using cleanup.sh :
 ```bash path=null start=null

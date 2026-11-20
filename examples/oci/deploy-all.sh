@@ -65,8 +65,8 @@ prepare_upgrade_release() {
   local status
 
   status=$(release_status "$name")
-  if [[ -n "${EXPECTED_CONFIG_SHA:-}" && "$status" != "deployed" ]]; then
-    echo "Handover requires an existing deployed $name release; refusing reinstall" >&2
+  if [[ "$status" != "deployed" && ( -n "${EXPECTED_CONFIG_SHA:-}" || "${GITHUB_EVENT_NAME:-}" == "schedule" ) ]]; then
+    echo "An existing deployed $name release is required; refusing reinstall" >&2
     return 1
   fi
   case "$status" in
@@ -119,10 +119,11 @@ if [[ "$MODE" == "upgrade" ]]; then
     esac
   fi
   HELM_JAEGER_CMD="upgrade --install --wait --atomic"
-  if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
-    HELM_JAEGER_CMD="upgrade --wait --atomic"
-  fi
   HELM_PROM_CMD="upgrade --install --wait"
+  if [[ -n "${EXPECTED_CONFIG_SHA:-}" || "${GITHUB_EVENT_NAME:-}" == "schedule" ]]; then
+    HELM_JAEGER_CMD="upgrade --wait --atomic"
+    HELM_PROM_CMD="upgrade --wait"
+  fi
 else
   echo "🟣 Clean mode: Uninstalling Jaeger and Prometheus..."
   uninstall_release jaeger

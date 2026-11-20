@@ -51,6 +51,17 @@
         "imageOverride:\\s+repository: (?<depName>\\S+)\\s+tag: \"(?<currentValue>[^\"@]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?\""
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Track digests for the three monitoring hook image tags",
+      "managerFilePatterns": [
+        "/^examples\\/oci\\/monitoring-values\\.yaml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=docker depName=(?<depName>\\S+)\\s+tag: \"(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker"
     }
   ],
   "ignorePaths": [
@@ -134,6 +145,30 @@
         "examples/oci/monitoring-values.yaml"
       ],
       "groupName": "OCI demo monitoring"
+    },
+    {
+      "description": "Review kubectl and webhook-certgen tag changes with Kubernetes and chart upgrades",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchFileNames": [
+        "examples/oci/monitoring-values.yaml"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "rollback",
+        "replacement"
+      ],
+      "enabled": false,
+      "matchPackageNames": [
+        "registry.k8s.io/kubectl",
+        "ghcr.io/jkroepke/kube-webhook-certgen"
+      ]
     },
     {
       "matchFileNames": [

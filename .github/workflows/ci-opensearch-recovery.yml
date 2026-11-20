@@ -50,6 +50,12 @@ jobs:
         ref: ${{ github.sha }}
         persist-credentials: false
 
+    - name: Acquire the shared deployment lock
+      id: writer-lock
+      env:
+        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
+      run: python3 scripts/demo/scheduled_request.py manual-acquire
+
     - name: Create and verify OpenSearch recovery point
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -69,9 +75,13 @@ jobs:
           -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
 
     - name: Remove disposable restore pod
-      if: always()
+      if: always() && steps.writer-lock.outcome == 'success'
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
         kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
           --ignore-not-found=true --wait=false
+
+    - name: Release the shared deployment lock
+      if: success() && steps.writer-lock.outputs.held == 'true'
+      run: python3 scripts/demo/scheduled_request.py manual-release
