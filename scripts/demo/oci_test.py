@@ -17,7 +17,8 @@ import deploy
 
 class OciScopeTests(unittest.TestCase):
     def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error="",
-                reviewed_handover=False, preflight_status="deployed", event="workflow_dispatch"):
+                reviewed_handover=False, preflight_status="deployed", event="workflow_dispatch", mode="upgrade",
+                smoke="false"):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             directory = root / "examples/oci"
@@ -66,14 +67,17 @@ if command == "helm":
             raise SystemExit("Prometheus chart repository is missing or its index is unavailable")
 elif command == "kubectl" and "get" in sys.argv:
     print("existing-object")
+elif command == "curl":
+    Path(sys.argv[sys.argv.index("-o") + 1]).write_text('"Driver" "frontend"')
 ''')
             fake.chmod(0o755)
-            for name in ("helm", "kubectl", "git"):
+            for name in ("helm", "kubectl", "git", "curl"):
                 (binaries / name).symlink_to(fake)
             log = root / "commands.jsonl"
             env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"],
                        JAEGER_DEMO_DEPLOY_SCOPE=scope, TEST_COMMAND_LOG=str(log),
-                       TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS="false",
+                       TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS=smoke,
+                       JAEGER_DEMO_PUBLIC_BASE_URL="https://demo.invalid",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
                        TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error,
                        TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="", GITHUB_EVENT_NAME=event)
@@ -81,7 +85,7 @@ elif command == "kubectl" and "get" in sys.argv:
                 env.update(EXPECTED_CONFIG_SHA="a" * 40, GITHUB_SHA="a" * 40,
                            GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/main",
                            JAEGER_DEMO_JAEGER_IMAGE_TAG="b" * 40, JAEGER_DEMO_HOTROD_IMAGE_TAG="c" * 40)
-            result = subprocess.run(["bash", str(directory / "deploy-all.sh"), "upgrade"],
+            result = subprocess.run(["bash", str(directory / "deploy-all.sh"), mode],
                                     env=env, text=True, capture_output=True)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
             return result, calls
@@ -210,6 +214,53 @@ elif command == "kubectl" and "get" in sys.argv:
         self.assertTrue(any(call[:2] == ["helm", "uninstall"] for call in calls))
         upgrade = next(call for call in calls if call[:2] == ["helm", "upgrade"])
         self.assertIn("--install", upgrade)
+
+    def test_helm_release_commands_are_unchanged_in_every_mode(self):
+        script = (deploy.ROOT / "examples/oci/deploy-all.sh").read_text()
+        version = re.search(r'^PROMETHEUS_STACK_CHART_VERSION="\$\{PROMETHEUS_STACK_CHART_VERSION:-([^}"]+)\}"$',
+                            script, re.MULTILINE)[1]
+        common = ["--set", "provisionDataStore.cassandra=false", "--set", "allInOne.enabled=true",
+                  "--set", "storage.type=memory"]
+        configs = ["--set-file", "userconfig=./config.yaml", "--set-file", "uiconfig=./ui-config.json",
+                   "-f", "./jaeger-values.yaml"]
+        hosted = common + ["--set", "allInOne.image.repository=jaegertracing/jaeger",
+                           "--set", "allInOne.image.pullPolicy=IfNotPresent",
+                           "--set", "hotrod.image.repository=jaegertracing/example-hotrod",
+                           "--set", "hotrod.image.pullPolicy=IfNotPresent"] + configs
+        local = common + ["--set", "hotrod.enabled=true", "--set", "global.imageRegistry=",
+                          "--set", "allInOne.image.repository=localhost:5000/jaegertracing/jaeger",
+                          "--set", "allInOne.image.tag=latest", "--set", "allInOne.image.pullPolicy=Never",
+                          "--set", "hotrod.image.repository=localhost:5000/jaegertracing/example-hotrod",
+                          "--set", "hotrod.image.tag=latest", "--set", "hotrod.image.pullPolicy=Never"] + configs
+        prometheus = ["--timeout", "20m0s", "prometheus", "prometheus-community/kube-prometheus-stack",
+                      "--version", version, "--set", "crds.upgradeJob.enabled=true",
+                      "--set", "crds.upgradeJob.forceConflicts=true", "-f", "monitoring-values.yaml"]
+        cases = {
+            "upgrade": ("workflow_dispatch", ["upgrade", "--install", "--wait", "--atomic"],
+                        ["upgrade", "--install", "--wait"], hosted),
+            "scheduled upgrade": ("schedule", ["upgrade", "--wait", "--atomic"], ["upgrade", "--wait"], hosted),
+            "clean": ("workflow_dispatch", ["install", "--wait"], ["install", "--wait"], hosted),
+            "local": ("workflow_dispatch", ["install", "--wait"], ["install", "--wait"], local),
+        }
+        for name, (event, jaeger_cmd, prometheus_cmd, jaeger_args) in cases.items():
+            with self.subTest(mode=name):
+                result, calls = self.execute("all", event=event, mode=name.split()[-1])
+                self.assertEqual(0, result.returncode, result.stderr)
+                releases = [call for call in calls if call[:2] in (["helm", "upgrade"], ["helm", "install"])]
+                self.assertEqual([
+                    ["helm", *jaeger_cmd, "--timeout", "10m0s", "jaeger", "./helm-charts/charts/jaeger", *jaeger_args],
+                    ["helm", *prometheus_cmd, *prometheus],
+                ], releases)
+
+    def test_public_smoke_checks_bound_each_request(self):
+        result, calls = self.execute("jaeger", smoke="true")
+        self.assertEqual(0, result.returncode, result.stderr)
+        requests = [call for call in calls if call[0] == "curl"]
+        self.assertEqual(["https://demo.invalid/hotrod/dispatch?customer=123",
+                          "https://demo.invalid/jaeger/api/v3/services"],
+                         [call[call.index("-fsS") + 1] for call in requests])
+        for call in requests:
+            self.assertEqual(["curl", "--connect-timeout", "5", "--max-time", "20", "-fsS"], call[:6])
 
     def render_monitoring(self, *options):
         script = (deploy.ROOT / "examples/oci/deploy-all.sh").read_text()

@@ -118,18 +118,18 @@ if [[ "$MODE" == "upgrade" ]]; then
         ;;
     esac
   fi
-  HELM_JAEGER_CMD="upgrade --install --wait --atomic"
-  HELM_PROM_CMD="upgrade --install --wait"
+  HELM_JAEGER_CMD=(upgrade --install --wait --atomic)
+  HELM_PROM_CMD=(upgrade --install --wait)
   if [[ -n "${EXPECTED_CONFIG_SHA:-}" || "${GITHUB_EVENT_NAME:-}" == "schedule" ]]; then
-    HELM_JAEGER_CMD="upgrade --wait --atomic"
-    HELM_PROM_CMD="upgrade --wait"
+    HELM_JAEGER_CMD=(upgrade --wait --atomic)
+    HELM_PROM_CMD=(upgrade --wait)
   fi
 else
   echo "🟣 Clean mode: Uninstalling Jaeger and Prometheus..."
   uninstall_release jaeger
   uninstall_release prometheus
-  HELM_JAEGER_CMD="install --wait"
-  HELM_PROM_CMD="install --wait"
+  HELM_JAEGER_CMD=(install --wait)
+  HELM_PROM_CMD=(install --wait)
 fi
 
 # Navigate to the script's directory (examples/oci)
@@ -146,7 +146,7 @@ if deploy_jaeger; then
   if [[ "$MODE" == "local" ]]; then
 
     echo "🟣 Deploying Jaeger with local registry images..."
-    helm $HELM_JAEGER_CMD --timeout 10m0s jaeger ./helm-charts/charts/jaeger \
+    helm "${HELM_JAEGER_CMD[@]}" --timeout 10m0s jaeger ./helm-charts/charts/jaeger \
       --set provisionDataStore.cassandra=false \
       --set allInOne.enabled=true \
       --set storage.type=memory \
@@ -178,7 +178,7 @@ if deploy_jaeger; then
     echo "🟣 Deploying Jaeger image ${JAEGER_IMAGE_REPOSITORY}:${JAEGER_IMAGE_TAG:-chart-default}"
     echo "🟣 Deploying HotROD image ${HOTROD_IMAGE_REPOSITORY}:${HOTROD_IMAGE_TAG:-values-default}"
 
-    helm $HELM_JAEGER_CMD --timeout 10m0s jaeger ./helm-charts/charts/jaeger \
+    helm "${HELM_JAEGER_CMD[@]}" --timeout 10m0s jaeger ./helm-charts/charts/jaeger \
       --set provisionDataStore.cassandra=false \
       --set allInOne.enabled=true \
       --set storage.type=memory \
@@ -195,7 +195,7 @@ if deploy_monitoring; then
   helm repo update prometheus-community
   echo "🟢 Deploying Prometheus..."
   kubectl apply -f prometheus-svc.yaml
-  helm $HELM_PROM_CMD --timeout 20m0s prometheus "$PROMETHEUS_STACK_CHART" \
+  helm "${HELM_PROM_CMD[@]}" --timeout 20m0s prometheus "$PROMETHEUS_STACK_CHART" \
     --version "$PROMETHEUS_STACK_CHART_VERSION" \
     --set crds.upgradeJob.enabled=true \
     --set crds.upgradeJob.forceConflicts=true \
@@ -235,7 +235,7 @@ smoke_expect() {
   local output=$3
 
   for attempt in $(seq 1 12); do
-    if curl -fsS "$url" -o "$output" && grep -q "$expected" "$output"; then
+    if curl --connect-timeout 5 --max-time 20 -fsS "$url" -o "$output" && grep -q "$expected" "$output"; then
       echo "✅ Smoke check passed: $url"
       return 0
     fi
@@ -272,6 +272,5 @@ echo "📈 Prometheus: http://localhost:9090"
 echo "📊 Grafana: http://localhost:9091"
 echo "🚕 HotROD: http://localhost:8080"
 echo ""
-echo "📝 Note: If you made changes to Jaeger configuration files (e.g., config.yaml, ui-config.json), you may need to run this script in clean mode:"
-echo "    ./deploy-all.sh clean"
-echo "Or manually restart the CI workflow to ensure your changes are applied."
+echo "📝 Note: To apply changes to Jaeger configuration files (e.g., config.yaml, ui-config.json), re-run this script in upgrade mode:"
+echo "    ./deploy-all.sh upgrade"

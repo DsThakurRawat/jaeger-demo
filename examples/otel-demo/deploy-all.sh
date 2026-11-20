@@ -76,14 +76,14 @@ existing_installation() {
 configure_jaeger_helm_command() {
   HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger --create-namespace)
   if [[ "$MODE" == "upgrade" ]]; then
-    HELM_JAEGER_CMD="upgrade --install --wait --atomic"
+    HELM_JAEGER_CMD=(upgrade --install --wait --atomic)
     if existing_installation; then
-      HELM_JAEGER_CMD="upgrade --wait --atomic"
+      HELM_JAEGER_CMD=(upgrade --wait --atomic)
       HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger)
     fi
   else
     # For clean mode, use install after cleanup.
-    HELM_JAEGER_CMD="install --wait"
+    HELM_JAEGER_CMD=(install --wait)
   fi
 }
 
@@ -327,7 +327,7 @@ wait_for_service_endpoints() {
   local service="$2"
   local timeout_secs="${3:-120}"
   log "Waiting for service $service endpoints in $namespace..."
-  for i in $(seq 1 "$timeout_secs"); do
+  for _ in $(seq 1 "$timeout_secs"); do
     if kubectl get endpoints "$service" -n "$namespace" >/dev/null 2>&1; then
       local ready
       ready=$(kubectl get endpoints "$service" -n "$namespace" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
@@ -513,7 +513,7 @@ cleanup() {
 
   # Wait for namespaces to disappear
   for ns in jaeger otel-demo opensearch; do
-    for i in {1..120}; do
+    for _ in {1..120}; do
       if ! kubectl get namespace "$ns" >/dev/null 2>&1; then
         break
       fi
@@ -612,7 +612,7 @@ main() {
   check_handover || return 1
   configure_jaeger_helm_command
   echo " Running in '$MODE' mode..."
-  log "Starting CI deploy (weekly refresh)"
+  log "Starting deploy"
   need bash
   need git
   need curl
@@ -653,7 +653,7 @@ main() {
 
     log "Deploying Jaeger image ${JAEGER_IMAGE_REPOSITORY}:${JAEGER_IMAGE_TAG}"
     log "Deploying HotROD image ${HOTROD_IMAGE_REPOSITORY}:${HOTROD_IMAGE_TAG}"
-    if ! helm $HELM_JAEGER_CMD jaeger "$SCRIPT_DIR/helm-charts/charts/jaeger" \
+    if ! helm "${HELM_JAEGER_CMD[@]}" jaeger "$SCRIPT_DIR/helm-charts/charts/jaeger" \
       "${HELM_JAEGER_NAMESPACE_ARGS[@]}" \
       --set allInOne.enabled=true \
       --set storage.type=elasticsearch \

@@ -201,11 +201,59 @@ run_jaeger_deploy() {
     kubectl() { :; }
     helm() {
       if [[ "$1" != repo ]]; then
-        printf "helm"; printf " %s" "$@"; printf "\n"
+        printf "helm"; printf "${TEST_HELM_ARG_FORMAT:- %s}" "$@"; printf "\n"
       fi
     }
     main
   ' _ "$SCRIPT" "$1" "${2:-}" "${3:-jaeger}"
+}
+
+expected_jaeger_helm_args() {
+  # Source with the same positional parameters run_jaeger_deploy uses.
+  bash -c '
+    source "$1"
+    printf " [%s]" \
+      --set allInOne.enabled=true \
+      --set storage.type=elasticsearch \
+      --set storage.elasticsearch.anonymous=true \
+      --set storage.elasticsearch.usePassword=false \
+      --set storage.elasticsearch.host=opensearch-cluster-single.opensearch.svc.cluster.local \
+      --set storage.elasticsearch.port=9200 \
+      --set "allInOne.image.repository=$JAEGER_IMAGE_REPOSITORY" \
+      --set "allInOne.image.tag=$JAEGER_IMAGE_TAG" \
+      --set "allInOne.image.pullPolicy=$IMAGE_PULL_POLICY" \
+      --set "hotrod.image.repository=$HOTROD_IMAGE_REPOSITORY" \
+      --set "hotrod.image.tag=$HOTROD_IMAGE_TAG" \
+      --set "hotrod.image.pullPolicy=$IMAGE_PULL_POLICY" \
+      --set-file "userconfig=$SCRIPT_DIR/jaeger-config.yaml" \
+      --set-file "uiconfig=$UI_CONFIG_FILE" \
+      -f "$SCRIPT_DIR/jaeger-values.yaml" \
+      --timeout 10m
+  ' _ "$SCRIPT" "$1"
+}
+
+testJaegerHelmArgvIsExactInEveryMode() {
+  local dir expected_args mode reviewed command namespace output
+  dir=$(dirname "$SCRIPT")
+  # Every argument is bracketed so a merged or split word changes the output.
+  for mode in upgrade handover clean; do
+    expected_args=$(expected_jaeger_helm_args "${mode/handover/upgrade}")
+    assertContains "$expected_args" " [--set] [allInOne.image.tag="
+    reviewed=""
+    namespace=" [--namespace] [jaeger] [--create-namespace]"
+    case "$mode" in
+      upgrade) command=" [upgrade] [--install] [--wait] [--atomic]" ;;
+      handover)
+        reviewed=reviewed
+        command=" [upgrade] [--wait] [--atomic]"
+        namespace=" [--namespace] [jaeger]"
+        ;;
+      clean) command=" [install] [--wait]" ;;
+    esac
+    output=$(TEST_HELM_ARG_FORMAT=" [%s]" run_jaeger_deploy "${mode/handover/upgrade}" "$reviewed" | grep '^helm .* \[jaeger\] ')
+    assertEquals "$mode Jaeger helm argv" \
+      "helm${command} [jaeger] [$dir/helm-charts/charts/jaeger]${namespace}${expected_args}" "$output"
+  done
 }
 
 testJaegerUpgradeIncludesSharedUIConfig() {
