@@ -54,6 +54,6 @@ next reconciliation or `monitoring`-scope run.
 
 Run `make lint` and `SHUNIT2=/path/to/shunit2 make test`; the latter runs the
 maintenance tests through `scripts/utils/run-tests.sh`. To inspect discovery
-without updating dependencies, use Renovate's local platform with
-`--dry-run=extract`. Kubernetes and OCI infrastructure/add-on maintenance is
-outside this workflow.
+without updating dependencies, run `make renovate-discovery`, which validates
+the configuration and checks Renovate's credential-free extraction. Kubernetes
+and OCI infrastructure/add-on maintenance is outside this workflow.

@@ -29,19 +29,19 @@ make lint
 make test
 ```
 
-`make check` runs `lint`, `test` and `renovate-discovery` in that order. `make lint`
-also runs ruff on the Python sources with the rules in `ruff.toml`.
+`make check` runs `lint`, `test` and `renovate-discovery` in that order.
 
 The tests mock deployment commands and render pinned public charts. Public network
 access is required for the chart repositories, but no production credentials are
 used. The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 
-`make lint` runs ShellCheck for shared scripts, actionlint for workflows, and JSON
-syntax validation. Imported application configuration is kept unchanged during
-extraction. Toolchain centralization and Helmfile render/schema checks belong to
-the next implementation stage. Production Helm's effective version must be frozen
-after establishing the last release writer's major before handover.
+`make lint` runs ShellCheck for shared scripts, actionlint for workflows, JSON
+syntax validation, and ruff for Python with the rules in `ruff.toml`. Imported
+application configuration is kept unchanged during extraction. Toolchain
+centralization and Helmfile render/schema checks belong to the next
+implementation stage. Production Helm's effective version must be frozen after
+establishing the last release writer's major before handover.
 
 ## Renovate discovery
 
