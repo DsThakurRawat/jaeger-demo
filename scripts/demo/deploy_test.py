@@ -330,7 +330,7 @@ class DeploymentTests(unittest.TestCase):
                       "steps.reconcile.outputs.recovery_started == 'true' && "
                       "(steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || "
                       "steps.reconcile.outcome == 'cancelled')\n", cleanup)
-        self.assertIn("\n      if: failure()\n", slack)
+        self.assertIn("\n      if: failure() || cancelled()\n", slack)
         self.assertIn("\n        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n", cleanup)
         script = deploy.ROOT / "examples/otel-demo/opensearch-recovery.sh"
         self.assertIn('local restore_pod="jaeger-os-verify-$RECOVERY_ID"', script.read_text())

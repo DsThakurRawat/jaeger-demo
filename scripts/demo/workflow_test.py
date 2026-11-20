@@ -197,5 +197,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}\n', job)
 
 
+    def test_unsuccessful_deployments_notify_and_reconcile_stops_inside_the_job_limit(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        header = '    - name: Send detailed Slack notification on failure\n'
+        manual, daily = source.split(header)[1:]
+        # Both jobs end with the notification and the daily job reuses the manual message.
+        self.assertNotIn('\n    - name:', manual.split('\n  request-daily:', 1)[0])
+        self.assertNotIn('\n    - name:', daily)
+        self.assertIn('      env: *demo-failure-alert\n', daily)
+        self.assertIn('*Status:* ${{ job.status }}', manual)
+        for notify in (manual, daily):
+            condition = re.search(r'^      if: (.+)$', notify, re.MULTILINE)[1]
+            for status in ('success', 'failure', 'cancelled'):
+                with self.subTest(status=status):
+                    expression = condition.replace('failure()', repr(status == 'failure'))
+                    expression = expression.replace('cancelled()', repr(status == 'cancelled')).replace('||', 'or')
+                    self.assertEqual(status != 'success', eval(expression, {'__builtins__': {}}, {}))
+
+        job_limit = int(re.search(r'^    timeout-minutes: (\d+)$', source, re.MULTILINE)[1])
+        reconcile = source.split('    - name: Reconcile demo components\n', 1)[1].split('\n    - name:', 1)[0]
+        step_limit = int(re.search(r'^      timeout-minutes: (\d+)$', reconcile, re.MULTILINE)[1])
+        # The documented waits total 270 minutes; later steps need time to run.
+        self.assertGreaterEqual(step_limit, 270)
+        self.assertLessEqual(step_limit, job_limit - 10)
+
+
 if __name__ == '__main__':
     unittest.main()

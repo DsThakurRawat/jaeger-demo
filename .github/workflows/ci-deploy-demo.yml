@@ -153,8 +153,11 @@ jobs:
         DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
       run: python3 scripts/demo/scheduled_request.py manual-acquire
 
+    # Stop inside the job limit so diagnostics, restore-pod cleanup and the
+    # notification still run. The waits budgeted above total 270m.
     - name: Reconcile demo components
       id: reconcile
+      timeout-minutes: 285
       env:
         JAEGER_DEMO_LOCK_HELD: ${{ steps.writer-lock.outputs.held }}
       run: python3 scripts/demo/deploy.py
@@ -187,8 +190,9 @@ jobs:
       if: success() && steps.writer-lock.outputs.held == 'true'
       run: python3 scripts/demo/scheduled_request.py manual-release
 
+    # A cancelled or timed-out job is not a failure() and would otherwise end silently.
     - name: Send detailed Slack notification on failure
-      if: failure()
+      if: failure() || cancelled()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
       env: &demo-failure-alert
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -201,6 +205,7 @@ jobs:
           *Repository:* ${{ github.repository }}
           *Workflow:* ${{ github.workflow }}
           *Run ID:* ${{ github.run_id }}
+          *Status:* ${{ job.status }}
           *Trigger:* ${{ github.event_name }}
           *Actor:* ${{ github.actor }}
 
@@ -257,7 +262,8 @@ jobs:
       env: *daily-request-credential
       run: python3 scripts/demo/scheduled_request.py request
 
+    # A cancelled or timed-out job is not a failure() and would otherwise end silently.
     - name: Send detailed Slack notification on failure
-      if: failure()
+      if: failure() || cancelled()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
       env: *demo-failure-alert
