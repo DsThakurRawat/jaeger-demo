@@ -430,8 +430,11 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
   assertContains "$rendered" "opensearchproject/opensearch-dashboards:$chart_version"
   # The public, unauthenticated Dashboards must not expose the REST proxy or
   # carry credentials that the security-disabled cluster never checks.
-  assertContains "$rendered" "console.enabled: false"
-  assertContains "$rendered" "opensearch_security.enabled: false"
+  # Match whole lines so a commented-out key fails.
+  for setting in console.enabled opensearch_index_management.enabled opensearch_security.enabled; do
+    printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*${setting//./\\.}: false"
+    assertTrue "Dashboards should render $setting: false" $?
+  done
   assertNotContains "$rendered" "opensearch.username"
   assertNotContains "$rendered" "opensearch.password"
 }

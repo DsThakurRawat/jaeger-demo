@@ -20,3 +20,5 @@ config:
     # Dashboards is public and OpenSearch has no authentication. The Dev Tools
     # console would proxy any REST request, including deletes, to the cluster.
     console.enabled: false
+    # Index Management can also send requests to the cluster.
+    opensearch_index_management.enabled: false
