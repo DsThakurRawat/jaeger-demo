@@ -8,14 +8,31 @@ Kubernetes Engine (OKE) cluster. Jaeger and HotROD source, image publishing,
 product releases and integration tests remain in
 [jaegertracing/jaeger](https://github.com/jaegertracing/jaeger).
 
-This repository deployed both hosted Jaeger releases on November 18, 2026.
-The [OCI deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431)
-reached Helm revision 25 and the [OTel deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094)
-reached revision 14. The previous core deployment and maintenance workflows are disabled.
 The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
-the OTel sample application, and OCI monitoring through a [protected deployment request](docs/daily-update-request.md) to an [in-cluster executor](docs/in-cluster-executor.md). Its production activation
-and first verified run are tracked in the [handover runbook](docs/cutover.md#review-scheduled-scope).
-Helmfile adoption follows the script handover.
+the OTel sample application, and OCI monitoring through a
+[protected deployment request](docs/daily-update-request.md) to an
+[in-cluster executor](docs/in-cluster-executor.md). For current migration
+status and handover evidence, see [docs/MIGRATION.md](docs/MIGRATION.md).
+Schedule activation is tracked in the
+[handover runbook](docs/cutover.md#review-scheduled-scope).
+
+## Public endpoints
+
+| URL | Stack | Backing service | Storage |
+| --- | --- | --- | --- |
+| https://demo.jaegertracing.io/jaeger | OCI | Jaeger query UI | In-memory |
+| https://demo.jaegertracing.io/grafana | OCI | Grafana (Prometheus stack) | Prometheus |
+| https://demo.jaegertracing.io/hotrod | OCI | HotROD sample application | In-memory traces in Jaeger |
+| https://demo.jaegertracing.io/ | OCI | Permanent redirect to https://www.jaegertracing.io/demo/ | None |
+| https://jaeger.demo.jaegertracing.io | OTel | Jaeger query UI | OpenSearch |
+| https://hotrod.demo.jaegertracing.io | OTel | HotROD sample application | OpenSearch (via Jaeger) |
+| https://opensearch.demo.jaegertracing.io | OTel | OpenSearch Dashboards | OpenSearch |
+| https://shop.demo.jaegertracing.io | OTel | OpenTelemetry Demo storefront (`frontend-proxy`) | OpenSearch (via Jaeger) |
+
+Routes are defined in [examples/oci/ingress.yaml](examples/oci/ingress.yaml),
+[ingress-jaeger.yaml](examples/otel-demo/ingress/ingress-jaeger.yaml),
+[ingress-opensearch.yaml](examples/otel-demo/ingress/ingress-opensearch.yaml) and
+[ingress-otel-demo.yaml](examples/otel-demo/ingress/ingress-otel-demo.yaml).
 
 ## Architecture and ownership
 
