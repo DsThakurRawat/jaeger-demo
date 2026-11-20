@@ -167,9 +167,14 @@ and storage bindings. The scheduled failure notification includes the run ID in
 ## Failure handling
 
 A manual deployment or daily request job that fails, is cancelled or times out
-posts to `#jaeger-operations` with its status. The manual reconcile step stops
-after 285 minutes so failure diagnostics, restore-pod cleanup and the
-notification run inside the 300-minute job limit.
+posts to `#jaeger-operations` with its status. The manual job is limited to
+330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
+failure diagnostics, restore-pod cleanup and the notification. The cleanup step
+has its own 2-minute limit so that a hung request cannot use up the
+cancellation window. A run that is cancelled before its job starts, for example
+while it waits for approval or when a newer pending run replaces it, runs no
+steps and sends no notification
+([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
 
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running

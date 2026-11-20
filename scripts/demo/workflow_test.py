@@ -217,9 +217,14 @@ class WorkflowTests(unittest.TestCase):
         job_limit = int(re.search(r'^    timeout-minutes: (\d+)$', source, re.MULTILINE)[1])
         reconcile = source.split('    - name: Reconcile demo components\n', 1)[1].split('\n    - name:', 1)[0]
         step_limit = int(re.search(r'^      timeout-minutes: (\d+)$', reconcile, re.MULTILINE)[1])
-        # The documented waits total 270 minutes; later steps need time to run.
-        self.assertGreaterEqual(step_limit, 270)
-        self.assertLessEqual(step_limit, job_limit - 10)
+        # Reconcile keeps the 300 minutes the job allowed before the step had a limit
+        # of its own. Setup and the later steps get the remaining 30 minutes.
+        self.assertGreaterEqual(step_limit, 300)
+        self.assertGreaterEqual(job_limit - step_limit, 30)
+        self.assertLess(job_limit, 360)
+        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 2\n', cleanup)
+        self.assertIn(' --request-timeout=30s ', cleanup)
 
 
 if __name__ == '__main__':
