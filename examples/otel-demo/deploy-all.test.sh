@@ -428,6 +428,12 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
     --namespace opensearch --values "$(dirname "$SCRIPT")/opensearch-dashboard-values.yaml")
   assertEquals "Dashboards chart should render" 0 $?
   assertContains "$rendered" "opensearchproject/opensearch-dashboards:$chart_version"
+  # The public, unauthenticated Dashboards must not expose the REST proxy or
+  # carry credentials that the security-disabled cluster never checks.
+  assertContains "$rendered" "console.enabled: false"
+  assertContains "$rendered" "opensearch_security.enabled: false"
+  assertNotContains "$rendered" "opensearch.username"
+  assertNotContains "$rendered" "opensearch.password"
 }
 
 testDeploysPinnedOpenSearchChartsInOrder() {

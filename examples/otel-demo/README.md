@@ -47,7 +47,10 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh clean
 ## What gets deployed
 - Namespace `opensearch`:
   - OpenSearch (single node) StatefulSet
-  - OpenSearch Dashboards Deployment
+  - OpenSearch Dashboards Deployment. OpenSearch runs without authentication and
+    the hosted Dashboards route is public, so the Dev Tools console is disabled.
+    Other bundled plugins can still write to the cluster; do not treat the
+    hosted Dashboards as read-only.
 - Namespace `jaeger`:
   - Jaeger all-in-one Deployment with OpenSearch-backed trace storage
   - HOTROD application
