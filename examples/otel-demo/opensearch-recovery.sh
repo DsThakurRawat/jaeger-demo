@@ -456,8 +456,7 @@ spec:
         - |
           exec /usr/share/opensearch/opensearch-docker-entrypoint.sh \
             -Ediscovery.type=single-node \
-            -Enetwork.host=127.0.0.1 \
-            -Eplugins.security.disabled=true
+            -Enetwork.host=127.0.0.1
       volumeMounts:
         - name: data
           mountPath: $DATA_PATH
