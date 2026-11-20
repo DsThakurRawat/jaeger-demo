@@ -12,28 +12,31 @@ direct image overrides and load-generator requirements are tracked separately.
 PostgreSQL, Valkey, and OpenSearch stay within their configured major lines until
 a reviewed migration or compatibility change updates that constraint.
 
-The extracted deployment workflow is manual-only and restricted to main until the
-[ownership handover](../../docs/cutover.md) passes. Its daily trigger is present
-only as a comment. After verified activation, the existing reconciler operates as
-described below.
+Manual deployment runs use the reviewed `demo-apply` environment. The 13:00 UTC
+job on main uses `demo-scheduled` after activation through the
+[handover runbook](../../docs/cutover.md#review-scheduled-scope).
+
 `deploy.py` fingerprints each component's deployment inputs and records successful
 revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap. Failed
 revisions are not recorded, so the next reconciliation retries them. The daily
-run also refreshes Jaeger and HotROD snapshots in both demos. New installations
-without revision records reconcile every component once. A partial failure does
+run also refreshes Jaeger and HotROD snapshots in both demos. A missing component key selects that component. Scheduled runs require the
+existing revision ConfigMap and existing Helm releases. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 
-Deployment, recovery, and volume expansion share the existing workflow concurrency
-lock. Database updates run the existing retained snapshot and isolated restore
-test within that lock, then the deployment script checks the recovery point and
-upgrades OpenSearch before Dashboards. A version check and a fresh collector-to-
-query trace check must pass before recording the revision. Recovery failure stops
-the update. Automated runs never waive recovery or perform a clean reinstall.
+Deployment, manual recovery and volume expansion share one workflow concurrency
+lock. When the daily job selects OpenSearch, it upgrades the live StatefulSet
+on its existing PVC, waits for readiness, and then upgrades Dashboards. The job
+checks the database and public Dashboards versions and sends a fresh trace
+through the collector and query service before recording success. Historical
+synthetic traces are disposable. A destructive reset needs explicit approval.
 
-The deployment job has a time limit sized for a full-stack run that includes the
-restore test, and it removes that run's disposable restore pod when it ends,
-including after a failure or cancellation.
+An OpenSearch deployment requested manually defaults to a retained snapshot and
+isolated restore test. Failure diagnostics and restore Pod cleanup belong to
+manual runs that started recovery. An isolated manual OpenSearch upgrade from
+main can explicitly waive this test. The standalone [recovery
+procedure](../../examples/otel-demo/OPENSEARCH_RECOVERY.md) describes the
+storage, access and capacity it uses.
 
 The manual `demo_stack`, `otel_deploy_scope`, image overrides, `deploy_mode`, and
 recovery inputs are preserved. The historical `otel_deploy_scope` input also

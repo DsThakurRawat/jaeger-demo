@@ -1,0 +1,3234 @@
+{
+  "configCommit": "df261c2e025ac3b102d17fda170b09972fa498f9",
+  "helm": "4.3.2",
+  "targetKubernetes": "1.36.1",
+  "chartArchiveSHA256": {
+    "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
+    "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",
+    "opentelemetry-demo-0.40.9.tgz": "33a381a62b2f8c6031cdee2935103877a5958af14a1f5d985d39602b53e6e07b",
+    "kube-prometheus-stack-82.10.4.tgz": "e0c601a95d333616fd30961ec9374893fba2b6852ce7df87f97f9efdd2cb9b41"
+  },
+  "interpretation": "Proposed access requirements inferred from existing-object upgrades, hook lifecycle and example Helm history records. Live manifests, hook behavior, admission, rollback, and OCI restore capacity require separate verification.",
+  "records": [
+    {
+      "component": "opensearch",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "policy",
+      "resource": "poddisruptionbudgets",
+      "name": "opensearch-cluster-single-pdb",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "opensearch-cluster-single-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "opensearch-cluster-single",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "opensearch-cluster-single-headless",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "apps",
+      "resource": "statefulsets",
+      "name": "opensearch-cluster-single",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "opensearch-dashboards-dashboards",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "opensearch-dashboards-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "rolebindings",
+      "name": "opensearch-dashboards-dashboards-rolebinding",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "opensearch-dashboards",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "opensearch",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "opensearch-dashboards",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "otel-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "otel-demo",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "otel-collector-agent",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "flagd-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "postgresql-init",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "otel-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "otel-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "otel-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "ad",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "cart",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "checkout",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "currency",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "email",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "flagd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "frontend",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "frontend-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "image-provider",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "kafka",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "llm",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "load-generator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "payment",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "postgresql",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "product-catalog",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "product-reviews",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "quote",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "recommendation",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "shipping",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "valkey-cart",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "daemonsets",
+      "name": "otel-collector-agent",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "accounting",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "ad",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "cart",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "checkout",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "currency",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "email",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "flagd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "fraud-detection",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "frontend",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "frontend-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "image-provider",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "kafka",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "llm",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "load-generator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "payment",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "postgresql",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "product-catalog",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "product-reviews",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "quote",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "recommendation",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "shipping",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "valkey-cart",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-prometheus-node-exporter",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-kube-prometheus-alertmanager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "alertmanager-prometheus-kube-prometheus-alertmanager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "prometheus-kube-prometheus-prometheus-scrape-confg",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-grafana-config-dashboards",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-grafana-datasource",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-alertmanager-overview",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-apiserver",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-cluster-total",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-controller-manager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-etcd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-grafana-overview",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-coredns",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-cluster",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-multicluster",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-namespace",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-node",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-pod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-workload",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-workloads-namespace",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-kubelet",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-namespace-by-pod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-namespace-by-workload",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-node-cluster-rsrc-use",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-node-rsrc-use",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-nodes-aix",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-nodes-darwin",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-nodes",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-persistentvolumesusage",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-pod-total",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-scheduler",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-workload-total",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-grafana-clusterrole",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-grafana-clusterrolebinding",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "roles",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "rolebindings",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-prometheus-node-exporter",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-alertmanager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "kube-system",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-coredns",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "kube-system",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-kube-controller-manager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "kube-system",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-kube-etcd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "kube-system",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-kube-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "kube-system",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-kube-scheduler",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "daemonsets",
+      "name": "prometheus-prometheus-node-exporter",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "admissionregistration.k8s.io",
+      "resource": "mutatingwebhookconfigurations",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "admissionregistration.k8s.io",
+      "resource": "validatingwebhookconfigurations",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "alertmanagers",
+      "name": "prometheus-kube-prometheus-alertmanager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheuses",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-alertmanager.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-config-reloaders",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-etcd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-general.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-cpu-usage-second",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-memory-cache",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-memory-rss",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-memory-swap",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-memory-working-s",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.container-resource",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-k8s.rules.pod-owner",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-apiserver-availability.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-apiserver-burnrate.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-apiserver-histogram.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-apiserver-slos",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-prometheus-general.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-prometheus-node-recording.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-scheduler.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubelet.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-apps",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-resources",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-storage",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system-apiserver",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system-controller-manager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system-kube-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system-kubelet",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system-scheduler",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-kubernetes-system",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-node-exporter.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-node-exporter",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-node-network",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-node.rules",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "prometheusrules",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-grafana",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-state-metrics",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-prometheus-node-exporter",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-alertmanager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-coredns",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-apiserver",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-kube-controller-manager",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-kube-etcd",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-kube-proxy",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-kube-scheduler",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-kubelet",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-operator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "monitoring.coreos.com",
+      "resource": "servicemonitors",
+      "name": "prometheus-kube-prometheus-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-crds-upgrade",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,pre-rollback"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,post-install,post-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-crds-upgrade",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,pre-rollback"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-crds-upgrade",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,pre-rollback"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterroles",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,post-install,post-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-crds-upgrade",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,pre-rollback"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "cluster",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "clusterrolebindings",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,post-install,post-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "roles",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,post-install,post-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "rbac.authorization.k8s.io",
+      "resource": "rolebindings",
+      "name": "prometheus-kube-prometheus-admission",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,post-install,post-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "batch",
+      "resource": "jobs",
+      "name": "prometheus-crds-upgrade",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade,pre-rollback"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "batch",
+      "resource": "jobs",
+      "name": "prometheus-kube-prometheus-admission-create",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "pre-install,pre-upgrade"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "batch",
+      "resource": "jobs",
+      "name": "prometheus-kube-prometheus-admission-patch",
+      "verbs": [
+        "get",
+        "create",
+        "delete"
+      ],
+      "source": "pinned Helm upgrade render",
+      "hookEvents": "post-install,post-upgrade"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "jaeger",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "user-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "ui-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-agent",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-query",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "jaeger",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "jaeger",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "jaeger-es-index-cleaner",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "serviceaccounts",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "user-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "ui-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-agent",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-collector",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-query",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "jaeger",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "jaeger-hotrod",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "scheduled in-place Helm upgrade"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "batch",
+      "resource": "cronjobs",
+      "name": "jaeger-es-index-cleaner",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "reviewed Jaeger render"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "trace-script",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "trace-generator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "networking.k8s.io",
+      "resource": "ingresses",
+      "name": "jaeger-demo-ingress",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "oci-jaeger",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "networking.k8s.io",
+      "resource": "ingresses",
+      "name": "jaeger-root-redirect",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "trace-script",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "jaeger",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "trace-generator",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "jaeger",
+      "apiGroup": "networking.k8s.io",
+      "resource": "ingresses",
+      "name": "jaeger-demo-ingress",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-query-clusterip",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "opensearch",
+      "apiGroup": "networking.k8s.io",
+      "resource": "ingresses",
+      "name": "opensearch-demo-ingress",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "otel-jaeger",
+      "release": "supplement",
+      "scope": "otel-demo",
+      "apiGroup": "networking.k8s.io",
+      "resource": "ingresses",
+      "name": "otel-demo-ingress",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply / restart"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "supplement",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "jaeger-collector-prometheus",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "kubectl apply"
+    },
+    {
+      "component": "shared",
+      "release": "state",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "jaeger-demo-deployment-revisions",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "fingerprint checkpoint"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v25",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v26",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v27",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v14",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v15",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "jaeger",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.jaeger.v16",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch.v14",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch.v15",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch.v16",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch-dashboards.v14",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch-dashboards.v15",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "opensearch-dashboards",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.opensearch-dashboards.v16",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.prometheus.v6",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.prometheus.v7",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.prometheus.v8",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.otel-demo.v11",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.otel-demo.v12",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.otel-demo.v13",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    }
+  ],
+  "license": "Copyright (c) 2026 The Jaeger Authors. SPDX-License-Identifier: Apache-2.0"
+}

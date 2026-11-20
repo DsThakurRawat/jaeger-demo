@@ -10,12 +10,14 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 import deploy
 
 
 class OciScopeTests(unittest.TestCase):
     def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error="",
-                reviewed_handover=False, preflight_status="deployed"):
+                reviewed_handover=False, preflight_status="deployed", event="workflow_dispatch"):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             directory = root / "examples/oci"
@@ -74,7 +76,7 @@ elif command == "kubectl" and "get" in sys.argv:
                        TEST_RELEASE_STATUS=status, RUN_PUBLIC_SMOKE_TESTS="false",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
                        TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error,
-                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="")
+                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="", GITHUB_EVENT_NAME=event)
             if reviewed_handover:
                 env.update(EXPECTED_CONFIG_SHA="a" * 40, GITHUB_SHA="a" * 40,
                            GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/main",
@@ -94,6 +96,18 @@ elif command == "kubectl" and "get" in sys.argv:
         checkouts = [call for call in calls if "checkout" in call]
         self.assertEqual(1, len(checkouts))
         self.assertIn("--detach", checkouts[0])
+
+    def test_scheduled_jaeger_cannot_install_or_reinstall(self):
+        for state in ("", "failed", "pending-upgrade"):
+            with self.subTest(state=state):
+                result, calls = self.execute("jaeger", status=state, event="schedule")
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(any(c[:2] in (["helm", "uninstall"], ["helm", "upgrade"]) for c in calls))
+        result, calls = self.execute("all", event="schedule")
+        self.assertEqual(0, result.returncode, result.stderr)
+        upgrades = [call for call in calls if call[:2] == ["helm", "upgrade"]]
+        self.assertEqual(2, len(upgrades))
+        self.assertTrue(all("--install" not in call for call in upgrades))
 
     def test_monitoring_scope_bootstraps_fresh_repository_without_touching_jaeger(self):
         result, calls = self.execute("monitoring")
@@ -197,23 +211,67 @@ elif command == "kubectl" and "get" in sys.argv:
         upgrade = next(call for call in calls if call[:2] == ["helm", "upgrade"])
         self.assertIn("--install", upgrade)
 
-    def test_pinned_chart_renders_grafana_liveness_delay(self):
+    def render_monitoring(self, *options):
         script = (deploy.ROOT / "examples/oci/deploy-all.sh").read_text()
         version = re.search(r'^PROMETHEUS_STACK_CHART_VERSION="\$\{PROMETHEUS_STACK_CHART_VERSION:-([^}"]+)\}"$',
                             script, re.MULTILINE)[1]
         # The OCI mirror serves the same chart without the repository's large index.
         result = subprocess.run(
             ["helm", "template", "prometheus", "oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack",
-             "--version", version, "--values", str(deploy.ROOT / "examples/oci/monitoring-values.yaml"),
-             "--show-only", "charts/grafana/templates/deployment.yaml"],
+             "--version", version, "--kube-version", "1.36.1", "--is-upgrade",
+             "--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true", *options],
             text=True, capture_output=True)
         self.assertEqual(0, result.returncode, result.stderr)
+        return result.stdout
+
+    def test_pinned_chart_renders_grafana_liveness_delay(self):
+        rendered = self.render_monitoring("--values", str(deploy.ROOT / "examples/oci/monitoring-values.yaml"),
+                                          "--show-only", "charts/grafana/templates/deployment.yaml")
         # Only the Grafana container has probes; the chart cannot render a startup probe for it.
-        self.assertEqual(1, result.stdout.count("livenessProbe:"))
-        self.assertEqual(1, result.stdout.count("readinessProbe:"))
-        liveness = result.stdout.split("livenessProbe:")[1].split("readinessProbe:")[0]
+        self.assertEqual(1, rendered.count("livenessProbe:"))
+        self.assertEqual(1, rendered.count("readinessProbe:"))
+        liveness = rendered.split("livenessProbe:")[1].split("readinessProbe:")[0]
         self.assertIn("initialDelaySeconds: 600", liveness)
         self.assertIn("path: /api/health", liveness)
+
+    def test_monitoring_hook_images_are_pinned_to_reviewed_chart_tags(self):
+        def hook_images(rendered):
+            refs = {}
+            for obj in yaml.safe_load_all(rendered):
+                if not obj or obj["kind"] != "Job" or "helm.sh/hook" not in obj["metadata"].get("annotations", {}):
+                    continue
+                pod = obj["spec"]["template"]["spec"]
+                for container in pod.get("initContainers", []) + pod["containers"]:
+                    refs[obj["metadata"]["name"], container["name"]] = container["image"]
+            return refs
+
+        values_file = deploy.ROOT / "examples/oci/monitoring-values.yaml"
+        default_refs = hook_images(self.render_monitoring())
+        actual_refs = hook_images(self.render_monitoring("--values", str(values_file)))
+        crd_job = "prometheus-crds-upgrade"
+        admission_job = "prometheus-kube-prometheus-admission"
+        expected = {(crd_job, "busybox"), (crd_job, "kubectl"),
+                    (admission_job + "-create", "create"), (admission_job + "-patch", "patch")}
+        self.assertEqual(expected, set(actual_refs))
+        self.assertEqual(expected, set(default_refs))
+        for entry in sorted(expected):
+            with self.subTest(job=entry):
+                tag, separator, digest = actual_refs[entry].partition("@")
+                if entry == (crd_job, "busybox"):
+                    self.assertEqual("docker.io/busybox:latest", default_refs[entry], "Review the chart's BusyBox default")
+                    self.assertRegex(tag, r"^docker\.io/busybox:[0-9]+\.[0-9]+\.[0-9]+$")
+                else:
+                    self.assertEqual(default_refs[entry], tag, "Review upstream tag changes with the corresponding digest")
+                self.assertEqual("@", separator, "Hook image rendered without an immutable digest")
+                self.assertRegex(digest, r"^sha256:[a-f0-9]{64}$")
+        values = yaml.safe_load(values_file.read_text())
+        crd = values["crds"]["upgradeJob"]["image"]
+        certgen = values["prometheusOperator"]["admissionWebhooks"]["patch"]["image"]["tag"]
+        configured = {"busybox": crd["busybox"]["tag"], "kubectl": crd["kubectl"]["tag"],
+                      "create": certgen, "patch": certgen}
+        for entry, reference in actual_refs.items():
+            repository = default_refs[entry].rsplit(":", 1)[0]
+            self.assertEqual(repository + ":" + configured[entry[1]], reference)
 
     def test_invalid_scope_has_no_side_effects(self):
         result, calls = self.execute("opensearch")

@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 import handover
+import recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,7 +22,6 @@ STATE = "jaeger-demo-deployment-revisions"
 COMPONENTS = {
     "opensearch": ("otel", "opensearch", [
         "opensearch-values.yaml", "opensearch-dashboard-values.yaml",
-        "opensearch-recovery.sh", "opensearch-volume-snapshot-class.yaml",
     ]),
     "otel-jaeger": ("otel", "jaeger", [
         "jaeger-values.yaml", "jaeger-config.yaml", "jaeger-query-service.yaml",
@@ -60,6 +60,8 @@ def fingerprint(component, root=ROOT):
     inputs += [name + "\n" + (directory / name).read_text() for name in files]
     if scope == "jaeger":
         inputs.append((root / "scripts/demo/jaeger-chart.sh").read_text())
+    elif scope == "opensearch":
+        inputs.append((root / "scripts/demo/recovery_policy.py").read_text())
     return hashlib.sha256("\0".join(inputs).encode()).hexdigest()
 
 
@@ -84,19 +86,74 @@ def resolve_snapshots(env):
                 env[key] = value
 
 
+class ScheduledReleaseError(RuntimeError):
+    """A selected release cannot be upgraded in place."""
+
+
+def check_scheduled_releases(component):
+    # Check each selected release before attempting an in-place upgrade.
+    releases = {
+        "opensearch": ("opensearch", ("opensearch", "opensearch-dashboards")),
+        "otel-jaeger": ("jaeger", ("jaeger",)),
+        "otel-demo": ("otel-demo", ("otel-demo",)),
+        "oci-jaeger": ("default", ("jaeger",)),
+        "oci-monitoring": ("default", ("prometheus",)),
+    }
+    namespace, names = releases[component]
+    for name in names:
+        result = run(["helm", "status", name, "--namespace", namespace, "-o", "json"], capture_output=True)
+        release = json.loads(result.stdout)
+        status = release["info"]["status"]
+        # Non-atomic chart upgrades may leave a failed release to repair in
+        # place. Neither Jaeger path may reinstall or replace a failed release.
+        if status != "deployed" and not (status == "failed" and name != "jaeger"):
+            raise ScheduledReleaseError(f"Cannot schedule {namespace}/{name} with Helm status {status}")
+
+
+def opensearch_data_binding(get=None):
+    def read_object(kind, name):
+        return json.loads(run(["kubectl", "-n", "opensearch", "get", kind, name, "-o", "json"],
+                              capture_output=True).stdout)
+
+    get = get or read_object
+    pod = get("pod", "opensearch-cluster-single-0")
+    spec = pod.get("spec", {})
+    mounts = {mount["name"] for container in spec.get("containers", []) if container["name"] == "opensearch"
+              for mount in container.get("volumeMounts", []) if mount["mountPath"] == "/usr/share/opensearch/data"}
+    claims = [v.get("persistentVolumeClaim", {}).get("claimName") for v in spec.get("volumes", [])
+              if v["name"] in mounts]
+    if len(claims) != 1 or not claims[0]:
+        raise ScheduledReleaseError("Cannot identify the existing OpenSearch data PVC")
+    claim = get("pvc", claims[0])
+    metadata = claim.get("metadata", {})
+    uid, pv = metadata.get("uid"), claim.get("spec", {}).get("volumeName")
+    if not uid or not pv or claim.get("status", {}).get("phase") != "Bound" or metadata.get("deletionTimestamp"):
+        raise ScheduledReleaseError("Scheduled OpenSearch updates require a bound, active data PVC")
+    return claims[0], uid, pv
+
+
 def deploy_component(component, env):
     stack, scope, _ = COMPONENTS[component]
     directory = ROOT / "examples" / ("otel-demo" if stack == "otel" else "oci")
     child_env = dict(env, JAEGER_DEMO_STACK=stack, JAEGER_DEMO_DEPLOY_SCOPE=scope,
                      JAEGER_OTEL_DEMO_DEPLOY_SCOPE=scope)
     mode = env.get("JAEGER_DEMO_DEPLOY_MODE", "upgrade")
-    if scope == "opensearch" and mode == "upgrade" and env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "required":
-        if env.get("GITHUB_OUTPUT"):
-            with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                output.write("recovery_started=true\n")
-        run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
+    if env.get("GITHUB_EVENT_NAME") == "schedule":
+        check_scheduled_releases(component)
+    binding = None
+    if scope == "opensearch" and mode == "upgrade":
+        policy = recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
+        if policy == "preserve-pvc":
+            binding = opensearch_data_binding()
+        elif policy == "required":
+            if env.get("GITHUB_OUTPUT"):
+                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    output.write("recovery_started=true\n")
+            run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
     run(["bash", str(directory / "deploy-all.sh"), mode], env=child_env)
     if scope == "opensearch":
+        if binding is not None and opensearch_data_binding() != binding:
+            raise ScheduledReleaseError("OpenSearch data PVC or bound PV changed during the scheduled upgrade")
         version = dict(PIN_LINE.findall((directory / "deploy-all.sh").read_text()))["OPENSEARCH_CHART_VERSION"]
         run(["python3", str(ROOT / "scripts/demo/verify_trace.py"), version], env=child_env)
 
@@ -115,10 +172,9 @@ def reconcile(env, root=ROOT):
         raise ValueError("Invalid demo stack or mode")
     if event != "workflow_dispatch" and mode != "upgrade":
         raise ValueError("Automatic demo deployments must use upgrade mode")
-    if env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "required") == "waive" and (
-            event != "workflow_dispatch" or env.get("GITHUB_REF") != "refs/heads/main"
-            or stack != "otel" or scope != "opensearch" or mode != "upgrade"):
-        raise ValueError("Recovery waiver requires a manual main/otel/upgrade/opensearch deployment")
+    recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
+    if event == "schedule":
+        handover.check_helm_context(env)
     if event == "workflow_dispatch" and mode == "clean":
         # Clean is an explicit whole-stack operation, not a per-component loop.
         resolve_snapshots(env)
@@ -131,6 +187,8 @@ def reconcile(env, root=ROOT):
 
     result = run(["kubectl", "-n", "default", "get", "configmap", STATE,
                   "--ignore-not-found", "-o", "json"], capture_output=True)
+    if event == "schedule" and not result.stdout.strip():
+        raise ValueError("Scheduled upgrades require the existing deployment revision ConfigMap")
     previous = json.loads(result.stdout).get("data", {}) if result.stdout.strip() else {}
     desired = {name: fingerprint(name, root) for name in COMPONENTS}
     selected = selected_components(event, stack, scope, mode, previous, desired)
@@ -159,14 +217,18 @@ def reconcile(env, root=ROOT):
                 snapshots_resolved = True
             print(f"::group::Deploy {name}", flush=True)
             deploy_component(name, env)
-            updated = dict(previous, **{name: desired[name]})
-            state = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
-                "name": STATE, "namespace": "default"}, "data": updated}
-            run(["kubectl", "apply", "-f", "-"], input=json.dumps(state))
-            previous = updated
+            if event == "schedule" or env.get("JAEGER_DEMO_LOCK_HELD") == "true":
+                patch = json.dumps({"data": {name: desired[name]}})
+                run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
+            else:
+                updated = dict(previous, **{name: desired[name]})
+                state = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
+                    "name": STATE, "namespace": "default"}, "data": updated}
+                run(["kubectl", "apply", "-f", "-"], input=json.dumps(state))
+                previous = updated
             print(f"{name}: deployed successfully", flush=True)
-        except subprocess.CalledProcessError as error:
-            print(f"::error::{name}: deployment failed ({error.returncode})", flush=True)
+        except (subprocess.CalledProcessError, ScheduledReleaseError) as error:
+            print(f"::error::{name}: {error}", flush=True)
             failures.append(name)
         finally:
             print("::endgroup::", flush=True)

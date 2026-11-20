@@ -20,7 +20,10 @@ def request(url, body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=10) as response:
-        return json.load(response)
+        raw = response.read(12 * 1024 * 1024 + 1)
+        if len(raw) > 12 * 1024 * 1024:
+            raise RuntimeError("Trace verification response exceeds the size limit")
+        return json.loads(raw)
 
 
 def contains_trace(value, trace_id):

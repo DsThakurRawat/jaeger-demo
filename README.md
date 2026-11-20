@@ -8,10 +8,14 @@ Kubernetes Engine (OKE) cluster. Jaeger and HotROD source, image publishing,
 product releases and integration tests remain in
 [jaegertracing/jaeger](https://github.com/jaegertracing/jaeger).
 
-This repository is in the extraction stage. The imported deployment scripts are
-present, but production ownership has not transferred. All production workflows
-are manual-only and restricted to `main`; access and first deployment require the
-verified [handover](docs/cutover.md). Helmfile conversion is subsequent work.
+This repository deployed both hosted Jaeger releases on November 18, 2026.
+The [OCI deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431)
+reached Helm revision 25 and the [OTel deployment](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094)
+reached revision 14. The previous core deployment and maintenance workflows are disabled.
+The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
+the OTel sample application, and OCI monitoring through a [protected deployment request](docs/daily-update-request.md) to an [in-cluster executor](docs/in-cluster-executor.md). Its production activation
+and first verified run are tracked in the [handover runbook](docs/cutover.md#review-scheduled-scope).
+Helmfile adoption follows the script handover.
 
 ## Architecture and ownership
 
@@ -60,9 +64,10 @@ DCO, issues and required checks. [AGENTS.md](AGENTS.md) covers agent work.
 
 Use the handover and release runbooks for the existing installation. Do not run
 historical installation, `clean`, recovery or cleanup commands merely to complete
-the migration. Routine maintenance preserves storage. Backup/restore tooling is
-retained verbatim in this stage; its agreed removal and a narrow manual reset
-belong to [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
+the migration. The daily OpenSearch upgrade preserves its existing PVC and
+verifies new trace ingestion and query. Generated trace history is disposable.
+During Stage 1, maintainers can separately request a manual tested backup. Retirement of that
+tooling and the narrow manual reset belong to [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
 
 ## Extraction provenance
 
@@ -84,8 +89,8 @@ is included in the cutoff.
 | Core PR | Relevant work |
 | --- | --- |
 | [#10131](https://github.com/jaegertracing/jaeger/pull/10131) | Bounded AI assistant; activation remains outside migration scope |
-| [#10174](https://github.com/jaegertracing/jaeger/pull/10174) | Disposable generated traces and recovery policy |
-| [#10180](https://github.com/jaegertracing/jaeger/pull/10180) | Restore pod security setting |
+| [#10174](https://github.com/jaegertracing/jaeger/pull/10174) | Routine disposable-trace policy for the hosted schedule is implemented in [demo #15](https://github.com/jaegertracing/jaeger-demo/pull/15). Manual recovery has its own opt-in path. |
+| [#10180](https://github.com/jaegertracing/jaeger/pull/10180) | Manual restore Pod startup, rehomed in [demo #14](https://github.com/jaegertracing/jaeger-demo/pull/14) |
 | [#10031](https://github.com/jaegertracing/jaeger/pull/10031) | Grafana probes and demo smoke checks |
 | [#10172](https://github.com/jaegertracing/jaeger/pull/10172) | Ported the recovery API helpers and their regression tests. See the [recovery procedure](examples/otel-demo/OPENSEARCH_RECOVERY.md). |
 | [#10155](https://github.com/jaegertracing/jaeger/pull/10155) | Hosted configuration portions of the batch migration; core configuration stays in core |

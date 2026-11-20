@@ -4,9 +4,8 @@
 name: Deploy Jaeger Demo to OKE
 
 on:
-  # Enable the daily refresh only after the verified script handover.
-  # schedule:
-  #   - cron: '0 13 * * *'
+  schedule:
+    - cron: '0 13 * * *'
   workflow_dispatch:
     inputs:
       expected_config_sha:
@@ -61,15 +60,16 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: jaeger-otel-demo-opensearch-recovery
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: Deploy Jaeger to OKE Cluster
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
     environment: demo-apply
+    concurrency:
+      group: jaeger-otel-demo-opensearch-recovery
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # Budget for a full-stack run with the 'required' recovery policy, taking every
     # wait at its limit: 90m backup-test (the ci-opensearch-recovery.yml limit),
@@ -94,32 +94,11 @@ jobs:
       JAEGER_DEMO_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode || 'upgrade' }}
       JAEGER_DEMO_STACK: ${{ github.event.inputs.demo_stack || 'oci' }}
       JAEGER_OTEL_DEMO_DEPLOY_SCOPE: ${{ github.event.inputs.otel_deploy_scope || 'jaeger' }}
-      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ github.event.inputs.opensearch_recovery || 'required' }}
+      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ inputs.opensearch_recovery }}
       RUN_PUBLIC_SMOKE_TESTS: "true"
       GITHUB_EVENT_NAME: ${{ github.event_name }}
 
     steps:
-    - name: Validate OpenSearch recovery policy
-      run: |
-        case "${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" in
-          required)
-            ;;
-          waive)
-            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ||
-              "${GITHUB_REF}" != "refs/heads/main" ||
-              "${JAEGER_DEMO_STACK}" != "otel" ||
-              "${JAEGER_DEMO_DEPLOY_MODE}" != "upgrade" ||
-              "${JAEGER_OTEL_DEMO_DEPLOY_SCOPE}" != "opensearch" ]]; then
-              echo "OpenSearch recovery may be waived only by a manual isolated otel/upgrade/opensearch run from main" >&2
-              exit 1
-            fi
-            ;;
-          *)
-            echo "Invalid OpenSearch recovery policy: ${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY}" >&2
-            exit 1
-            ;;
-        esac
-
     - name: Verify the reviewed configuration revision
       run: |
         if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
@@ -134,6 +113,11 @@ jobs:
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
+
+    - name: Validate OpenSearch recovery policy
+      run: |
+        python3 scripts/demo/recovery_policy.py "$JAEGER_DEMO_STACK" "$JAEGER_DEMO_DEPLOY_MODE" \
+          "$JAEGER_OTEL_DEMO_DEPLOY_SCOPE" "$JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY"
 
     - name: Resolve upstream Jaeger main
       shell: bash
@@ -163,12 +147,20 @@ jobs:
       with:
         version: v4.3.2
 
+    - name: Acquire the shared deployment lock
+      id: writer-lock
+      env:
+        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
+      run: python3 scripts/demo/scheduled_request.py manual-acquire
+
     - name: Reconcile demo components
       id: reconcile
+      env:
+        JAEGER_DEMO_LOCK_HELD: ${{ steps.writer-lock.outputs.held }}
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
-      if: failure() && steps.configure-oke.outcome == 'success'
+      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
@@ -183,7 +175,7 @@ jobs:
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
     - name: Remove disposable restore pod
-      if: always() && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
+      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
@@ -191,10 +183,14 @@ jobs:
           --ignore-not-found=true --wait=false ||
           echo "::warning::Could not confirm removal of restore pod jaeger-os-verify-$OPENSEARCH_RECOVERY_ID; delete it manually if the recovery test started"
 
+    - name: Release the shared deployment lock
+      if: success() && steps.writer-lock.outputs.held == 'true'
+      run: python3 scripts/demo/scheduled_request.py manual-release
+
     - name: Send detailed Slack notification on failure
       if: failure()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
-      env:
+      env: &demo-failure-alert
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
         SLACK_CHANNEL: '#jaeger-operations'
         SLACK_COLOR: danger
@@ -210,3 +206,58 @@ jobs:
 
           <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Failed Run>
         SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
+
+  request-daily:
+    name: Request the reviewed daily demo update
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'schedule' && vars.DEMO_SCHEDULE_ENABLED == 'true'
+    environment: demo-scheduled
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: jaeger-otel-demo-opensearch-recovery
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+    - name: Checkout demo configuration
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+
+    - name: Read the original scheduled run time
+      id: schedule-time
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        created_at=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+        printf 'created_at=%s\n' "$created_at" >> "$GITHUB_OUTPUT"
+
+    - name: Configure the request-only OKE credential
+      uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
+      env: &daily-request-credential
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        SCHEDULE_RUN_CREATED_AT: ${{ steps.schedule-time.outputs.created_at }}
+        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
+      with:
+        cluster: ${{ secrets.OKE_CLUSTER_OCID }}
+        enablePrivateEndpoint: false
+
+    - name: Verify OCI CLI version
+      run: python scripts/demo/verify_oci_cli.py
+
+    - name: Signal the daily update and wait for verified completion
+      env: *daily-request-credential
+      run: python3 scripts/demo/scheduled_request.py request
+
+    - name: Send detailed Slack notification on failure
+      if: failure()
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env: *demo-failure-alert

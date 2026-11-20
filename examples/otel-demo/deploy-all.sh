@@ -20,7 +20,7 @@ IMAGE_PULL_POLICY="${JAEGER_DEMO_IMAGE_PULL_POLICY:-IfNotPresent}"
 PUBLIC_JAEGER_URL="${JAEGER_DEMO_PUBLIC_JAEGER_URL:-${JAEGER_OTEL_DEMO_JAEGER_URL:-https://jaeger.demo.jaegertracing.io}}"
 RUN_PUBLIC_SMOKE_TESTS="${RUN_PUBLIC_SMOKE_TESTS:-false}"
 DEPLOY_SCOPE="${JAEGER_DEMO_DEPLOY_SCOPE:-${JAEGER_OTEL_DEMO_DEPLOY_SCOPE:-jaeger}}"
-OPENSEARCH_RECOVERY="${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY:-required}"
+OPENSEARCH_RECOVERY="${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY:-}"
 # renovate: datasource=helm depName=opentelemetry-demo registryUrl=https://open-telemetry.github.io/opentelemetry-helm-charts
 OTEL_DEMO_CHART_VERSION="0.40.9"
 # renovate: datasource=helm depName=opensearch registryUrl=https://opensearch-project.github.io/helm-charts
@@ -28,8 +28,21 @@ OPENSEARCH_CHART_VERSION="3.7.0"
 # renovate: datasource=helm depName=opensearch-dashboards registryUrl=https://opensearch-project.github.io/helm-charts
 OPENSEARCH_DASHBOARDS_CHART_VERSION="3.7.0"
 
+HELM_UPGRADE=(upgrade --install)
+OPENSEARCH_NAMESPACE=(--namespace opensearch --create-namespace)
+OTEL_DEMO_NAMESPACE=(--namespace otel-demo --create-namespace)
+if [[ "${GITHUB_EVENT_NAME:-}" == "schedule" ]]; then
+  HELM_UPGRADE=(upgrade)
+  OPENSEARCH_NAMESPACE=(--namespace opensearch)
+  OTEL_DEMO_NAMESPACE=(--namespace otel-demo)
+fi
+
 log() { echo "[$(date +"%F %T")] $*"; }
 err() { echo "[$(date +"%F %T")] ERROR: $*" >&2; exit 1; }
+
+recovery_policy() {
+  python3 "$SCRIPT_DIR/../../scripts/demo/recovery_policy.py" "${JAEGER_DEMO_STACK:-}" "$MODE" "$DEPLOY_SCOPE" "$OPENSEARCH_RECOVERY"
+}
 
 validate_options() {
   case "$MODE" in
@@ -53,32 +66,18 @@ validate_options() {
       ;;
   esac
 
-  case "$OPENSEARCH_RECOVERY" in
-    required|waive)
-      ;;
-    *)
-      echo "Error: Invalid OpenSearch recovery policy '$OPENSEARCH_RECOVERY'" >&2
-      echo "Expected JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY to be 'required' or 'waive'" >&2
-      return 1
-      ;;
-  esac
+  recovery_policy >/dev/null
+}
 
-  if [[ "$OPENSEARCH_RECOVERY" == "waive" ]] &&
-    { [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]] ||
-      [[ "${GITHUB_REF:-}" != "refs/heads/main" ]] ||
-      [[ "${JAEGER_DEMO_STACK:-}" != "otel" ]] ||
-      [[ "$MODE" != "upgrade" ]] ||
-      [[ "$DEPLOY_SCOPE" != "opensearch" ]]; }; then
-    echo "Error: OpenSearch recovery may be waived only by a manual isolated otel/upgrade/opensearch run from main" >&2
-    return 1
-  fi
+existing_installation() {
+  [[ -n "${EXPECTED_CONFIG_SHA:-}" || "${GITHUB_EVENT_NAME:-}" == "schedule" ]]
 }
 
 configure_jaeger_helm_command() {
   HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger --create-namespace)
   if [[ "$MODE" == "upgrade" ]]; then
     HELM_JAEGER_CMD="upgrade --install --wait --atomic"
-    if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+    if existing_installation; then
       HELM_JAEGER_CMD="upgrade --wait --atomic"
       HELM_JAEGER_NAMESPACE_ARGS=(--namespace jaeger)
     fi
@@ -344,12 +343,26 @@ wait_for_service_endpoints() {
   err "Service $service in $namespace has no ready endpoints after ${timeout_secs}s"
 }
 
+check_scheduled_ownership() {
+  local namespace=$1 kind=$2 name=$3 release=$4 owner
+  local ownership='{.metadata.labels.app\.kubernetes\.io/managed-by}{"/"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"/"}{.metadata.annotations.meta\.helm\.sh/release-name}'
+  owner=$(kubectl get "$kind" "$name" -n "$namespace" -o "jsonpath=$ownership") || return 1
+  if [[ "$owner" != "Helm/$namespace/$release" ]]; then
+    log "Scheduled upgrade requires $kind $namespace/$name to belong to Helm release $namespace/$release"
+    return 1
+  fi
+}
+
 adopt_resource_for_helm_release() {
   local namespace=$1
   local kind=$2
   local name=$3
   local release=$4
 
+  if [[ "${GITHUB_EVENT_NAME:-}" == "schedule" ]]; then
+    check_scheduled_ownership "$namespace" "$kind" "$name" "$release"
+    return
+  fi
   if ! kubectl get "$kind" "$name" -n "$namespace" >/dev/null 2>&1; then
     if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
       log "Cannot read required $kind $namespace/$name during handover"
@@ -382,7 +395,12 @@ delete_deployment_before_helm_upgrade() {
   local deployment=$2
 
   check_handover || return 1
-  if ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; then
+  if [[ "${GITHUB_EVENT_NAME:-}" == "schedule" ]]; then
+    # The migrated selector is already managed by Helm. An early Helm failure
+    # must leave the running Deployment available for the next scheduled run.
+    check_scheduled_ownership "$namespace" deployment "$deployment" jaeger
+    return
+  elif ! kubectl get deployment "$deployment" -n "$namespace" >/dev/null 2>&1; then
     if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
       log "Cannot read required deployment $namespace/$deployment during handover"
       return 1
@@ -437,10 +455,15 @@ reconcile_ingress() {
 
 deploy_opensearch_releases() {
   if [[ "$MODE" == "upgrade" ]]; then
-    case "$OPENSEARCH_RECOVERY" in
+    local policy
+    policy=$(recovery_policy) || return 1
+    case "$policy" in
       required)
         log "Verifying a recent tested OpenSearch recovery point"
         bash "$SCRIPT_DIR/opensearch-recovery.sh" verify
+        ;;
+      preserve-pvc)
+        log "Upgrading OpenSearch in place with its existing data volume"
         ;;
       waive)
         log "WARNING: OpenSearch recovery was explicitly waived; this upgrade has no tested rollback or data-recovery path"
@@ -452,15 +475,15 @@ deploy_opensearch_releases() {
   fi
 
   log "Deploying OpenSearch chart $OPENSEARCH_CHART_VERSION"
-  helm upgrade --install opensearch opensearch/opensearch \
-    --namespace opensearch --create-namespace \
+  helm "${HELM_UPGRADE[@]}" opensearch opensearch/opensearch \
+    "${OPENSEARCH_NAMESPACE[@]}" \
     --version "$OPENSEARCH_CHART_VERSION" \
     -f "$SCRIPT_DIR/opensearch-values.yaml" \
     --wait --timeout 10m
   wait_for_statefulset opensearch opensearch-cluster-single "${ROLLOUT_TIMEOUT}s"
 
   log "Deploying OpenSearch Dashboards chart $OPENSEARCH_DASHBOARDS_CHART_VERSION"
-  if ! helm upgrade --install opensearch-dashboards opensearch/opensearch-dashboards \
+  if ! helm "${HELM_UPGRADE[@]}" opensearch-dashboards opensearch/opensearch-dashboards \
     --namespace opensearch \
     --version "$OPENSEARCH_DASHBOARDS_CHART_VERSION" \
     -f "$SCRIPT_DIR/opensearch-dashboard-values.yaml" \
@@ -504,7 +527,7 @@ cleanup() {
 deploy_ingress() {
   log "Deploying HTTPS ingress resources..."
 
-  if [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+  if existing_installation; then
     local file
     for file in ingress-jaeger.yaml ingress-opensearch.yaml ingress-otel-demo.yaml; do
       if [[ ! -f "$SCRIPT_DIR/ingress/$file" ]]; then
@@ -520,27 +543,14 @@ deploy_ingress() {
     return 0
   fi
 
-  # Apply ingress for each namespace
-  if kubectl apply -f "$SCRIPT_DIR/ingress/ingress-jaeger.yaml" 2>&1 | grep -q "created\|configured\|unchanged"; then
-    log "Jaeger ingress configured (jaeger.demo.jaegertracing.io, hotrod.demo.jaegertracing.io)"
-  else
-    log " Failed to apply Jaeger ingress "
-    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
-  fi
-
-  if kubectl apply -f "$SCRIPT_DIR/ingress/ingress-opensearch.yaml" 2>&1 | grep -q "created\|configured\|unchanged"; then
-    log " OpenSearch ingress configured (opensearch.demo.jaegertracing.io)"
-  else
-    log "  Failed to apply OpenSearch ingress "
-    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
-  fi
-
-  if kubectl apply -f "$SCRIPT_DIR/ingress/ingress-otel-demo.yaml" 2>&1 | grep -q "created\|configured\|unchanged"; then
-    log " OTel Demo ingress configured (shop.demo.jaegertracing.io)"
-  else
-    log "  Failed to apply OTel Demo ingress "
-    [[ -z "${EXPECTED_CONFIG_SHA:-}" ]] || return 1
-  fi
+  # kubectl's exit status records the write even if its output format changes.
+  local ingress
+  for ingress in ingress-jaeger.yaml ingress-opensearch.yaml ingress-otel-demo.yaml; do
+    if ! kubectl apply -f "$SCRIPT_DIR/ingress/$ingress"; then
+      log "Failed to apply $ingress"
+      if existing_installation; then return 1; fi
+    fi
+  done
 
   log "Waiting for SSL certificates to be issued..."
   sleep 10
@@ -558,15 +568,15 @@ deploy_ingress() {
           if grep -q "True" <<< "$certificate_status"; then
             certs_ready=$((certs_ready + 1))
           fi
-        elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+        elif existing_installation; then
           log "Cannot read certificate status in $ns during handover"
           return 1
         fi
-      elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+      elif existing_installation; then
         log "Cannot list certificates in $ns during handover"
         return 1
       fi
-    elif [[ -n "${EXPECTED_CONFIG_SHA:-}" ]]; then
+    elif existing_installation; then
       log "Cannot read namespace $ns during handover"
       return 1
     fi
@@ -690,10 +700,10 @@ main() {
     wait_for_service_endpoints jaeger jaeger-collector 180
 
     log "Deploying OpenTelemetry Demo chart $OTEL_DEMO_CHART_VERSION (with in-cluster Collector)"
-    if ! helm upgrade --install otel-demo open-telemetry/opentelemetry-demo \
+    if ! helm "${HELM_UPGRADE[@]}" otel-demo open-telemetry/opentelemetry-demo \
       --version "$OTEL_DEMO_CHART_VERSION" \
       -f "$SCRIPT_DIR/otel-demo-values.yaml" \
-      --namespace otel-demo --create-namespace \
+      "${OTEL_DEMO_NAMESPACE[@]}" \
       --wait --timeout 15m; then
       diagnose_otel_demo_failure
       err "Helm release otel-demo failed"

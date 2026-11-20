@@ -3,7 +3,15 @@ Copyright (c) 2026 The Jaeger Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# OpenSearch recovery procedure
+# Manual OpenSearch recovery procedure
+
+Use this procedure when a maintainer elects to preserve historical trace data
+and has the required storage permissions and restore capacity. The daily hosted
+job upgrades in place on the live PVC and verifies new traces. It creates no
+snapshot or restore workload. Manual recovery includes two independent repairs:
+[running API requests in the selected pod](https://github.com/jaegertracing/jaeger-demo/pull/13)
+and [starting the isolated database with one security setting](https://github.com/jaegertracing/jaeger-demo/pull/14).
+Confirm the chosen revision includes both fixes before relying on a manual test.
 
 The recovery workflow creates a full OCI Block Volume backup, restores it to a
 new PVC, and tests it with the exact OpenSearch and Jaeger image digests running
@@ -31,7 +39,7 @@ record:
 
 The CSI snapshot handle identifies private infrastructure. Do not paste it into
 an issue, pull request, or public Actions log. Keep the `VolumeSnapshotContent`
-and OCI backup until both staged upgrades and their soak gates have completed.
+and OCI backup for the retention period agreed for that manual operation. Obtain separate approval before deleting retained storage.
 
 ## Restore while the namespace exists
 

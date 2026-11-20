@@ -11,8 +11,9 @@ it does not create a second Jaeger product version or image-publishing pipeline.
 ## Current stage
 
 The extraction retains the existing shell scripts and Python reconciler.
-Production workflows are manual-only until the handover in
-[cutover.md](cutover.md) is accepted. The future Helmfile runner, generated immutable
+Manual deployments use a reviewed GitHub environment. The
+[script schedule](cutover.md#review-scheduled-scope) has its own environment
+and activation switch. The future Helmfile runner, generated immutable
 bundle, read-only `plan` operation and automatic image-compatibility gate are not
 implemented by extraction. Track them in
 [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
@@ -28,7 +29,7 @@ The current workflow supports these inputs:
 | `jaeger_image_tag` | Explicit Jaeger snapshot tag |
 | `hotrod_image_tag` | Explicit HotROD snapshot tag |
 | `image_tag` | Shared fallback when an independent tag is omitted |
-| `opensearch_recovery` | Existing recovery policy; the extraction retains its restrictions |
+| `opensearch_recovery` | Manual dispatch defaults to `required`. An isolated main-branch OTel OpenSearch upgrade can explicitly select `waive`. The daily schedule selects the disposable-trace policy automatically. |
 
 Supply each stack's existing published commit tags for the first handover, using
 separate OCI and OTel dispatches when they run different images. Do not use `latest`
@@ -126,18 +127,51 @@ payloads.
 6. Record the result. Diagnose failures before retrying or rolling back; do not
    promote an unverified result to last-known-good state.
 
-Reviewed chart changes and scheduled image refreshes are separate deployment
-causes. Renovate checks daily, waits seven days, and opens reviewed updates without
-automerge; preserve the paired OpenSearch/Dashboards 3.x policy. Stage 1 schedules
-remain disabled until the manual handover passes. The first scheduled run also
-needs verification because the reconciler may select changed fingerprints beyond
-the two Jaeger components.
+## Daily component updates
+
+The protected planner resolves upstream Jaeger and HotROD snapshot tags independently
+and freezes the exact images in the daily bundle. The GitHub job signals the [protected executor](daily-update-request.md) and waits for its verified result. Both Jaeger releases refresh daily. Renovate proposes chart, image and
+dependency changes for maintainer review, with a seven-day release-age policy
+and manual merges. The next daily reconciliation uses the reviewed configuration
+on main. Unchanged storage, monitoring and sample-application inputs retain their
+current releases. Each successful component records its fingerprint in
+`default/jaeger-demo-deployment-revisions`.
+
+| Component | Helm releases | Daily action and checks |
+| --- | --- | --- |
+| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions and write/read a fresh trace before recording success. |
+| OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
+| OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. |
+| OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
+| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
+
+Generated trace history is disposable. Daily OpenSearch upgrades preserve the
+existing PVC and create no backup, restored volume or test Pod. If the stored
+format becomes unusable, historical traces may be lost. After an explicitly
+approved repair, new traffic can repopulate the demo. Use the
+[manual recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md) when a
+separately authorized operation requires a tested backup.
+
+An OpenSearch failure holds both dependent OTel components. Independent OCI
+updates may succeed in the same run. A failed component keeps its preceding
+fingerprint. Inspect each component outcome and its live Helm history before a
+retry, especially when OpenSearch upgraded before Dashboards failed.
+
+During commissioning, verify the prepared slot and receipt with the GitHub
+signal disabled. After activation, use the first actual scheduled run to accept
+the deployment. Record its run URL and receipt, reconcile the six releases
+and five component fingerprints, and verify fresh traces, public health, TLS
+and storage bindings. The scheduled failure notification includes the run ID in
+`#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
 
 ## Failure handling
 
-Stop further automation before a rollback. Preserve the failed run's diagnostics
-and compare the actual release state with the recorded prior revisions. Do not
-retry a pending Helm operation blindly or uninstall a release to clear it.
+A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
+pause future scheduled jobs while inspecting a failure. Check queued and running
+writers separately and let an active Helm transaction finish before rolling back.
+Preserve the failed run's diagnostics and compare actual release state with the
+recorded prior revisions. Inspect a pending Helm operation before deciding how
+to recover it. [Pause and resume the script schedule](cutover.md#review-scheduled-scope).
 
 For an application release, a previously recorded revision can be restored with
 `helm rollback` after verifying that its values, images and external dependencies
@@ -163,3 +197,5 @@ Verified manual adoption unlocks guarded automation. Final cutover acceptance
 requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
+
+The in-cluster runtime has its own image release, inactive installation manifest and activation procedure. The release receipt records the image digest separately from the daily configuration SHA and component versions. [Executor image release and installation](in-cluster-executor.md#release-and-installation)
