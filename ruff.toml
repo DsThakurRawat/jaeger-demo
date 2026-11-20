@@ -1,7 +1,8 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-exclude = [".claude", ".tools"]
+# extend-exclude keeps ruff's default exclusions, such as .venv and venv.
+extend-exclude = [".claude", ".tools"]
 
 [lint]
 # Ruff 0.17 widened its built-in default rule set. Select the long-standing
