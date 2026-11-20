@@ -19,7 +19,9 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 - Network access to Helm repositories
 
 ## Quick start
-- Upgrade (default) — installs if missing, upgrades if present:
+- Upgrade (default). Without a scope it deploys the `jaeger` scope only (Jaeger
+  and HotROD) and expects the OpenSearch service to exist already. It does not
+  install OpenSearch or the OpenTelemetry Demo:
 ```bash path=null start=null
 ./deploy-all.sh
 # or explicitly
@@ -31,10 +33,18 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 # Example
 ./deploy-all.sh upgrade latest
 ```
+- Full-stack upgrade of an existing installation (OpenSearch, Jaeger and the
+  OpenTelemetry Demo). Direct script use applies the `required` recovery policy,
+  so the OpenSearch step first verifies a recent tested recovery point. See
+  [Manual recovery option](#manual-recovery-option). This is not fresh-cluster
+  setup:
+```bash path=null start=null
+JAEGER_DEMO_DEPLOY_SCOPE=all ./deploy-all.sh upgrade
+```
 - Clean install (removes previous releases/namespaces, then installs everything):
 
 > **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.**
-> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. The script takes no backup first, and whether the underlying volume survives depends on the StorageClass reclaim policy. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
+> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
 
 ```bash path=null start=null
 ./deploy-all.sh clean
