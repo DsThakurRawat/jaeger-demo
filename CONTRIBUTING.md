@@ -18,7 +18,8 @@ make them look newly contributed.
 
 ## Local checks
 
-Install Bash, Python 3 with PyYAML, Git, jq, Helm, ShellCheck and actionlint. Keep production
+Install Bash, Python 3 with PyYAML, Git, jq, Helm, ShellCheck, actionlint and ruff
+(`python3 -m pip install -r scripts/utils/lint-requirements.txt`). Keep production
 kubeconfig and cloud credentials out of the test environment. Obtain shunit2:
 
 ```bash
@@ -27,6 +28,9 @@ export SHUNIT2="$PWD/.tools/shunit2"
 make lint
 make test
 ```
+
+`make check` runs `lint`, `test` and `renovate-discovery` in that order. `make lint`
+also runs ruff on the Python sources with the rules in `ruff.toml`.
 
 The tests mock deployment commands and render pinned public charts. Public network
 access is required for the chart repositories, but no production credentials are
@@ -46,19 +50,11 @@ extraction of every hosted dependency location. With Docker available, reproduce
 without credentials:
 
 ```bash
-docker run --rm -v "$PWD/renovate.json:/usr/src/app/renovate.json" \
-  ghcr.io/renovatebot/renovate:latest renovate-config-validator
-docker run --rm -v "$PWD:/repo" -w /repo \
-  -e LOG_LEVEL=debug -e LOG_FORMAT=json \
-  -e RENOVATE_PLATFORM=local -e RENOVATE_DRY_RUN=extract \
-  -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required \
-  -e RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements \
-  -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
-  ghcr.io/renovatebot/renovate:latest renovate > /tmp/renovate-extraction.jsonl
-python3 scripts/demo/check-renovate-extraction.py /tmp/renovate-extraction.jsonl
+make renovate-discovery
 ```
 
-Podman can substitute for Docker. Renovate considers hosted updates daily, waits
+The script runs the configuration validator, the extraction, and the checker. Set
+`CONTAINER_ENGINE=podman` to use Podman instead of Docker. Renovate considers hosted updates daily, waits
 seven days, and never automerges them. Preserve paired OpenSearch/Dashboards 3.x
 updates and the PostgreSQL/Valkey major constraints. Do not duplicate dependency
 bumps already managed by automation.

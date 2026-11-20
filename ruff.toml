@@ -1,0 +1,20 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+exclude = [".claude", ".tools"]
+
+[lint]
+# Ruff 0.17 widened its built-in default rule set. Select the long-standing
+# default set explicitly (pycodestyle errors, Pyflakes) so that upgrading the
+# pinned ruff version does not silently add rules.
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# These rehearsal scripts extend sys.path before importing the repository
+# modules they exercise, so the imports cannot move to the top of the file.
+"scripts/demo/rehearsals/helm-history/six_chart_approvals.py" = ["E402"]
+"ops/executor/monitoring_hooks.py" = ["E402"]
+# The installation review packet records this file's SHA-256 in
+# rendererSources, so a lint-only edit would make an approved packet fail its
+# source check. Clear these two findings with the next functional change.
+"ops/executor/review_packet.py" = ["E731", "F401"]
