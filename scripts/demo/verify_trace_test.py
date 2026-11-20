@@ -10,6 +10,19 @@ import urllib.error
 import verify_trace
 
 
+RELEASES = {"opensearch": ("3.9.0", "3.9.0"), "opensearch-dashboards": ("3.9.0", "3.9.0")}
+
+
+def commands(live="3.9.0", releases=RELEASES, status="deployed"):
+    """Answer Helm release metadata and the in-pod OpenSearch version request."""
+    def run(args, **kwargs):
+        if args[:3] == ["helm", "get", "metadata"]:
+            chart, app = releases[args[3]]
+            return MagicMock(stdout=json.dumps({"name": args[3], "version": chart, "appVersion": app, "status": status}))
+        return MagicMock(stdout=json.dumps({"version": {"number": live}}))
+    return run
+
+
 class TraceVerificationTests(unittest.TestCase):
     def test_finds_hex_and_base64_trace_ids_in_streaming_responses(self):
         trace_id = "ab" * 16
@@ -50,26 +63,72 @@ class TraceVerificationTests(unittest.TestCase):
     @patch("verify_trace.subprocess.run")
     @patch("verify_trace.request")
     def test_rejects_wrong_server_or_dashboard_version(self, request, run):
-        run.return_value.stdout = '{"version":{"number":"3.7.0"}}'
+        run.side_effect = commands(live="3.7.0")
         with self.assertRaisesRegex(RuntimeError, "OpenSearch"):
-            verify_trace.verify("3.9.0")
-        run.return_value.stdout = '{"version":{"number":"3.9.0"}}'
+            verify_trace.verify("3.9.0", "3.9.0")
+        run.side_effect = commands(live="3.9.0")
         request.return_value = {"version": {"number": "3.7.0"}}
         with self.assertRaisesRegex(RuntimeError, "Dashboards"):
-            verify_trace.verify("3.9.0")
+            verify_trace.verify("3.9.0", "3.9.0")
+
+    @patch("verify_trace.check_trace")
+    @patch("verify_trace.subprocess.Popen")
+    @patch("verify_trace.subprocess.run")
+    @patch("verify_trace.request")
+    def test_compares_live_versions_with_each_release_application_version(self, request, run, popen, check):
+        # Chart-only releases keep the application version, as OpenSearch 3.2.1 and Dashboards 3.2.2 did.
+        releases = {"opensearch": ("3.2.1", "3.2.0"), "opensearch-dashboards": ("3.2.2", "3.2.0")}
+        run.side_effect = commands(live="3.2.0", releases=releases)
+        request.return_value = {"version": {"number": "3.2.0"}}
+        verify_trace.verify("3.2.1", "3.2.2")
+        check.assert_called_once()
+        self.assertEqual([["helm", "get", "metadata", "opensearch", "--namespace", "opensearch", "-o", "json"],
+                          ["helm", "get", "metadata", "opensearch-dashboards", "--namespace", "opensearch", "-o", "json"]],
+                         [c.args[0] for c in run.call_args_list if c.args[0][0] == "helm"])
+        # The chart pins themselves are not accepted as live application versions.
+        run.side_effect = commands(live="3.2.1", releases=releases)
+        with self.assertRaisesRegex(RuntimeError, "OpenSearch"):
+            verify_trace.verify("3.2.1", "3.2.2")
+        run.side_effect = commands(live="3.2.0", releases=releases)
+        request.return_value = {"version": {"number": "3.2.2"}}
+        with self.assertRaisesRegex(RuntimeError, "Dashboards"):
+            verify_trace.verify("3.2.1", "3.2.2")
+        check.assert_called_once()
+
+    @patch("verify_trace.check_trace")
+    @patch("verify_trace.subprocess.Popen")
+    @patch("verify_trace.subprocess.run")
+    @patch("verify_trace.request")
+    def test_rejects_releases_that_are_not_deployed_at_their_chart_pins(self, request, run, popen, check):
+        request.return_value = {"version": {"number": "3.9.0"}}
+        cases = {
+            "OpenSearch chart": (commands(), ("3.9.1", "3.9.0"), "opensearch/opensearch is not deployed"),
+            "Dashboards chart": (commands(), ("3.9.0", "3.9.1"), "opensearch/opensearch-dashboards is not deployed"),
+            "failed release": (commands(status="failed"), ("3.9.0", "3.9.0"), "is not deployed"),
+            "pending release": (commands(status="pending-upgrade"), ("3.9.0", "3.9.0"), "is not deployed"),
+            "no application version": (commands(releases={"opensearch": ("3.9.0", "")}), ("3.9.0", "3.9.0"),
+                                       "application version"),
+        }
+        for case, (command, pins, message) in cases.items():
+            with self.subTest(case=case):
+                run.side_effect = command
+                with self.assertRaisesRegex(RuntimeError, message):
+                    verify_trace.verify(*pins)
+        check.assert_not_called()
+        popen.assert_not_called()
 
     @patch("verify_trace.check_trace")
     @patch("verify_trace.subprocess.Popen")
     @patch("verify_trace.subprocess.run")
     @patch("verify_trace.request")
     def test_cleans_up_port_forwards_even_when_trace_verification_fails(self, request, run, popen, check):
-        run.return_value.stdout = '{"version":{"number":"3.9.0"}}'
+        run.side_effect = commands(live="3.9.0")
         request.return_value = {"version": {"number": "3.9.0"}}
         first, second = MagicMock(), MagicMock()
         popen.side_effect = [first, second]
         check.side_effect = RuntimeError("trace failed")
         with self.assertRaisesRegex(RuntimeError, "trace failed"):
-            verify_trace.verify("3.9.0")
+            verify_trace.verify("3.9.0", "3.9.0")
         first.__enter__.return_value.terminate.assert_called_once()
         second.__enter__.return_value.terminate.assert_called_once()
 

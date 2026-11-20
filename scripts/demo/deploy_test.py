@@ -244,6 +244,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual("backup-test", run.call_args_list[0].args[0][-1])
         self.assertTrue(run.call_args_list[1].args[0][1].endswith("deploy-all.sh"))
         self.assertTrue(run.call_args_list[2].args[0][1].endswith("verify_trace.py"))
+        pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
+        self.assertEqual([pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]],
+                         run.call_args_list[2].args[0][2:])
         self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
     @patch("deploy.run", side_effect=subprocess.CalledProcessError(1, "recovery"))

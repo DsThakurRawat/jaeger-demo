@@ -27,7 +27,8 @@ the dependent OTel Jaeger and application updates in that run.
 Deployment, manual recovery and volume expansion share one workflow concurrency
 lock. When the daily job selects OpenSearch, it upgrades the live StatefulSet
 on its existing PVC, waits for readiness, and then upgrades Dashboards. The job
-checks the database and public Dashboards versions and sends a fresh trace
+checks the database and public Dashboards versions against the application
+version of each deployed chart release and sends a fresh trace
 through the collector and query service before recording success. Historical
 synthetic traces are disposable. A destructive reset needs explicit approval.
 

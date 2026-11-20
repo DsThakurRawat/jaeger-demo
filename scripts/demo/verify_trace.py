@@ -3,7 +3,7 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify the database version and a new trace through the live collector/query."""
+"""Verify the deployed application versions and a new trace through the live collector/query."""
 
 import base64
 from contextlib import ExitStack
@@ -59,13 +59,28 @@ def check_trace(collector, query, attempts=30):
     raise RuntimeError("Fresh deployment trace could not be written and retrieved")
 
 
-def verify(version):
+def deployed_app_version(release, chart_version):
+    # A chart release can repackage an unchanged application, so the chart pin
+    # identifies the release and its recorded appVersion identifies the software.
+    output = subprocess.run(["helm", "get", "metadata", release, "--namespace", "opensearch", "-o", "json"],
+                            check=True, capture_output=True, text=True)
+    metadata = json.loads(output.stdout)
+    if metadata.get("status") != "deployed" or metadata.get("version") != chart_version:
+        raise RuntimeError(f"Helm release opensearch/{release} is not deployed at chart pin {chart_version}")
+    if not metadata.get("appVersion"):
+        raise RuntimeError(f"Helm release opensearch/{release} does not record an application version")
+    return metadata["appVersion"]
+
+
+def verify(opensearch_chart, dashboards_chart):
+    version = deployed_app_version("opensearch", opensearch_chart)
     output = subprocess.run(["kubectl", "-n", "opensearch", "exec", "opensearch-cluster-single-0", "--",
                              "curl", "-fsS", "http://localhost:9200/"], check=True, capture_output=True, text=True)
     if json.loads(output.stdout)["version"]["number"] != version:
-        raise RuntimeError("Live OpenSearch version does not match the chart pin")
+        raise RuntimeError("Live OpenSearch version does not match the deployed chart's application version")
+    version = deployed_app_version("opensearch-dashboards", dashboards_chart)
     if request("https://opensearch.demo.jaegertracing.io/api/status")["version"]["number"] != version:
-        raise RuntimeError("Public Dashboards version does not match the chart pin")
+        raise RuntimeError("Public Dashboards version does not match the deployed chart's application version")
     with ExitStack() as stack:
         for service, ports in (("jaeger-collector", "14318:4318"), ("jaeger-query", "16687:16686")):
             process = stack.enter_context(subprocess.Popen(
@@ -76,4 +91,4 @@ def verify(version):
 
 
 if __name__ == "__main__":
-    verify(sys.argv[1])
+    verify(sys.argv[1], sys.argv[2])
