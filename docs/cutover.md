@@ -321,6 +321,10 @@ Manual runs continue to use `demo-apply`.
      --event schedule --limit 5 --json databaseId,headSha,status,conclusion,url
    ```
 
+The credential-free [public smoke check](../scripts/demo/README.md#scheduled-smoke-check)
+has its own switch, `DEMO_SMOKE_ENABLED`. Enable it only after `SLACK_WEBHOOK_URL`
+exists as a repository or organization secret.
+
 While the old maintenance workflows are disabled and the new grant is limited to
 Jaeger, the independent operator owns maintenance and incident recovery through the
 separate administrator route. Manual recovery and volume expansion use

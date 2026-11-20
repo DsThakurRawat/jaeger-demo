@@ -35,6 +35,18 @@ class SmokeWorkflowTests(unittest.TestCase):
         self.assertEqual(WORKFLOW.count("if: github.repository == 'jaegertracing/jaeger-demo'"), 1)
         self.assertRegex(WORKFLOW, r'(?m)^    timeout-minutes: \d+$')
 
+    def test_scheduled_runs_need_the_opt_in_switch(self):
+        condition = re.search(r'(?m)^    if: (.+)$', WORKFLOW)[1]
+        cases = {('schedule', 'true'): True, ('schedule', ''): False, ('schedule', 'false'): False,
+                 ('workflow_dispatch', ''): True, ('workflow_dispatch', 'false'): True}
+        for (event, switch), expected in cases.items():
+            with self.subTest(event=event, switch=switch):
+                expression = condition.replace('github.repository', repr('jaegertracing/jaeger-demo'))
+                expression = expression.replace('github.event_name', repr(event))
+                expression = expression.replace('vars.DEMO_SMOKE_ENABLED', repr(switch))
+                expression = expression.replace('&&', 'and').replace('||', 'or')
+                self.assertEqual(expected, eval(expression, {'__builtins__': {}}, {}))
+
     def test_checks_both_stacks(self):
         for stack in ('oci', 'otel'):
             self.assertIn(f'scripts/demo/stack_health.py --stack {stack}', WORKFLOW)

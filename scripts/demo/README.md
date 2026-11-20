@@ -65,9 +65,26 @@ on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stac
 `scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
 Jaeger UI tracking configuration, recent application spans and finite span
 metrics. A failure or cancellation posts to Slack through `SLACK_WEBHOOK_URL`.
-Where that secret lives is a maintainer access decision.
 
-Pause the check with `gh workflow disable demo-smoke.yml` and resume it with
-`gh workflow enable demo-smoke.yml`. GitHub disables scheduled workflows in
-public repositories after 60 days without repository activity; re-enable the
-workflow if that happens.
+Scheduled runs are off until the repository variable `DEMO_SMOKE_ENABLED` is
+`true`; manual dispatch always works. The job has no environment, so
+`SLACK_WEBHOOK_URL` must be a repository or organization secret. The copy in
+the deploy environments is not visible to it. Turn the switch on only after
+that secret exists:
+
+```bash
+gh variable set DEMO_SMOKE_ENABLED --body true --repo jaegertracing/jaeger-demo
+```
+
+Known limits:
+
+- The tracking check compares the live Jaeger UI with
+  `examples/oci/ui-config.json` on `main`. After a change to its `tracking`
+  block merges and until it is deployed, every run fails. Set
+  `DEMO_SMOKE_ENABLED` to `false` when merging such a change and back to `true`
+  after deployment.
+- A run that is cancelled or fails before its job starts sends no notification.
+  The next run checks again within 30 minutes
+  ([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
+- GitHub disables scheduled workflows in public repositories after 60 days
+  without repository activity; re-enable the workflow if that happens.
