@@ -72,8 +72,10 @@ kubectl get svc -n opensearch
 kubectl get svc -n jaeger
 kubectl get svc -n otel-demo
 ```
-- Dashboards console is disabled. After a Dashboards rollout, the hosted
-  Dashboards must load and this read-only console probe must return `404`:
+- Dashboards console and Index Management are disabled. After a Dashboards
+  rollout, the hosted Dashboards must load, its menu must show neither Dev
+  Tools nor Index Management, and this read-only console probe must return
+  `404`:
 ```bash path=null start=null
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'osd-xsrf: true' \
   'https://opensearch.demo.jaegertracing.io/api/console/proxy?path=/&method=GET'
