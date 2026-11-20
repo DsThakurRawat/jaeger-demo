@@ -345,6 +345,7 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(["volumesnapshots", "pvc", "pods"], [call.split()[3] for call in calls])
                 self.assertTrue(all(call.startswith("-n opensearch get ") and selector in call for call in calls))
+                self.assertTrue(all(call.endswith(" --request-timeout=30s") for call in calls))
                 result, calls = self.run_workflow_step(cleanup, status, OPENSEARCH_RECOVERY_ID="123-2")
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(["-n opensearch delete pod jaeger-os-verify-123-2 --request-timeout=30s --ignore-not-found=true --wait=false"], calls)

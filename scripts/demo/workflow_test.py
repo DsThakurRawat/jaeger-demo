@@ -224,6 +224,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(job_limit, 360)
         cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
         self.assertIn('\n      timeout-minutes: 2\n', cleanup)
+        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 5\n', diagnostics)
+        self.assertEqual(3, diagnostics.count(' --request-timeout=30s || true'))
         self.assertIn(' --request-timeout=30s ', cleanup)
 
 

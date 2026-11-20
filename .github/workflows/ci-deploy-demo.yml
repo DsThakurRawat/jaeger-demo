@@ -170,16 +170,18 @@ jobs:
 
     - name: Collect OpenSearch recovery diagnostics
       if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'
+      # Bounded like the cleanup step, so a hung API cannot use up the reserve.
+      timeout-minutes: 5
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp || true
+          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp --request-timeout=30s || true
         kubectl -n opensearch get pvc \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage || true
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage --request-timeout=30s || true
         kubectl -n opensearch get pods \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --request-timeout=30s || true
 
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
