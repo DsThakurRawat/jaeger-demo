@@ -67,10 +67,12 @@ Jaeger UI tracking configuration, recent application spans and finite span
 metrics. A failure or cancellation posts to Slack through `SLACK_WEBHOOK_URL`.
 
 Scheduled runs are off until the repository variable `DEMO_SMOKE_ENABLED` is
-`true`; manual dispatch always works. The job has no environment, so
-`SLACK_WEBHOOK_URL` must be a repository or organization secret. The copy in
-the deploy environments is not visible to it. Turn the switch on only after
-that secret exists:
+`true`; manual dispatch always works. `SLACK_WEBHOOK_URL` is a repository-level
+secret only; no deploy environment holds a copy, and this job has no
+environment. Do not turn the switch on until the check retries a transient
+miss and posts only when the result changes. Today one slow probe fails a run,
+and every failed run posts. Once retry and deduplication have landed, enable it
+with:
 
 ```bash
 gh variable set DEMO_SMOKE_ENABLED --body true --repo jaegertracing/jaeger-demo
@@ -81,7 +83,7 @@ Known limits:
 - The tracking check compares the live Jaeger UI with
   `examples/oci/ui-config.json` on `main`. After a change to its `tracking`
   block merges and until it is deployed, every run fails. Set
-  `DEMO_SMOKE_ENABLED` to `false` when merging such a change and back to `true`
+  `DEMO_SMOKE_ENABLED` to `false` when merging such a change and restore it
   after deployment.
 - A run that is cancelled or fails before its job starts sends no notification.
   The next run checks again within 30 minutes
