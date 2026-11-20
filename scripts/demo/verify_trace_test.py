@@ -76,23 +76,34 @@ class TraceVerificationTests(unittest.TestCase):
     @patch("verify_trace.subprocess.run")
     @patch("verify_trace.request")
     def test_compares_live_versions_with_each_release_application_version(self, request, run, popen, check):
-        # Chart-only releases keep the application version, as OpenSearch 3.2.1 and Dashboards 3.2.2 did.
-        releases = {"opensearch": ("3.2.1", "3.2.0"), "opensearch-dashboards": ("3.2.2", "3.2.0")}
+        # Chart-only releases keep the application version, so each chart pin can differ from its appVersion.
+        # Every version here is distinct, so swapped or reused arguments cannot pass.
+        releases = {"opensearch": ("3.2.1", "3.2.0"), "opensearch-dashboards": ("3.2.3", "3.2.2")}
         run.side_effect = commands(live="3.2.0", releases=releases)
-        request.return_value = {"version": {"number": "3.2.0"}}
-        verify_trace.verify("3.2.1", "3.2.2")
+        request.return_value = {"version": {"number": "3.2.2"}}
+        verify_trace.verify("3.2.1", "3.2.3")
         check.assert_called_once()
         self.assertEqual([["helm", "get", "metadata", "opensearch", "--namespace", "opensearch", "-o", "json"],
                           ["helm", "get", "metadata", "opensearch-dashboards", "--namespace", "opensearch", "-o", "json"]],
                          [c.args[0] for c in run.call_args_list if c.args[0][0] == "helm"])
-        # The chart pins themselves are not accepted as live application versions.
-        run.side_effect = commands(live="3.2.1", releases=releases)
-        with self.assertRaisesRegex(RuntimeError, "OpenSearch"):
-            verify_trace.verify("3.2.1", "3.2.2")
-        run.side_effect = commands(live="3.2.0", releases=releases)
-        request.return_value = {"version": {"number": "3.2.2"}}
-        with self.assertRaisesRegex(RuntimeError, "Dashboards"):
-            verify_trace.verify("3.2.1", "3.2.2")
+        rejected = {
+            # The chart pins themselves are not accepted as live application versions.
+            "OpenSearch chart pin": ("3.2.1", "3.2.2", "OpenSearch"),
+            "Dashboards chart pin": ("3.2.0", "3.2.3", "Dashboards"),
+            # Neither release is checked against the other release's application version.
+            "Dashboards appVersion on OpenSearch": ("3.2.2", "3.2.2", "OpenSearch"),
+            "OpenSearch appVersion on Dashboards": ("3.2.0", "3.2.0", "Dashboards"),
+        }
+        for case, (live, dashboards, message) in rejected.items():
+            with self.subTest(case=case):
+                run.side_effect = commands(live=live, releases=releases)
+                request.return_value = {"version": {"number": dashboards}}
+                with self.assertRaisesRegex(RuntimeError, message):
+                    verify_trace.verify("3.2.1", "3.2.3")
+        # Pins passed in the wrong order do not match the deployed releases.
+        with self.assertRaisesRegex(RuntimeError, "is not deployed"):
+            run.side_effect = commands(live="3.2.0", releases=releases)
+            verify_trace.verify("3.2.3", "3.2.1")
         check.assert_called_once()
 
     @patch("verify_trace.check_trace")

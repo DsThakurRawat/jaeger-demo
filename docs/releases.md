@@ -163,11 +163,15 @@ Once the schedule is enabled, a merged OpenSearch chart change is applied in
 place by the next daily run, without a backup. When an engine upgrade
 should start from a tested recovery point, dispatch the manual `otel` /
 `opensearch` upgrade with `opensearch_recovery=required` and let it finish
-before the 12:20 UTC preparation. The preparer freezes the checkpoint and Helm
-history for that day's slot, so an upgrade that completes later makes the
-executor reject the changed state and leaves the writer lock for operator
-recovery. If the upgrade cannot finish by then, first pause both the GitHub
-signal and the preparer, drain writers, and resume with a newly prepared slot.
+before that day's preparation. The preparation window opens at 11:00 UTC for
+the 13:00 UTC slot; the CronJob runs at 12:20 UTC, but a one-off preparer Job
+can run earlier. Preparation freezes the checkpoint and Helm history for the
+slot, and a later retry reuses that frozen plan. An upgrade that completes after
+preparation makes the executor reject the changed state and leaves the writer
+lock for operator recovery. If the upgrade cannot finish before preparation,
+first pause both the GitHub signal and the preparer, and let running preparers
+and writers drain. Resuming the same day reuses the frozen plan, so keep the
+signal off until the next day's slot is prepared after the upgrade.
 [Activation and pause order](in-cluster-executor.md#activation-approval)
 
 An OpenSearch failure holds both dependent OTel components. Independent OCI
