@@ -161,9 +161,14 @@ Secret reads the upgrade already needs.
 
 Once the schedule is enabled, a merged OpenSearch chart change is applied in
 place by the next daily run, without a backup. When an engine upgrade
-should start from a tested recovery point, pause the schedule or dispatch the
-manual `otel` / `opensearch` upgrade with `opensearch_recovery=required`
-before that run.
+should start from a tested recovery point, dispatch the manual `otel` /
+`opensearch` upgrade with `opensearch_recovery=required` and let it finish
+before the 12:20 UTC preparation. The preparer freezes the checkpoint and Helm
+history for that day's slot, so an upgrade that completes later makes the
+executor reject the changed state and leaves the writer lock for operator
+recovery. If the upgrade cannot finish by then, first pause both the GitHub
+signal and the preparer, drain writers, and resume with a newly prepared slot.
+[Activation and pause order](in-cluster-executor.md#activation-approval)
 
 An OpenSearch failure holds both dependent OTel components. Independent OCI
 updates may succeed in the same run. A failed component keeps its preceding
