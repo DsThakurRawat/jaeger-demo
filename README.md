@@ -24,10 +24,10 @@ Schedule activation is tracked in the
 | https://demo.jaegertracing.io/grafana | OCI | Grafana (Prometheus stack) | Prometheus |
 | https://demo.jaegertracing.io/hotrod | OCI | HotROD sample application | In-memory traces in Jaeger |
 | https://demo.jaegertracing.io/ | OCI | Permanent redirect to https://www.jaegertracing.io/demo/ | None |
-| https://jaeger.demo.jaegertracing.io | OTel | Jaeger query UI | OpenSearch |
-| https://hotrod.demo.jaegertracing.io | OTel | HotROD sample application | OpenSearch (via Jaeger) |
+| https://jaeger.demo.jaegertracing.io | OTel | Jaeger query UI | Traces in OpenSearch |
+| https://hotrod.demo.jaegertracing.io | OTel | HotROD sample application | Traces in OpenSearch (via Jaeger) |
 | https://opensearch.demo.jaegertracing.io | OTel | OpenSearch Dashboards | OpenSearch |
-| https://shop.demo.jaegertracing.io | OTel | OpenTelemetry Demo storefront (`frontend-proxy`) | OpenSearch (via Jaeger) |
+| https://shop.demo.jaegertracing.io | OTel | OpenTelemetry Demo storefront (`frontend-proxy`) | Traces in OpenSearch (via Jaeger); shop data stays in the demo's own PostgreSQL and Valkey |
 
 Routes are defined in [examples/oci/ingress.yaml](examples/oci/ingress.yaml),
 [ingress-jaeger.yaml](examples/otel-demo/ingress/ingress-jaeger.yaml),
