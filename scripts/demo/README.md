@@ -57,3 +57,17 @@ maintenance tests through `scripts/utils/run-tests.sh`. To inspect discovery
 without updating dependencies, use Renovate's local platform with
 `--dry-run=extract`. Kubernetes and OCI infrastructure/add-on maintenance is
 outside this workflow.
+
+## Scheduled smoke check
+
+`.github/workflows/demo-smoke.yml` checks the public demos every 30 minutes and
+on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stacks,
+`scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
+Jaeger UI tracking configuration, recent application spans and finite span
+metrics. A failure or cancellation posts to Slack through `SLACK_WEBHOOK_URL`.
+Where that secret lives is a maintainer access decision.
+
+Pause the check with `gh workflow disable demo-smoke.yml` and resume it with
+`gh workflow enable demo-smoke.yml`. GitHub disables scheduled workflows in
+public repositories after 60 days without repository activity; re-enable the
+workflow if that happens.

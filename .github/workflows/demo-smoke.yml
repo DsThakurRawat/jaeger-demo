@@ -1,0 +1,51 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Demo smoke check
+
+on:
+  schedule:
+  - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Public demo health
+    if: github.repository == 'jaegertracing/jaeger-demo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Check the OCI demo
+      run: python3 scripts/demo/stack_health.py --stack oci
+    - name: Check the OpenTelemetry demo
+      if: ${{ !cancelled() }}
+      run: python3 scripts/demo/stack_health.py --stack otel
+
+    # SLACK_WEBHOOK_URL is the only secret used. Whether it lives at repository
+    # level or in a new webhook-only environment is an access decision for the
+    # maintainers.
+    - name: Send Slack notification on failure
+      if: failure() || cancelled()
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_CHANNEL: '#jaeger-operations'
+        SLACK_COLOR: danger
+        SLACK_USERNAME: 'Jaeger CI Bot'
+        SLACK_ICON_EMOJI: ':warning:'
+        SLACK_TITLE: '🚨 Jaeger Public Demo Smoke Check Failed'
+        SLACK_MESSAGE: |
+          *Repository:* ${{ github.repository }}
+          *Workflow:* ${{ github.workflow }}
+          *Run ID:* ${{ github.run_id }}
+          *Trigger:* ${{ github.event_name }}
+          *Actor:* ${{ github.actor }}
+
+          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Failed Run>
+        SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
