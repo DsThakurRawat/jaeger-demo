@@ -21,6 +21,11 @@ removes only the exact run-specific disposable restore pod after success or
 failure and retains the snapshot, restored PVC, and configuration for recovery
 evidence.
 
+The workflow runs `curl` through `kubectl exec` in the `opensearch` container.
+The source flush uses the live OpenSearch pod. The restored index, service and
+trace queries use the isolated restore pod, where the OpenSearch and Jaeger
+containers share a loopback interface.
+
 ## Preserve the recovery record
 
 After a successful workflow run, record the following in a private operational

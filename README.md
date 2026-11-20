@@ -92,6 +92,6 @@ is included in the cutoff.
 | [#10174](https://github.com/jaegertracing/jaeger/pull/10174) | Routine disposable-trace policy for the hosted schedule is implemented in [demo #15](https://github.com/jaegertracing/jaeger-demo/pull/15). Manual recovery has its own opt-in path. |
 | [#10180](https://github.com/jaegertracing/jaeger/pull/10180) | Manual restore Pod startup, rehomed in [demo #14](https://github.com/jaegertracing/jaeger-demo/pull/14) |
 | [#10031](https://github.com/jaegertracing/jaeger/pull/10031) | Grafana probes and demo smoke checks |
-| [#10172](https://github.com/jaegertracing/jaeger/pull/10172) | Recovery API requests inside pods |
+| [#10172](https://github.com/jaegertracing/jaeger/pull/10172) | Ported the recovery API helpers and their regression tests. See the [recovery procedure](examples/otel-demo/OPENSEARCH_RECOVERY.md). |
 | [#10155](https://github.com/jaegertracing/jaeger/pull/10155) | Hosted configuration portions of the batch migration; core configuration stays in core |
 | [#9149](https://github.com/jaegertracing/jaeger/pull/9149) | Inspect only its `ci-deploy-demo.yml` hunk; the critical-path work stays in core |
