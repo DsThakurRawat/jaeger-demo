@@ -19,10 +19,6 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 - Network access to Helm repositories
 
 ## Quick start
-- Clean install (removes previous releases/namespaces, then installs everything):
-```bash path=null start=null
-./deploy-all.sh clean
-```
 - Upgrade (default) — installs if missing, upgrades if present:
 ```bash path=null start=null
 ./deploy-all.sh
@@ -35,13 +31,21 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 # Example
 ./deploy-all.sh upgrade latest
 ```
+- Clean install (removes previous releases/namespaces, then installs everything):
+
+> **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.**
+> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. The script takes no backup first, and whether the underlying volume survives depends on the StorageClass reclaim policy. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
+
+```bash path=null start=null
+./deploy-all.sh clean
+```
 
 Environment variables:
 - ROLLOUT_TIMEOUT: rollout wait timeout in seconds (default 600)
 - OPENSEARCH_DASHBOARDS_HELM_TIMEOUT: Helm wait timeout for OpenSearch Dashboards (default 60m)
 
 ```bash path=null start=null
-ROLLOUT_TIMEOUT=900 ./deploy-all.sh clean
+ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
 ```
 
 ## What gets deployed
