@@ -151,6 +151,13 @@ current releases. Each successful component records its fingerprint in
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
 | OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
 
+A scheduled run applies an input change only when the release keeps its set of
+objects and its protected objects, such as RBAC, Secrets and Helm hooks. When a
+reviewed change adds, removes or renames an object, or alters a protected one,
+the 12:20 UTC preparation fails and no component is updated until an operator
+has upgraded that release manually. See
+[When a change alters a release's objects](#when-a-change-alters-a-releases-objects).
+
 Generated trace history is disposable. Daily OpenSearch upgrades preserve the
 existing PVC and create no backup, restored volume or test Pod. If the stored
 format becomes unusable, historical traces may be lost. After an explicitly
@@ -165,11 +172,18 @@ requires each release to be `deployed` at its chart pin and reads the
 application version with `helm get metadata`, which uses the Helm release
 Secret reads the upgrade already needs.
 
-Once the schedule is enabled, a merged OpenSearch chart change is applied in
-place by the next daily run, without a backup. When an engine upgrade
-should start from a tested recovery point, dispatch the manual `otel` /
-`opensearch` upgrade with `opensearch_recovery=required` and let it finish
-before that day's preparation. The preparation window opens at 11:00 UTC for
+Once the schedule is enabled, a merged change to the OpenSearch chart alone is
+applied in place by the next daily run, without a backup. A Dashboards chart
+version change is not. That chart writes its version into labels on the
+Dashboards ServiceAccount and RoleBinding, and the executor requires those
+protected objects to equal the live release. Preparation then fails with
+"Privileged manifest differs from the operator-established baseline", and the
+daily update stops for every component until a manual upgrade has established
+the new release. The two charts are bumped together, so plan every OpenSearch
+version upgrade as a manual one: merge after the daily run, dispatch the manual
+`otel` / `opensearch` upgrade with `opensearch_recovery=required`, which also
+starts the engine upgrade from a tested recovery point, and let it finish
+before the next preparation. The preparation window opens at 11:00 UTC for
 the 13:00 UTC slot; the CronJob runs at 12:20 UTC, but a one-off preparer Job
 can run earlier. Preparation freezes the checkpoint and Helm history for the
 slot, and a later retry reuses that frozen plan. An upgrade that completes after
@@ -258,3 +272,28 @@ next 12:20 UTC preparation, or pause the schedule first:
 The image publication and installation steps are in
 [Release and installation](in-cluster-executor.md#release-and-installation). To pause the
 schedule, follow [Activation approval](in-cluster-executor.md#activation-approval).
+
+### When a change alters a release's objects
+
+The executor compares each candidate release with the live one. It refuses the
+preparation with `Daily upgrades require an approved existing object inventory`
+when the object identities differ, and with `Privileged manifest differs from the
+operator-established baseline` when a protected object, a hook or a monitoring
+workload differs. The daily plan covers all components, so none of them is
+updated while one release is refused. Before merging,
+`python3 scripts/demo/access_matrix.py` names the objects a chart adds and the
+reviewed records it no longer renders.
+
+Such a change needs the three steps above and a manual upgrade, all before the
+next 12:20 UTC preparation or with the schedule paused:
+
+4. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
+   with `deploy_mode=upgrade`. The OTel sample application is `demo_stack=otel`
+   and `otel_deploy_scope=otel-demo`.
+5. Verify the component as in step 5 of the
+   [change and verification process](#change-and-verification-process). For the
+   OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
+   loads, that <https://jaeger.demo.jaegertracing.io> shows a fresh `checkout`
+   trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
+6. Confirm that the next scheduled run prepares and succeeds. The change is not
+   accepted until it does.

@@ -104,10 +104,22 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Python 3.11.18 and `jaeger-es-index-cleaner` 2.23.0, each pinned by digest.
   ([#52](https://github.com/jaegertracing/jaeger-demo/pull/52),
   fixes [#51](https://github.com/jaegertracing/jaeger-demo/issues/51))
+- OpenSearch and OpenSearch Dashboards chart pins move from 3.7.0 to 3.10.0. A
+  scheduled run rejects a Dashboards chart change, so the upgrade is a manual
+  `opensearch` deployment.
+  ([#45](https://github.com/jaegertracing/jaeger-demo/pull/45),
+  fixes [#44](https://github.com/jaegertracing/jaeger-demo/issues/44))
 - README leads with the public endpoints table and architecture instead of dated
   handover status.
   ([#28](https://github.com/jaegertracing/jaeger-demo/pull/28),
   fixes [#27](https://github.com/jaegertracing/jaeger-demo/issues/27))
+- OpenTelemetry Demo chart pin moves from 0.40.9 to 0.42.7 (application 3.1.0),
+  with the assistant stack and OpAMP server disabled and Valkey and PostgreSQL on
+  the chart's images. The object set changes, so the release needs a
+  [manual upgrade](docs/releases.md#when-a-change-alters-a-releases-objects)
+  before a scheduled run accepts it. **Executor image.**
+  ([#56](https://github.com/jaegertracing/jaeger-demo/pull/56),
+  fixes [#54](https://github.com/jaegertracing/jaeger-demo/issues/54))
 - OTel stack README leads with `upgrade` and warns that `clean` deletes the
   OpenSearch volume claim without a backup.
   ([#30](https://github.com/jaegertracing/jaeger-demo/pull/30),
