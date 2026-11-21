@@ -150,17 +150,54 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(env["GITHUB_EVENT_NAME"], "schedule")
             self.assertNotIn("GITHUB_SHA", env)
             self.assertNotIn("JAEGER_DEMO_HOTROD_IMAGE_TAG", env)
-            self.assertEqual(env["JAEGER_DEMO_JAEGER_IMAGE_TAG"], "my-tag")
+            self.assertEqual(env["JAEGER_DEMO_JAEGER_IMAGE_TAG"], sources["jaeger"]["tag"])
             Path(env["GITHUB_ENV"]).write_text("".join("JAEGER_DEMO_" + n.upper() + "_IMAGE_TAG=" + d["tag"] + "\n"
                                                       for n, d in sources.items()))
             return ""
 
+        # The published explicit Jaeger tag is kept. The unspecified HotROD image takes the resolver's choice.
         with patch.object(p, "run", side_effect=run), patch.object(p, "config_commit", return_value="c" * 40), \
                 patch.object(p, "registry_image", side_effect=sources.values()):
-            selected = p.resolve("schedule", {"jaeger": "my-tag", "hotrod": None})
+            selected = p.resolve("schedule", {"jaeger": sources["jaeger"]["tag"], "hotrod": None})
         self.assertEqual(selected["images"]["otel"]["jaeger"]["tag"], sources["jaeger"]["tag"] + "@" + sources["jaeger"]["digest"])
         self.assertEqual(selected["sources"], sources)
         self.assertNotEqual(selected["configCommit"], selected["coreMain"])
+
+    def resolve_with(self, overrides, resolved):
+        """Run resolve() against a shared resolver that exports the given tags."""
+        def run(cmd, **kwargs):
+            if cmd[0] == "git":
+                return "d" * 40 + "\trefs/heads/main\n"
+            Path(kwargs["env"]["GITHUB_ENV"]).write_text("".join(
+                "JAEGER_DEMO_" + n.upper() + "_IMAGE_TAG=" + tag + "\n" for n, tag in resolved.items()))
+            return ""
+        self.registry = Mock(side_effect=lambda repo, tag: {"repository": repo, "tag": tag, "digest": "sha256:" + "e" * 64})
+        with patch.object(p, "run", side_effect=run), patch.object(p, "config_commit", return_value="c" * 40), \
+                patch.object(p, "registry_image", self.registry):
+            return p.resolve("schedule", overrides)
+
+    def test_scheduled_fallback_cannot_replace_a_missing_explicit_tag(self):
+        newest = {"jaeger": "a" * 40, "hotrod": "b" * 40}
+        # The shared resolver substituted its newest published SHA for the missing explicit tag.
+        for name in p.REPOS:
+            for missing in ("f" * 40, "v2.99.0"):
+                overrides = {n: missing if n == name else None for n in p.REPOS}
+                with self.subTest(image=name, tag=missing):
+                    with self.assertRaisesRegex(ValueError, f"Explicit {name} tag is not published"):
+                        self.resolve_with(overrides, newest)
+                    # No image is resolved at the registry, so no candidate can be published.
+                    self.registry.assert_not_called()
+        # Without an override both images may use the fallback.
+        selected = self.resolve_with({"jaeger": None, "hotrod": None}, newest)
+        self.assertEqual(newest, {n: s["tag"] for n, s in selected["sources"].items()})
+        self.assertEqual(2, self.registry.call_count)
+
+    def test_explicit_latest_must_resolve_to_a_commit_tag(self):
+        newest = {"jaeger": "a" * 40, "hotrod": "b" * 40}
+        selected = self.resolve_with({"jaeger": "latest", "hotrod": "latest"}, newest)
+        self.assertEqual(newest, {n: s["tag"] for n, s in selected["sources"].items()})
+        with self.assertRaisesRegex(ValueError, "latest hotrod tag did not resolve"):
+            self.resolve_with({"jaeger": None, "hotrod": "latest"}, dict(newest, hotrod="latest"))
 
     def test_failed_second_image_resolution_never_publishes_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:

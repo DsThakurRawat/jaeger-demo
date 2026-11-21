@@ -107,6 +107,19 @@ spec:
         schema = schema_node(embedded, custom=True, metadata_ref="#/definitions/ObjectMeta")
         self.assertEqual(schema["properties"]["metadata"], {"allOf": [{"$ref": "#/definitions/ObjectMeta"}, meta]})
 
+    def test_declared_metadata_constraints_are_kept_beside_object_meta(self):
+        declared = "          metadata:\n            type: object\n            properties:\n" \
+                   "              name: {type: string, pattern: ^allowed-}\n"
+        self.manifest.write_text("apiVersion: example.com/v1\nkind: Alarm\n---\n" +
+                                 self.crd.replace("          spec:\n", declared + "          spec:\n", 1))
+        prepare(self.spec, [self.manifest], self.root)
+        schema = json.loads((self.root / "example.com/v1/alarm.json").read_text())
+        object_meta, fragment = schema["properties"]["metadata"]["allOf"]
+        self.assertIn("ObjectMeta", object_meta["$ref"])
+        # The fragment keeps the restriction and stays open, so labels and other ObjectMeta fields still pass.
+        self.assertEqual({"type": "object", "properties": {"name": {"type": "string", "pattern": "^allowed-"}}}, fragment)
+        self.assertIs(schema["properties"]["spec"]["additionalProperties"], False)
+
     def test_reject_duplicate_or_external_custom_schema(self):
         self.manifest.write_text(self.crd + "---\n" + self.crd)
         with self.assertRaisesRegex(ValueError, "Duplicate served schema"):

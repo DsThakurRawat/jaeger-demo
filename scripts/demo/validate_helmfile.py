@@ -106,12 +106,20 @@ def prepare(openapi, manifests, folder):
                     if identity in schemas:
                         raise ValueError(f"Duplicate served schema: {identity}")
                     meta_ref = f"{shared.as_uri()}#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
-                    schema = schema_node(version["schema"]["openAPIV3Schema"], custom=True, metadata_ref=meta_ref)
+                    root = version["schema"]["openAPIV3Schema"]
+                    schema = schema_node(root, custom=True, metadata_ref=meta_ref)
                     # A structural CRD schema may omit these Kubernetes-managed envelope fields.
                     props = schema.setdefault("properties", {})
+                    metadata = {"$ref": meta_ref}
+                    declared = root.get("properties", {}).get("metadata")
+                    if declared:
+                        # Kubernetes enforces a CRD's own restrictions on metadata.name and generateName
+                        # together with ObjectMeta. The fragment stays open so other metadata fields pass.
+                        metadata = {"allOf": [metadata, schema_node(declared, custom=True, structural=False,
+                                                                    metadata_ref=meta_ref)]}
                     props.update(apiVersion={"enum": [spec["group"] + "/" + version["name"]]},
                                  kind={"enum": [identity[2]]},
-                                 metadata={"$ref": meta_ref})
+                                 metadata=metadata)
                     schemas[identity] = schema
     if not requested:
         raise ValueError("No resources in manifest input")

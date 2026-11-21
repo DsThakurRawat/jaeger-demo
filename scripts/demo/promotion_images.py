@@ -152,6 +152,15 @@ def resolve(event, overrides):
         exported = Path(temp) / "resolved"
         run(["bash", str(ROOT / "scripts/utils/resolve-demo-snapshot-tags.sh")], env=dict(env, GITHUB_ENV=str(exported)))
         tags = dict(line.split("=", 1) for line in exported.read_text().splitlines())
+    for name, tag in overrides.items():
+        # An explicit tag selects exactly that image. On a scheduled event the shared resolver
+        # can substitute the newest published SHA for a missing tag. Only an unspecified image
+        # may use that fallback, and an explicit latest must become a commit tag.
+        resolved = tags[f"JAEGER_DEMO_{name.upper()}_IMAGE_TAG"]
+        if tag == "latest":
+            require(COMMIT.fullmatch(resolved), f"Explicit latest {name} tag did not resolve to a published commit tag")
+        elif tag is not None:
+            require(resolved == tag, f"Explicit {name} tag is not published. Refusing to select a different image")
     sources = {name: registry_image(repo, tags[f"JAEGER_DEMO_{name.upper()}_IMAGE_TAG"]) for name, repo in REPOS.items()}
     images = {stack: {name: {"repository": image["repository"], "tag": image["tag"] + "@" + image["digest"],
                              "pullPolicy": "Always"} for name, image in sources.items()} for stack in STACKS}
