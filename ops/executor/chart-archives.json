@@ -1,8 +1,8 @@
 {
   "charts": {
     "kube-prometheus-stack-93.6.1.tgz": "6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4",
-    "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
-    "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",
+    "opensearch-3.10.0.tgz": "e42d5084e3e440c61dceb19def26b28a5586a6693a57229081e4caee70a4356b",
+    "opensearch-dashboards-3.10.0.tgz": "02a1adc978fce8a1e91fe94ec328dc8fd2d51ac0ca00d497c98c5ba2b8d975d6",
     "opentelemetry-demo-0.42.7.tgz": "8641be206f5282f3c489a4fd8481d343039d1c21298e37feb6d324e6997a3f89"
   },
   "jaegerDependencies": {
