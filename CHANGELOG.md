@@ -79,6 +79,10 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- OpenSearch and OpenSearch Dashboards charts 3.10.0 (from 3.7.0). The release
+  procedure now describes the manual upgrade an OpenSearch chart change needs.
+  ([#45](https://github.com/jaegertracing/jaeger-demo/pull/45),
+  fixes [#44](https://github.com/jaegertracing/jaeger-demo/issues/44))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
