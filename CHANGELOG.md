@@ -144,6 +144,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   bounded curl timeout. **Executor image.**
   ([#36](https://github.com/jaegertracing/jaeger-demo/pull/36),
   fixes [#35](https://github.com/jaegertracing/jaeger-demo/issues/35))
+- The daily request job says why the request record does not match its slot. An
+  older record fails with "No preparation was published" and a newer one, which
+  a late rerun finds, with "The request record has advanced", both in place of
+  an interval error; a still-empty record fails with "No preparation has been
+  published" in place of a malformed-request error. `docs/releases.md` lists what
+  to check. **Executor image.**
+  ([#84](https://github.com/jaegertracing/jaeger-demo/pull/84),
+  refs [#81](https://github.com/jaegertracing/jaeger-demo/issues/81))
 
 ### Security
 
