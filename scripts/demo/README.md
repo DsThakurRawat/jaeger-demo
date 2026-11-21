@@ -71,8 +71,8 @@ Scheduled runs are off until the repository variable `DEMO_SMOKE_ENABLED` is
 secret only; no deploy environment holds a copy, and this job has no
 environment. Do not turn the switch on until the check retries a transient
 miss and posts only when the result changes. Today one slow probe fails a run,
-and every failed run posts. Once retry and deduplication have landed, enable it
-with:
+and every failed run posts. Once retry and deduplication have landed
+([#43](https://github.com/jaegertracing/jaeger-demo/issues/43)), enable it with:
 
 ```bash
 gh variable set DEMO_SMOKE_ENABLED --body true --repo jaegertracing/jaeger-demo
