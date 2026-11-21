@@ -67,7 +67,7 @@ Exit criteria:
 
 ### 3. Core hotrod fixture
 
-Status: [jaeger#10194](https://github.com/jaegertracing/jaeger/pull/10194) is open with successful checks; maintainer approval and merge remain pending.
+The core-owned fixture merged at `e9252b8` on November 18, 2026. Both Docker and Kubernetes HotROD jobs passed. [Core fixture PR](https://github.com/jaegertracing/jaeger/pull/10194)
 
 Issues: [jaeger#10190](https://github.com/jaegertracing/jaeger/issues/10190).
 
@@ -79,8 +79,8 @@ Deliverables:
 
 Exit criteria:
 
-- [ ] Core make fmt, make lint, make test and appropriate patch coverage pass
-- [ ] Docker and Kubernetes HotROD CI pass without hosted tooling; reviewed PR merged to core main
+- [x] Core make fmt, make lint, make test and appropriate patch coverage pass
+- [x] Docker and Kubernetes HotROD CI passed with the core-owned test fixture and the reviewed PR merged to core main
 
 ### 4. Verbatim script handover
 
@@ -106,9 +106,11 @@ Exit criteria:
 
 ### 5. Helmfile conversion
 
-Status: pending.
+Credential-free implementation and rehearsal are in progress.
 
 Issues: [jaeger-demo#1](https://github.com/jaegertracing/jaeger-demo/issues/1).
+
+The candidate configuration renders all six application releases and four namespace-local companion releases. `make validate` compares the application manifests against the extracted scripts and schema-checks both sets. The ownership rehearsal runs on a full Kubernetes node in PR CI. The frozen-bundle tests cover image compatibility, private inputs, drift rejection and stack ordering. The release phase rehearsal covers healthy no-op applies, retry after a failed release, and pending-state blocking. The first scheduled deployment, complete live-equivalence inventory and production adoption are outstanding. [Application releases](helmfile-applications.md) · [Companion rehearsal](helmfile-companions.md)
 
 Requires: verbatim-script-handover, core-hotrod-fixture.
 

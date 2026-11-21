@@ -5,6 +5,57 @@
 
 The trusted preparer publishes the day's private, signed bundle. The executor independently authenticates that bundle and claims the same durable writer lock used by manual operations. The GitHub job supplies one signal and observes the result. The manifests, service accounts, keys and cluster permissions require operator installation before activation. [Daily request protocol](daily-update-request.md) · [Receiver entry point](../scripts/demo/scheduled_receiver.py)
 
+## Daily sequence
+
+Each step below is described in this page, the [daily request protocol](daily-update-request.md) and the [release guide](releases.md). None of it runs until operators install the workloads and a maintainer approves activation: the preparer CronJob first, then the `DEMO_SCHEDULE_ENABLED` repository variable. Manual jobs in the `demo-apply` environment take the same writer lock instead of signalling. A failure before the lock release leaves the lock held. A request left `verified` after the release has no holder, and the recovery operator finalizes it ([concurrency and recovery](daily-update-request.md#concurrency-and-recovery)).
+
+```mermaid
+sequenceDiagram
+    participant P as jaeger-demo-preparer<br/>CronJob, 12:20 UTC
+    participant B as Bundle custody
+    participant A as Admission approval records
+    participant C as ConfigMap<br/>daily-hosted-update
+    participant G as GitHub job request-daily<br/>13:00 UTC, demo-scheduled
+    participant E as jaeger-demo-executor<br/>receiver
+    participant L as Writer lock<br/>default/jaeger-demo-deployment-revisions
+    participant H as Six Helm releases
+    participant S as Slack #jaeger-operations
+
+    Note over P,H: Gated: operator installation, then activation approval
+    P->>B: Freeze the plan, write the encrypted bundle
+    P->>A: Stage admission approvals from the same frozen inputs
+    P->>B: Sign the dated index, including the approval digest
+    P->>A: Read the approvals back against the signed digest
+    P->>C: Publish the ready request and receipt
+    G->>C: Check date, commit, engine scripts-v1 and expiry, then signal once
+    loop Every 10 seconds
+        E->>C: Poll the control record
+    end
+    E->>B: Verify the signed receipt in custody
+    E->>L: Claim the lock (UID and resourceVersion test)
+    E->>C: Set the request to running
+    Note over E,L: From here until the lock is released, any failure leaves it held
+    E->>B: Authenticate and decrypt the bundle
+    E->>H: Compare Helm histories and live state before the first write
+    E->>H: Upgrade selected components in order: default/prometheus, default/jaeger,<br/>opensearch, opensearch-dashboards, jaeger/jaeger, otel-demo
+    Note over E,H: Each component passes its post-rollout health check before its checkpoint advances.<br/>A failure stops later components, so OCI health gates OTel.
+    alt All checks pass
+        E->>C: Set running to verified
+        E->>L: Release the lock
+        E->>C: Set verified to succeeded
+        Note over E,L: If this last update fails, the request stays verified<br/>and the lock is already released
+    else Any check fails
+        E->>C: Record the failure
+        Note over E,L: The lock stays held for the recovery operator
+    end
+    Note over E,H: Durable outcome records go to the outcomes mount in both cases
+    G->>C: Observe the terminal result
+    opt Failed, cancelled or timed out
+        G->>S: Post the failure alert
+    end
+    Note over G,S: demo-run-observer.yml posts to the same channel when a run ended before any job started
+```
+
 ## Processes and credentials
 
 Run `python3 /opt/jaeger-demo/scripts/demo/scheduled_receiver.py prepare` as the `jaeger-demo-preparer` service account and `serve` as `jaeger-demo-executor`, both in `jaeger-demo-operations`. Each process queries the Kubernetes API for its authenticated username before acting. It writes a temporary kubeconfig pointing at the in-cluster TLS endpoint, projected CA and rotating token file. This kubeconfig also supplies the identity for the fixed application commands.

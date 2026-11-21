@@ -27,6 +27,8 @@ expected = {
     ("scripts/demo/jaeger-chart.sh", "https://github.com/jaegertracing/helm-charts.git"),
     ("scripts/utils/lint-requirements.txt", "ruff"),
 }
+expected.update(("helmfile.yaml", chart) for chart in (
+    "kube-prometheus-stack", "opensearch", "opensearch-dashboards", "opentelemetry-demo"))
 monitoring_hooks = {
     "docker.io/library/busybox",
     "registry.k8s.io/kubectl",
@@ -34,6 +36,9 @@ monitoring_hooks = {
 }
 monitoring_values = "examples/oci/monitoring-values.yaml"
 expected.update((monitoring_values, image) for image in monitoring_hooks)
+tool_lock = "scripts/demo/helmfile-tools.lock.json"
+for tool in ("helm/helm", "helmfile/helmfile", "databus23/helm-diff", "yannh/kubeconform"):
+    expected.add((tool_lock, tool))
 found = set()
 with open(sys.argv[1], encoding="utf-8") as source:
     for line in source:

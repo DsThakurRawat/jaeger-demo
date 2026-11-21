@@ -15,6 +15,7 @@ select = ["E4", "E7", "E9", "F"]
 # modules they exercise, so the imports cannot move to the top of the file.
 "scripts/demo/rehearsals/helm-history/six_chart_approvals.py" = ["E402"]
 "ops/executor/monitoring_hooks.py" = ["E402"]
+"scripts/demo/rehearsals/adoption-bundle/monitoring.py" = ["E402"]
 # The installation review packet records this file's SHA-256 in
 # rendererSources, so a lint-only edit would make an approved packet fail its
 # source check. Clear these two findings with the next functional change.

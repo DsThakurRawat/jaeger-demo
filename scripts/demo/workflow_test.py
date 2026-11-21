@@ -39,6 +39,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(2, len(versions))
         self.assertEqual(versions[0], versions[1])
 
+    def test_every_helm_install_uses_one_pinned_action_and_requires_the_checksum(self):
+        steps = []
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            for job in (yaml.safe_load(path.read_text()).get('jobs') or {}).values():
+                steps += [(path.name, step) for step in job.get('steps') or []
+                          if str(step.get('uses', '')).startswith('azure/setup-helm@')]
+        self.assertEqual(['ci-deploy-demo.yml', 'ci.yml', 'executor-ci.yml'], [name for name, _ in steps])
+        self.assertEqual(1, len({step['uses'] for _, step in steps}))
+        for name, step in steps:
+            with self.subTest(workflow=name):
+                self.assertRegex(step['uses'], r'^azure/setup-helm@[0-9a-f]{40}$')
+                # The action downloads Helm; without this it only warns when no checksum is published.
+                self.assertEqual('required', step['with']['checksum-policy'])
+                self.assertRegex(step['with']['version'], r'^v\d+\.\d+\.\d+$')
+
     def test_oci_cli_install_is_constrained_and_verified_before_reconciliation(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         configure = source.split('    - name: Configure kubectl with OKE\n', 1)[1].split('\n    - name:', 1)[0]
@@ -253,7 +268,7 @@ class WorkflowTests(unittest.TestCase):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
         self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])
         script = (ROOT / 'scripts/utils/renovate-discovery.sh').read_text()
-        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements', script)
+        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements,helmfile ', script)
         self.assertIn('python3 scripts/demo/check-renovate-extraction.py', script)
 
 
