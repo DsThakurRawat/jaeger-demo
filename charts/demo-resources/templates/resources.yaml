@@ -18,6 +18,10 @@ SPDX-License-Identifier: Apache-2.0
   {{- $_ := set $seen $id true }}
   {{- $_ := set $obj.metadata "namespace" $.Release.Namespace }}
   {{- $annotations := $obj.metadata.annotations | default dict }}
+  {{- /* Helm does not own a hook and deletes it before each run, despite the keep policy. */}}
+  {{- range $key, $value := $annotations }}
+    {{- if hasPrefix "helm.sh/hook" $key }}{{ fail (printf "hook annotation on %s" $id) }}{{ end }}
+  {{- end }}
   {{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
   {{- $_ := set $obj.metadata "annotations" $annotations }}
 ---

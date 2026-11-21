@@ -41,6 +41,9 @@ RELEASES = {
     *(f"{ns}/demo-resources" for ns in ("default", "jaeger", "opensearch", "otel-demo")),
 }
 COMMON = {"plan.json", "tools.lock.json", "live.json"}
+# Reviewed SHA-256 of each repository chart archive, shared with the daily executor.
+CHART_ARCHIVES = "ops/executor/chart-archives.json"
+HOOK_PREFIX = "helm.sh/hook"
 SHA = re.compile(r"[a-f0-9]{64}")
 COMMIT = re.compile(r"[a-f0-9]{40}")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/+:@-]*")
@@ -118,8 +121,8 @@ def verify_source(checkout, expected):
 
 
 def verify_frozen_source(checkout, expected, files, plan):
-    def blob(name):
-        return subprocess.check_output(["git", "-C", str(checkout), "show", f"{expected}:{name}"])
+    def blob(name, stderr=None):
+        return subprocess.check_output(["git", "-C", str(checkout), "show", f"{expected}:{name}"], stderr=stderr)
     require(files["tools.lock.json"] == blob("scripts/demo/helmfile-tools.lock.json"),
             "Bundled tools differ from the reviewed source tree")
     selector = plan["selector"]
@@ -160,9 +163,14 @@ def verify_frozen_source(checkout, expected, files, plan):
                     continue
                 meta = obj["metadata"]
                 identity = obj["kind"], meta["name"]
+                annotations = meta.get("annotations") or {}
                 require(meta.get("namespace", ns) == ns and identity not in seen and
-                        meta.get("annotations", {}).get("helm.sh/resource-policy") == "keep",
+                        annotations.get("helm.sh/resource-policy") == "keep",
                         "Unsafe or duplicate companion resource")
+                # Helm does not own a hook, ignores its keep policy and by default deletes
+                # and recreates it before each run.
+                require(not any(str(name).startswith(HOOK_PREFIX) for name in annotations),
+                        "Companion resource must not be a Helm hook")
                 seen.add(identity)
             require(seen == allowed, "Companion render differs from the checked-in allowlist")
     else:
@@ -170,17 +178,33 @@ def verify_frozen_source(checkout, expected, files, plan):
         by_id = {r["namespace"] + "/" + r["name"]: r for r in state}
         direct = {k for k, r in by_id.items() if stack in ("all", r["labels"]["stack"]) and
                   component in ("all", r["labels"]["component"])}
+        reviewed = None
         for row in plan["releases"]:
             require(row["id"] in by_id, "Application and companion stages must be separate")
             release = by_id[row["id"]]
             require(row["needs"] == release.get("needs", []), "Prerequisites differ from the checked-in Helmfile")
             if "version" in release:
-                require(row["chart"]["source"] == release["chart"] and
-                        row["chart"]["version"] == str(release["version"]), "Chart differs from checked-in Helmfile")
+                # The plan and the archive both come from the bundle. Bind the chart identity
+                # and its exact bytes to the reviewed tree, as the daily executor does.
+                name, version = release["chart"].rpartition("/")[2], str(release["version"])
+                require(row["chart"]["source"] == release["chart"] and row["chart"]["name"] == name and
+                        row["chart"]["version"] == version, "Chart differs from checked-in Helmfile")
+                if reviewed is None:
+                    try:
+                        reviewed = read_json(blob(CHART_ARCHIVES, subprocess.DEVNULL))["charts"]
+                    except subprocess.CalledProcessError:
+                        raise BundleError("Reviewed chart checksums are missing from the source tree") from None
+                    require(isinstance(reviewed, dict), "Invalid reviewed chart checksums")
+                expected_sha = reviewed.get(f"{name}-{version}.tgz")
+                require(matches(SHA, expected_sha) and row["chart"]["sha256"] == expected_sha,
+                        "Chart archive differs from the reviewed SHA-256")
             elif release["name"] == "jaeger":
+                # This chart is packaged locally from the pinned commit, so no reviewed archive
+                # checksum exists. Its bytes are bound by the approved bundle digest alone.
                 pin = re.search(rb'^JAEGER_CHART_COMMIT="([a-f0-9]{40})"$',
                                 blob("scripts/demo/jaeger-chart.sh"), re.MULTILINE)
-                require(pin and row["chart"]["source"] == "https://github.com/jaegertracing/helm-charts.git@" +
+                require(pin and row["chart"]["name"] == "jaeger" and
+                        row["chart"]["source"] == "https://github.com/jaegertracing/helm-charts.git@" +
                         pin[1].decode(), "Jaeger chart source differs from the checked-in commit")
             else:
                 raise BundleError("Application chart is missing a reviewed version")

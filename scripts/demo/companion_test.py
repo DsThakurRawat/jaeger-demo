@@ -56,6 +56,10 @@ class CompanionTest(unittest.TestCase):
             ([dict(objects[0], metadata={"name": "unknown"})], "unexpected resource"),
             ([dict(objects[0], metadata=dict(objects[0]["metadata"], namespace="default"))], "foreign namespace"),
             ([dict(objects[0], apiVersion="v1")], "unexpected API version"),
+            ([dict(objects[0], metadata=dict(objects[0]["metadata"], annotations={"helm.sh/hook": "pre-upgrade"}))],
+             "hook annotation"),
+            ([dict(objects[0], metadata=dict(objects[0]["metadata"],
+                   annotations={"helm.sh/hook-delete-policy": "before-hook-creation"}))], "hook annotation"),
         ]
         for changed, error in mutations:
             with self.subTest(error=error):

@@ -28,7 +28,7 @@ the entire member allowlist from the approved selection. Supply these files:
 | `tools.lock.json` | Exact bytes of `scripts/demo/helmfile-tools.lock.json` in the reviewed tree. |
 | `image-selection.json`, `image-compatibility.json` | For image promotions that include Jaeger, the exact resolver output and successful compatibility receipt. The receipt binds that file, the selected renders, configuration commit, independent image records and tested Linux manifest. |
 | `live.json` | Sanitized baseline projection from the read-only observer. |
-| `releases/<namespace>/<name>/chart.tgz` | Complete chart archive including its packaged dependencies. The plan records the chart source, name, version and SHA-256. |
+| `releases/<namespace>/<name>/chart.tgz` | Complete chart archive including its packaged dependencies. The plan records the chart source, name, version and SHA-256. For a repository chart, supply the unmodified `helm pull` archive. |
 | `releases/<namespace>/<name>/values.yaml` | Frozen merged user values, including previously supplied file contents, image inputs and chart flags. |
 | `releases/<namespace>/<name>/rendered.yaml` | Exact output from the pinned renderer using these inputs and the recorded capabilities. Preserve byte order and encoding. |
 
@@ -37,11 +37,21 @@ The plan's top-level fields are `format`, `configurationSHA`, `mode`, `selector`
 and `component`. Each release entry has an `id` of `namespace/name`, ordered
 `needs`, `chart`, explicit `helm` parameters, `observe`, `checks` and `rollback`.
 The application dependency graph and chart pins come from the reviewed Git tree.
+For each of the four repository charts, the checker requires the chart name from
+`helmfile.yaml` and the archive SHA-256 that the same commit records for that name
+and version in [`ops/executor/chart-archives.json`](../ops/executor/chart-archives.json).
+A Helmfile chart version without a reviewed checksum in that file cannot be
+bundled. Update both in the same reviewed change.
 For a locally packaged Jaeger chart, use its upstream repository URL followed by
-`@` and the exact pinned commit. A companion adoption uses
+`@` and the exact pinned commit. The checker requires that source and the chart
+name `jaeger`. No reviewed checksum exists for this locally built package, so the
+approved bundle digest is the only binding of its bytes. Review that render
+against the pinned commit before approval. A companion adoption uses
 `component=demo-resources` and the source `charts/demo-resources`. The checker
 compares its rendered resource identities and keep annotations against the chart's
-committed allowlist.
+committed allowlist and rejects any `helm.sh/hook` annotation. Helm does not own
+a hook, ignores its keep policy and by default deletes and recreates it before
+each run.
 
 Freeze the Helm operation (`install` or `upgrade`), `atomic`, `wait`,
 `timeoutSeconds`, `historyMax`, `skipCRDs` and `createNamespace`. Use the reviewed
@@ -90,8 +100,8 @@ python3 scripts/demo/adoption_bundle.py --checkout . \
 ```
 
 Verification emits the receipt. It checks the authenticated payload, every member
-digest, safe archive structure, source tree, selection, tool and chart pins and
-recorded recovery targets. Neither CLI command deploys or exports decrypted files.
+digest, safe archive structure, source tree, selection, tool pins, chart names,
+versions and reviewed repository chart checksums, and recorded recovery targets. Neither CLI command deploys or exports decrypted files.
 
 The live runner entry point is `consume(path, cipher, approved, checkout, expected,
 render_frozen, read_live, reconcile, verify_stack)`. Acquire the deployment lock before calling it.

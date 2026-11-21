@@ -72,8 +72,14 @@ class BundleTests(unittest.TestCase):
             {"namespace":"otel-demo","name":"otel-demo","labels":{"stack":"otel","component":"otel-demo"},
              "chart":"open-telemetry/opentelemetry-demo","version":"0.40.9","needs":["jaeger/jaeger"]},
         ]}
+        state["releases"].append({"namespace":"default","name":"jaeger","labels":{"stack":"oci","component":"jaeger"},
+                                  "chart":"./.tools/helm-charts/charts/jaeger","needs":["default/prometheus"]})
         (self.checkout / "helmfile.yaml").write_bytes(b.canonical(state))
-        for cmd in (["git", "init", "-q"], ["git", "add", "helmfile.yaml", "scripts/demo/helmfile-tools.lock.json"], ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
+        self.archives = self.checkout / b.CHART_ARCHIVES
+        self.archives.parent.mkdir(parents=True)
+        self.archives.write_bytes(b.canonical({"charts": {"kube-prometheus-stack-82.10.4.tgz": b.digest(self.chart)}}))
+        (self.checkout / "scripts/demo/jaeger-chart.sh").write_text('JAEGER_CHART_COMMIT="' + "c"*40 + '"\n')
+        for cmd in (["git", "init", "-q"], ["git", "add", "."], ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
                     "commit", "-q", "--allow-empty", "-m", "Fixture"]):
             subprocess.run(cmd, cwd=self.checkout, check=True)
         self.commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.checkout, text=True).strip()
@@ -192,6 +198,11 @@ class BundleTests(unittest.TestCase):
         files[prefix+"rendered.yaml"] = render.replace(b"keep",b"remove")
         with self.assertRaisesRegex(b.BundleError, "Unsafe"):
             b.verify_frozen_source(self.checkout,commit,files,plan)
+        for hook in (b"helm.sh/hook: pre-upgrade", b"helm.sh/hook-delete-policy: hook-succeeded"):
+            files[prefix+"rendered.yaml"] = render.replace(b"{helm.sh", b"{" + hook + b", helm.sh")
+            with self.subTest(hook=hook), self.assertRaisesRegex(b.BundleError, "Helm hook"):
+                b.verify_frozen_source(self.checkout,commit,files,plan)
+        files[prefix+"rendered.yaml"] = render
         files[prefix+"chart.tgz"] = chart(dict(members, **{"demo-resources/templates/extra.yaml":b"unexpected"}))
         with self.assertRaisesRegex(b.BundleError, "Unexpected companion chart files"):
             b.verify_frozen_source(self.checkout,commit,files,plan)
@@ -203,6 +214,53 @@ class BundleTests(unittest.TestCase):
         files = {"tools.lock.json": b.canonical(self.lock)}
         with self.assertRaisesRegex(b.BundleError, "checked-in Helmfile"):
             b.verify_frozen_source(self.checkout, self.commit, files, self.plan)
+
+    def commit_fixture(self, message):
+        for cmd in (["git", "add", "."], ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", message]):
+            subprocess.run(cmd, cwd=self.checkout, check=True)
+        self.commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.checkout, text=True).strip()
+        self.plan["configurationSHA"] = self.commit
+
+    def test_repository_chart_name_and_bytes_are_bound_to_the_reviewed_checksums(self):
+        # Another chart that reuses the pinned source and version strings.
+        foreign = chart({"not-prometheus/Chart.yaml": b"apiVersion: v2\nname: not-prometheus\nversion: 82.10.4\n"})
+        self.row["chart"].update(name="not-prometheus", sha256=b.digest(foreign))
+        (self.base / "chart.tgz").write_bytes(foreign)
+        with self.assertRaisesRegex(b.BundleError, "checked-in Helmfile"):
+            self.build()
+        # The right name and version with unreviewed contents.
+        changed = chart({"kube-prometheus-stack/Chart.yaml": b"apiVersion: v2\nname: kube-prometheus-stack\nversion: 82.10.4\n",
+                         "kube-prometheus-stack/templates/added.yaml": b"# not in the reviewed archive\n"})
+        self.row["chart"].update(name="kube-prometheus-stack", sha256=b.digest(changed))
+        (self.base / "chart.tgz").write_bytes(changed)
+        with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
+            self.build()
+        self.assertEqual([], list(self.dest.iterdir()))
+        # An already sealed bundle is refused once the reviewed tree no longer lists its archive.
+        self.row["chart"]["sha256"] = b.digest(self.chart)
+        (self.base / "chart.tgz").write_bytes(self.chart)
+        self.archives.write_bytes(b.canonical({"charts": {"kube-prometheus-stack-82.10.5.tgz": b.digest(self.chart)}}))
+        self.commit_fixture("Different reviewed version")
+        with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
+            self.build()
+        self.archives.unlink()
+        self.commit_fixture("No reviewed checksums")
+        with self.assertRaisesRegex(b.BundleError, "checksums are missing"):
+            self.build()
+
+    def test_jaeger_chart_is_bound_to_its_name_and_pinned_commit(self):
+        source = "https://github.com/jaegertracing/helm-charts.git@" + "c"*40
+        jaeger = {"id":"default/jaeger", "needs":[self.key], "chart":{"name":"jaeger", "source":source}}
+        plan = {"selector":{"stack":"oci","component":"jaeger"}, "requested":["default/jaeger"],
+                "releases":[self.row, jaeger]}
+        files = {"tools.lock.json": b.canonical(self.lock)}
+        b.verify_frozen_source(self.checkout, self.commit, files, plan)
+        for field, value in (("name", "another-chart"), ("source", source[:-1] + "d")):
+            changed = copy.deepcopy(plan)
+            changed["releases"][1]["chart"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(b.BundleError, "Jaeger chart source"):
+                b.verify_frozen_source(self.checkout, self.commit, files, changed)
 
     def test_image_gate_binds_exact_selection_and_render(self):
         source = {"reference":"docker.io/jaegertracing/jaeger-snapshot:abc@sha256:"+"a"*64,
