@@ -76,7 +76,9 @@ to OCI CLI 3.96.3 and the dependency versions observed in the same writer. After
 setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
 the CLI executable's version, including when the action's installed marker skips
 installation. A rejected tool check cannot start reconciliation or restore-pod
-cleanup. Credential-free CI installs and verifies these pins.
+cleanup. Credential-free CI installs and verifies these pins. The OpenSearch recovery and
+volume-expansion workflows apply the same constraint and check after checkout and
+before they acquire the deployment lock.
 Kubectl follows the live cluster's Kubernetes version; record its exact version
 and checksum along with the runner image used for handover. Supply
 `expected_config_sha` during the reviewed script handover. The workflow
@@ -165,6 +167,16 @@ and storage bindings. The scheduled failure notification includes the run ID in
 `#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
 
 ## Failure handling
+
+A manual deployment or daily request job that fails, is cancelled or times out
+posts to `#jaeger-operations` with its status. The manual job is limited to
+330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
+failure diagnostics, restore-pod cleanup and the notification. The diagnostics
+and cleanup steps have their own 5- and 2-minute limits so that a hung request
+cannot use up the cancellation window. A run that is cancelled before its job starts, for example
+while it waits for approval or when a newer pending run replaces it, runs no
+steps and sends no notification
+([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
 
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
