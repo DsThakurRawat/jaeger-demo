@@ -195,10 +195,15 @@ posts to `#jaeger-operations` with its status. The manual job is limited to
 330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
 failure diagnostics, restore-pod cleanup and the notification. The diagnostics
 and cleanup steps have their own 5- and 2-minute limits so that a hung request
-cannot use up the cancellation window. A run that is cancelled before its job starts, for example
-while it waits for approval or when a newer pending run replaces it, runs no
-steps and sends no notification
-([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
+cannot use up the cancellation window.
+
+A run that ends before its job starts, for example while it waits for approval
+or when a newer pending run replaces it, runs no steps and cannot report itself.
+The [run observer](../.github/workflows/demo-run-observer.yml) posts to the same
+channel for a deploy or smoke-check run that was cancelled, failed, timed out or
+failed at startup while none of its jobs reached a runner. It stays silent when
+a job did start, because that job reports itself. The observer runs from the
+workflow file on `main` and does not report its own failures.
 
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
