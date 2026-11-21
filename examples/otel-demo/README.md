@@ -71,7 +71,10 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
   - HOTROD application
   - Jaeger Query ClusterIP service (jaeger-query-clusterip)
 - Namespace `otel-demo`:
-  - OpenTelemetry Demo (frontend, load-generator, and supporting services)
+  - OpenTelemetry Demo (frontend, load-generator, and supporting services).
+    The load generator runs headless and the flagd-ui sidecar is removed: the
+    public `/loadgen/` and `/feature` routes have no backend, and the feature
+    flags stay at their reviewed `demo.flagd.json` content.
 
 
 ## Verifying the deployment
@@ -94,6 +97,13 @@ kubectl get svc -n otel-demo
 ```bash path=null start=null
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'osd-xsrf: true' \
   'https://opensearch.demo.jaegertracing.io/api/console/proxy?path=/&method=GET'
+```
+- The load generator web UI and the feature-flag UI are disabled. After an
+  OTel demo rollout, both control routes must return `503` while the shop
+  itself keeps loading:
+```bash path=null start=null
+curl -s -o /dev/null -w '%{http_code}\n' 'https://shop.demo.jaegertracing.io/loadgen/'
+curl -s -o /dev/null -w '%{http_code}\n' 'https://shop.demo.jaegertracing.io/feature'
 ```
 
 

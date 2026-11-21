@@ -86,6 +86,10 @@ components:
         command: ["sh", "-c", "until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;"]
 
   flagd:
+    # Drop the chart's flagd-ui sidecar. The public /feature route proxies to it
+    # without authentication and can edit the fault-injection flags. flagd keeps
+    # reading the reviewed demo.flagd.json that the init container copies below.
+    sidecarContainers: []
     initContainers:
       - name: init-config
         image: docker.io/busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
@@ -98,6 +102,11 @@ components:
 
   load-generator:
     envOverrides:
+      # Run Locust headless. The public /loadgen/ route proxies to the Locust web
+      # UI without authentication and can start, stop and resize the load. The load
+      # keeps running from LOCUST_USERS/LOCUST_SPAWN_RATE with no UI to expose.
+      - name: LOCUST_HEADLESS
+        value: "true"
       - name: LOCUST_USERS
         value: "5"
       - name: LOCUST_SPAWN_RATE

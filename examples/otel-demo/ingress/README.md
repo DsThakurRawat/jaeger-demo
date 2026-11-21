@@ -19,7 +19,10 @@ This directory contains the HTTPS ingress configurations for exposing the observ
 | HotROD Demo | https://hotrod.demo.jaegertracing.io | jaeger-hotrod | 80 |
 | OpenSearch Dashboards | https://opensearch.demo.jaegertracing.io | opensearch-dashboards | 5601 |
 | OTel Demo Shop | https://shop.demo.jaegertracing.io | frontend-proxy | 8080 |
-| Load Generator | https://shop.demo.jaegertracing.io/loadgen/ | (via frontend-proxy) | 8080 |
+
+The load generator web UI and the feature-flag UI are disabled in the chart
+values, so the `/loadgen/` and `/feature` proxy routes have no backend and
+answer `503`.
 
 ## Certificate Management
 
@@ -89,7 +92,8 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ## Security Notes
 
 - Load generator is **not** directly exposed to the internet
-- Access load generator via frontend-proxy: https://shop.demo.jaegertracing.io/loadgen/
+- The load generator web UI and feature-flag UI are disabled; their former
+  proxy routes (`/loadgen/`, `/feature`) have no backend
 - All certificates are production Let's Encrypt certificates
 - Auto-renewal enabled (certificates valid for 90 days)
 
