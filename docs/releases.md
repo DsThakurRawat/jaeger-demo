@@ -149,7 +149,7 @@ current releases. Each successful component records its fingerprint in
 | OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
 | OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. After a rollout, also run the [control-interface check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
-| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
+| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. A change to any monitoring workload, hook or protected object needs a [manual upgrade](#when-a-change-alters-a-releases-objects). |
 
 A scheduled run applies an input change only when the release keeps its set of
 objects and its protected objects, such as RBAC, Secrets and Helm hooks. When a
@@ -289,7 +289,8 @@ next 12:20 UTC preparation or with the schedule paused:
 
 4. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
    with `deploy_mode=upgrade`. The OTel sample application is `demo_stack=otel`
-   and `otel_deploy_scope=otel-demo`.
+   and `otel_deploy_scope=otel-demo`. OCI monitoring is `demo_stack=oci` and
+   `otel_deploy_scope=monitoring`.
 5. Verify the component as in step 5 of the
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
@@ -297,3 +298,18 @@ next 12:20 UTC preparation or with the schedule paused:
    trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
 6. Confirm that the next scheduled run prepares and succeeds. The change is not
    accepted until it does.
+
+If the manual upgrade cannot finish before the next preparation, pause the
+GitHub signal and the preparer and let running preparers and writers drain
+first, as described for OpenSearch in
+[Daily component updates](#daily-component-updates).
+
+A kube-prometheus-stack chart or monitoring values change also changes the
+installation review packet, which hashes `examples/oci/monitoring-values.yaml`,
+`docs/all-five-chart-access.json` and `ops/executor/chart-archives.json` and
+holds the executor's monitoring hook rules. Before step 1, render the monitoring
+hook package for the new chart on the target cluster
+([Monitoring hook identities](daily-executor-permissions.md#monitoring-hook-identities)).
+In step 3, generate the packet from the merge commit with the published image
+digest and the reviewed hooks, and have it approved before installing
+([Review the daily executor installation](daily-production-install-review.md)).
