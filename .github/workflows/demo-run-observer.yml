@@ -1,0 +1,84 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Demo run observer
+
+# The deploy and smoke workflows report a failure from a step inside the job
+# that failed. A run that ends before any job reaches a runner executes no
+# steps, so nothing reports it: a run cancelled while it waits for environment
+# approval, a pending run replaced in its concurrency group, or a run that
+# fails at startup. This workflow reports those runs and no others.
+#
+# It checks out no code and receives only the observed run's metadata.
+on:
+  workflow_run:
+    workflows:
+    - Deploy Jaeger Demo to OKE
+    - Demo smoke check
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  observe:
+    name: Report a run that ended before a job started
+    if: >-
+      github.repository == 'jaegertracing/jaeger-demo' &&
+      contains(fromJSON('["cancelled", "failure", "timed_out", "startup_failure"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # actions: read lets the job list the observed run's jobs.
+    permissions:
+      actions: read
+    steps:
+    # A job that reached a runner has steps. A job that was skipped, or was
+    # cancelled while still pending, has none. started_at is set in both cases,
+    # so it does not tell them apart. A run whose job did start reports itself,
+    # which is why this workflow stays silent for it. If the lookup fails, the
+    # run is reported anyway.
+    - name: Check whether a job of the observed run started
+      id: observed
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_ID: ${{ github.event.workflow_run.id }}
+        RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      run: |
+        jobs="${RUNNER_TEMP:-/tmp}/observed-jobs.json"
+        notify=true
+        if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" > "$jobs" &&
+           started=$(jq '[.jobs[] | select((.steps // []) | length > 0)] | length' "$jobs") &&
+           [[ "$started" =~ ^[0-9]+$ ]]; then
+          if [ "$started" -gt 0 ]; then
+            notify=false
+          fi
+          echo "Jobs of run $RUN_ID attempt $RUN_ATTEMPT that reached a runner: $started"
+        else
+          echo "::warning::Could not read the jobs of run $RUN_ID; reporting it anyway"
+        fi
+        printf 'notify=%s\n' "$notify" >> "$GITHUB_OUTPUT"
+
+    # SLACK_WEBHOOK_URL is the only secret used. It is a repository-level
+    # secret, and this job has no environment. MSG_MINIMAL drops the fields
+    # that would describe this observer run and not the observed one.
+    - name: Send Slack notification for a run that never started
+      if: ${{ !cancelled() && steps.observed.outputs.notify != 'false' }}
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_CHANNEL: '#jaeger-operations'
+        SLACK_COLOR: danger
+        SLACK_USERNAME: 'Jaeger CI Bot'
+        SLACK_ICON_EMOJI: ':warning:'
+        SLACK_TITLE: '🚨 Jaeger Demo Run Ended Before Any Job Started'
+        MSG_MINIMAL: 'true'
+        SLACK_MESSAGE: |
+          *Repository:* ${{ github.repository }}
+          *Workflow:* ${{ github.event.workflow_run.name }}
+          *Run ID:* ${{ github.event.workflow_run.id }}
+          *Status:* ${{ github.event.workflow_run.conclusion }}
+          *Trigger:* ${{ github.event.workflow_run.event }}
+          *Actor:* ${{ github.event.workflow_run.actor.login }}
+          No job of this run reached a runner, so the run could not report itself.
+
+          <${{ github.event.workflow_run.html_url }}|🔗 View Run>
+        SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
