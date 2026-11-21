@@ -128,6 +128,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Management, which made the unauthenticated cluster writable.
   ([#32](https://github.com/jaegertracing/jaeger-demo/pull/32),
   fixes [#31](https://github.com/jaegertracing/jaeger-demo/issues/31))
+- OTel demo values run the load generator headless and drop the `flagd-ui`
+  sidecar, which closes the unauthenticated `/loadgen/` and `/feature` controls
+  on the public shop route.
+  ([#60](https://github.com/jaegertracing/jaeger-demo/pull/60),
+  refs [#57](https://github.com/jaegertracing/jaeger-demo/issues/57))
 - The executor's `jaeger-helm-preview` tool links the Go module versions that
   Helm 4.3.2 builds with. This clears eight advisories against `golang.org/x/net`
   and `golang.org/x/text` that were not reachable in the tool. **Executor image.**
