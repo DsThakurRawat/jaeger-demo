@@ -79,11 +79,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
-- The snapshot tag resolver requires an explicit Jaeger or HotROD tag to exist on
-  Docker Hub, even on scheduled runs, rejects invalid tag syntax, and searches at
-  most ten Docker Hub pages for the newest SHA tag. **Executor image.**
-  ([#49](https://github.com/jaegertracing/jaeger-demo/pull/49),
-  refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
