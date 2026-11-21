@@ -62,6 +62,17 @@
         "# renovate: datasource=docker depName=(?<depName>\\S+)\\s+tag: \"(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Review Helmfile tool upgrades with refreshed release checksums",
+      "managerFilePatterns": [
+        "/^scripts\\/demo\\/helmfile-tools\\.lock\\.json$/"
+      ],
+      "matchStrings": [
+        "\"repository\":\\s*\"(?<depName>[^\"]+)\",\\s*\"version\":\\s*\"(?<currentValue>v\\d+\\.\\d+\\.\\d+)\""
+      ],
+      "datasourceTemplate": "github-releases"
     }
   ],
   "ignorePaths": [
@@ -115,7 +126,8 @@
     {
       "description": "Require review for OTel Demo Helm chart upgrades",
       "matchManagers": [
-        "custom.regex"
+        "custom.regex",
+        "helmfile"
       ],
       "matchPackageNames": [
         "opentelemetry-demo"
@@ -123,9 +135,10 @@
       "automerge": false
     },
     {
-      "description": "Keep the OTel demo OpenSearch charts on supported 3.x releases and update them together",
+      "description": "Keep the OTel demo OpenSearch charts on supported 3.x releases and update both charts together in the script and Helmfile locations",
       "matchManagers": [
-        "custom.regex"
+        "custom.regex",
+        "helmfile"
       ],
       "matchDatasources": [
         "helm"
@@ -136,7 +149,7 @@
       ],
       "groupName": "OTel demo OpenSearch Helm charts",
       "groupSlug": "otel-demo-opensearch-helm",
-      "minimumGroupSize": 2,
+      "minimumGroupSize": 4,
       "allowedVersions": "/^3\\./",
       "automerge": false
     },
@@ -207,7 +220,11 @@
       "matchDatasources": [
         "helm"
       ],
-      "groupName": "OTel demo application"
+      "groupName": "OTel demo application",
+      "matchManagers": [
+        "custom.regex",
+        "helmfile"
+      ]
     },
     {
       "matchPackageNames": [
@@ -260,6 +277,16 @@
         "digest"
       ],
       "enabled": false
+    },
+    {
+      "description": "Keep the adoption Helm CLI on the established production writer major",
+      "matchFileNames": [
+        "scripts/demo/helmfile-tools.lock.json"
+      ],
+      "matchPackageNames": [
+        "helm/helm"
+      ],
+      "allowedVersions": "<5.0.0"
     }
   ]
 }

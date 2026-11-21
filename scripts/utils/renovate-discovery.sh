@@ -22,7 +22,7 @@ trap 'rm -f "${extraction}"' EXIT
   -e LOG_LEVEL=debug -e LOG_FORMAT=json \
   -e RENOVATE_PLATFORM=local -e RENOVATE_DRY_RUN=extract \
   -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required \
-  -e RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements \
+  -e RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements,helmfile \
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
   "${image}" renovate > "${extraction}"
 
