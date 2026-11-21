@@ -11,10 +11,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   tests:
     name: Demo tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
@@ -42,6 +47,10 @@ jobs:
       run: shellcheck scripts/demo/*.sh scripts/utils/*.sh
     - name: Lint workflows
       run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12
+    - name: Lint Python
+      run: |
+        python -m pip install -r scripts/utils/lint-requirements.txt
+        ruff check .
     - name: Test scripts and chart rendering
       env:
         SHUNIT2: .tools/shunit2
@@ -50,21 +59,10 @@ jobs:
   renovate:
     name: Renovate discovery
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
         persist-credentials: false
-    - name: Validate Renovate configuration
-      run: |
-        docker run --rm -v "$PWD/renovate.json:/usr/src/app/renovate.json" \
-          ghcr.io/renovatebot/renovate:latest renovate-config-validator
-    - name: Verify dependency discovery without credentials
-      run: |
-        docker run --rm -v "$PWD:/repo" -w /repo \
-          -e LOG_LEVEL=debug -e LOG_FORMAT=json \
-          -e RENOVATE_PLATFORM=local -e RENOVATE_DRY_RUN=extract \
-          -e RENOVATE_ONBOARDING=false -e RENOVATE_REQUIRE_CONFIG=required \
-          -e RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements \
-          -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
-          ghcr.io/renovatebot/renovate:latest renovate > /tmp/renovate-extraction.jsonl
-        python3 scripts/demo/check-renovate-extraction.py /tmp/renovate-extraction.jsonl
+    - name: Verify Renovate configuration and dependency discovery without credentials
+      run: make renovate-discovery

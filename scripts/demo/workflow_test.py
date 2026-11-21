@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / '.github/workflows'
@@ -224,6 +226,25 @@ class WorkflowTests(unittest.TestCase):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         job = source.split('\n    steps:', 1)[0]
         self.assertIn('      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}\n', job)
+
+    def test_ci_jobs_have_timeouts(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        self.assertTrue(jobs)
+        for name, job in jobs.items():
+            with self.subTest(job=name):
+                self.assertIsInstance(job.get('timeout-minutes'), int)
+
+    def test_ci_cancels_only_superseded_pull_request_runs(self):
+        concurrency = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['concurrency']
+        self.assertIn('github.event.pull_request.number || github.sha', concurrency['group'])
+        self.assertEqual("${{ github.event_name == 'pull_request' }}", concurrency['cancel-in-progress'])
+
+    def test_renovate_job_uses_the_discovery_make_target(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
+        self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])
+        script = (ROOT / 'scripts/utils/renovate-discovery.sh').read_text()
+        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements', script)
+        self.assertIn('python3 scripts/demo/check-renovate-extraction.py', script)
 
 
     def test_unsuccessful_deployments_notify_and_reconcile_stops_inside_the_job_limit(self):

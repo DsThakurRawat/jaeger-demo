@@ -71,7 +71,8 @@ def exercise(cfg, context):
             doc["users"]=[{"name":"fixture-role","user":{"token":token}}]
             doc["contexts"][0]["context"]["user"]="fixture-role"
             file=Path(temp)/name
-            file.write_text(json.dumps(doc));file.chmod(0o600)
+            file.write_text(json.dumps(doc))
+            file.chmod(0o600)
             return ["kubectl","--kubeconfig",str(file),"--context",context]
         actor,planner=client(p.EXECUTOR),client(p.PREPARER)
         def patch(client,ns,kind,name,obj,accept,reason=""):
@@ -125,5 +126,6 @@ if __name__=="__main__":
     ap.add_argument("--kubeconfig",type=Path,required=True)
     ap.add_argument("--context",choices=["fixture"],required=True)
     a=ap.parse_args()
-    if not __debug__: ap.error("Enable fixture assertions")
+    if not __debug__:
+        ap.error("Enable fixture assertions")
     exercise(a.kubeconfig,a.context)
