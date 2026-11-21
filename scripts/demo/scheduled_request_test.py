@@ -336,7 +336,7 @@ class ScheduledRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(req.RequestError, "^No preparation was published for the 2026-11-19T13:00:00Z slot"):
             req.request_and_wait(done, today, self.sha, now=lambda: today)
         # Nothing but a well-formed timestamp is repeated from the record.
-        for recorded in ("not a timestamp", "2026-11-17T13:00:00Z\nforged", ""):
+        for recorded in ("not a timestamp", "2026-11-17T13:00:00Z\nforged", "", "2026-13-40T99:99:99Z"):
             store = copy.deepcopy(self.store)
             store.rows[req.REQUEST]["data"]["slot"] = recorded
             with self.subTest(recorded=recorded), self.assertRaises(req.RequestError) as caught:
@@ -346,6 +346,18 @@ class ScheduledRequestTests(unittest.TestCase):
                 "the request record names no valid slot",
                 str(caught.exception),
             )
+        # A rerun keeps its original date. Once the preparer has advanced the record, that day's
+        # result is in the original run and its receipt, and the preparation was not missing.
+        advanced = copy.deepcopy(self.store)
+        advanced.rows[req.REQUEST]["data"].update(slot="2026-11-19T13:00:00Z", expiresAt="2026-11-19T15:00:00Z")
+        with self.assertRaises(req.RequestError) as caught:
+            req.request_and_wait(advanced, self.slot, self.sha, now=lambda: today)
+        self.assertEqual(
+            "The request record has advanced to the 2026-11-19T13:00:00Z slot: consult the original run "
+            "and its durable receipt for the 2026-11-18T13:00:00Z result",
+            str(caught.exception),
+        )
+        self.assertNotIn("No preparation", str(caught.exception))
         # A bootstrapped record that no preparer has written yet.
         empty = copy.deepcopy(self.store)
         empty.rows[req.REQUEST]["data"] = {"schema": req.SCHEMA, "state": "empty"}

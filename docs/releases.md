@@ -239,6 +239,10 @@ volume is attached there. A refusal, for example over a guarded file that differ
 within a minute with `BackoffLimitExceeded`, and the failed pod's log gives the error type. Fix the cause, then run a
 one-off preparer Job inside the 11:00 to 15:00 UTC window, or wait for the next slot.
 
+A rerun of an earlier scheduled run keeps its original date. Once the preparer has advanced the record, the
+rerun fails with "The request record has advanced to the ... slot": that day's preparation was not missing, and
+its result is in the original run and the durable receipt ([request protocol](daily-update-request.md)).
+
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
 writers separately and let an active Helm transaction finish before rolling back.

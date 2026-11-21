@@ -71,17 +71,25 @@ def description(slot, expires, engine, receipt):
     }
 
 
-def unprepared(slot, recorded):
-    """Name the cause when the request record does not belong to the expected slot.
+def other_slot(slot, recorded):
+    """Explain a request record that does not belong to the expected slot.
 
-    The preparer replaces the record once per slot. A record from another slot therefore
-    means that no preparation was published for this one, whatever stopped it. Only a
-    well-formed timestamp from the record is repeated in the message.
+    The preparer replaces the record once per slot. An older record therefore means that
+    no preparation was published for this slot, whatever stopped it. A newer one means
+    the record has moved on: a rerun keeps its original date, and the record no longer
+    holds that day's result. Only a well-formed timestamp from the record is repeated.
     """
-    message = "No preparation was published for the " + format_utc(slot) + " slot"
-    if isinstance(recorded, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", recorded):
-        return message + ": the request record still holds " + recorded
-    return message + ": the request record names no valid slot"
+    stamp = format_utc(slot)
+    try:
+        held = timestamp(recorded) if isinstance(recorded, str) else None
+    except (RequestError, ValueError):
+        held = None
+    if held is None:
+        return "No preparation was published for the " + stamp + " slot: the request record names no valid slot"
+    if held > slot:
+        return ("The request record has advanced to the " + recorded + " slot: consult the original run and "
+                "its durable receipt for the " + stamp + " result")
+    return "No preparation was published for the " + stamp + " slot: the request record still holds " + recorded
 
 
 def validate(obj, slot, engine, sha):
@@ -115,7 +123,7 @@ def validate(obj, slot, engine, sha):
     ):
         raise RequestError("Malformed protected receiver request")
     if slot == daily_slot(slot) and data["slot"] != format_utc(slot):
-        raise RequestError(unprepared(slot, data["slot"]))
+        raise RequestError(other_slot(slot, data["slot"]))
     expected = description(
         slot,
         timestamp(data["expiresAt"]),
