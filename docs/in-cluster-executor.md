@@ -60,6 +60,18 @@ For a Renovate chart update, use the repository and chart listed in `scheduled_i
 
 For a Helm, kubectl, Python or Go runtime change, update the version, appropriate platform checksums or image index digest, compatibility checks, and release rehearsal together. Validate the actual Linux AMD64 build and kind job on the reviewed commit. Publish a new image by digest, pause new requests, allow an active transaction to finish, then review the replacement deployment digest. Retain the prior image and custody keys until an operator has verified the replacement against a signed slot. Changing the runtime image in production requires installation approval.
 
+A chart update can also add, rename or remove objects. Preparation rejects any rendered object that
+[the access matrix](all-five-chart-access.json) does not list. Before proposing a chart update, run
+`python3 scripts/demo/access_matrix.py`. It fetches and verifies the pinned archives, renders the six
+releases without cluster access and names every object that lacks a reviewed record, every record
+that no chart renders any more, and every changed Helm hook. `--propose` prints draft records. A
+person reviews each draft, in particular kinds marked as protected, and edits the matrix by hand; the
+tool never writes it. The matrix is executor-guarded, so that edit needs a matching image release
+([procedure](releases.md#merging-a-change-to-guarded-files)). The same comparison runs in the
+`Monitoring hooks and Helm history` check. It compares names, kinds and scope only: a client render
+has no live discovery and no Helm lookup results, and it does not show whether the executor's
+protected-object rules accept the change.
+
 ### Installation approval
 
 Use the [production installation review packet](daily-production-install-review.md) to assemble the ordered manifests and their hashes offline. Keep the image digest, configuration commit, exact object list, permission evidence and private key custody destination with the change record. The renderer emits a suspended CronJob and a Deployment at zero replicas. The bootstrap Job is the sole pod launched by applying this manifest. It has no API token and initializes the two directories on the new claim.
