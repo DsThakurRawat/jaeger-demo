@@ -84,7 +84,10 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
     from base64 import b64encode
     import secrets
     package = package.read_bytes()
-    archive = json.loads((a.ROOT / "docs/all-five-chart-access.json").read_bytes())["chartArchiveSHA256"]
+    matrix = json.loads((a.ROOT / "docs/all-five-chart-access.json").read_bytes())
+    archive = matrix["chartArchiveSHA256"]
+    # The reviewed matrix lists every object of the monitoring release, hooks included.
+    reviewed_objects = sum((row["component"], row["release"]) == ("oci-monitoring", "prometheus") for row in matrix["records"])
     # The reviewed matrix names the one monitoring archive that the pinned chart version resolves to.
     reviewed, = (name for name in archive if name.startswith("kube-prometheus-stack-"))
     assert a.sha(package) == archive[reviewed]
@@ -121,7 +124,7 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         assert baseline == fresh, [k for k in baseline if baseline[k] != fresh[k]]
         grafana = next(o for o in rendered if o["kind"] == "Secret" and o["metadata"]["name"] == "prometheus-grafana")
         assert grafana["data"]["admin-password"] == marker
-        assert len(a.release_docs(first)) == 129 and len(first["hooks"]) == 12
+        assert len(a.release_docs(first)) == reviewed_objects and len(first["hooks"]) == 12
         assert a.history("oci-monitoring")[0][0]["revision"] == 6
     # Exercise schema/defaulting for each actual non-hook RBAC body.
     observed = {}
