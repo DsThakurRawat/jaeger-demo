@@ -147,7 +147,10 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
         assert bool(stored["metadata"]["uid"])
         ordinary_rbac.append(obj)
     shapes = {k: v for k, v in observed.items() if v}
-    assert shapes == {"rbac.authorization.k8s.io/v1:Role:default:prometheus-grafana": {"rules": ["list", "NoneType"]}}
+    # The API stores an empty rule list as null, and check_live_rbac accepts exactly that.
+    # Nothing else may differ. Chart 82 rendered one such Role; chart 93 renders none.
+    empty = {a.identity(obj, "default") for obj in ordinary_rbac if obj.get("rules") == []}
+    assert shapes == {ident: {"rules": ["list", "NoneType"]} for ident in empty}
     narrow = "fixture-ordinary-rbac-reader-writer"
     for scope in ("Role", "ClusterRole"):
         names = [o for o in ordinary_rbac if o["kind"].startswith("Cluster") == (scope == "ClusterRole")]
