@@ -25,9 +25,11 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
         persist-credentials: false
-    - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+    - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       with:
         version: v4.3.2
+        # Fail when the published checksum is missing or does not match.
+        checksum-policy: required
     - name: Install the YAML and crypto dependencies used in the rehearsal
       run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML cryptography
     - name: Download the pinned local API and etcd
