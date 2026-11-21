@@ -71,6 +71,27 @@ def description(slot, expires, engine, receipt):
     }
 
 
+def other_slot(slot, recorded):
+    """Explain a request record that does not belong to the expected slot.
+
+    The preparer replaces the record once per slot. An older record therefore means that
+    no preparation was published for this slot, whatever stopped it. A newer one means
+    the record has moved on: a rerun keeps its original date, and the record no longer
+    holds that day's result. Only a well-formed timestamp from the record is repeated.
+    """
+    stamp = format_utc(slot)
+    try:
+        held = timestamp(recorded) if isinstance(recorded, str) else None
+    except (RequestError, ValueError):
+        held = None
+    if held is None:
+        return "No preparation was published for the " + stamp + " slot: the request record names no valid slot"
+    if held > slot:
+        return ("The request record has advanced to the " + recorded + " slot: consult the original run and "
+                "its durable receipt for the " + stamp + " result")
+    return "No preparation was published for the " + stamp + " slot: the request record still holds " + recorded
+
+
 def validate(obj, slot, engine, sha):
     if not obj:
         raise RequestError("No protected receiver request exists for the daily update")
@@ -84,6 +105,8 @@ def validate(obj, slot, engine, sha):
     ):
         raise RequestError("Unexpected Kubernetes request identity")
     data = obj.get("data", {})
+    if data == {"schema": SCHEMA, "state": "empty"}:
+        raise RequestError("No preparation has been published: the request record is still empty")
     if (
         set(data)
         != {
@@ -99,6 +122,8 @@ def validate(obj, slot, engine, sha):
         or data["state"] not in STATES
     ):
         raise RequestError("Malformed protected receiver request")
+    if slot == daily_slot(slot) and data["slot"] != format_utc(slot):
+        raise RequestError(other_slot(slot, data["slot"]))
     expected = description(
         slot,
         timestamp(data["expiresAt"]),
