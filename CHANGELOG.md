@@ -25,6 +25,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- Workspaces and Explore (the new Discover, with PPL) on the public OpenSearch
+  Dashboards. Visitors land in an Observability workspace with the Jaeger span
+  index pattern selected; the container recreates both on each start because any
+  visitor can delete them. The multiple data source feature stays disabled.
+  ([#89](https://github.com/jaegertracing/jaeger-demo/pull/89),
+  fixes [#88](https://github.com/jaegertracing/jaeger-demo/issues/88))
 - `Changelog entry` CI check: a pull request that changes a non-test file fails
   without a new dated entry unless a maintainer applies the `skip-changelog` label.
   It also validates the changelog's date and category headings.

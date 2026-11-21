@@ -22,3 +22,67 @@ config:
     console.enabled: false
     # Index Management can also send requests to the cluster.
     opensearch_index_management.enabled: false
+    # Explore (the new Discover) runs only inside a workspace, and the workspace
+    # UI is built for the new navigation. Setting it as an override also keeps
+    # visitors from switching the navigation back in Advanced Settings.
+    # data_source stays disabled: without an endpoint deny list any visitor could
+    # make this pod connect to in-cluster addresses.
+    workspace.enabled: true
+    explore.enabled: true
+    uiSettings:
+      overrides:
+        "home:useNewHomePage": true
+
+# Create the Observability workspace that visitors land in, with an index
+# pattern for the spans Jaeger writes, so Explore can query them at once. With
+# the security plugin disabled every visitor can delete both, so recreate them
+# whenever the container starts. Kubernetes starts the probes only after this
+# hook returns, so it always succeeds and is bounded: it waits up to 50 minutes
+# for a cold start (inside the 60-minute Helm timeout in deploy-all.sh), then
+# gives the API one minute. It logs to the container output.
+lifecycle:
+  postStart:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - |
+          if [ -w /proc/1/fd/1 ]; then exec >/proc/1/fd/1 2>&1; fi
+          base=http://localhost:5601
+          workspace='{"attributes":{"id":"observability","name":"Observability","description":"Search the OpenTelemetry demo spans that Jaeger stores in OpenSearch.","features":["use-case-observability"]},"settings":{}}'
+          pattern=jaeger-main-jaeger-span-*
+          ensure_workspace() {
+            curl -fs "$base/api/workspaces/observability" | grep -q '"success":true' ||
+              curl -fs -X POST -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+                -d "$workspace" "$base/api/workspaces" | grep -q '"success":true'
+          }
+          # Explore's histogram needs the field list stored in the index pattern,
+          # which the saved objects API does not compute. Store it as a JSON
+          # string, and overwrite so each start refreshes the fields and repairs
+          # an edited pattern. This fails until Jaeger has written a span index.
+          ensure_spans() {
+            fields=$(curl -fs "$base/api/index_patterns/_fields_for_wildcard?pattern=$pattern&meta_fields=_source&meta_fields=_id&meta_fields=_index&meta_fields=_score") || return 1
+            fields=$(printf '%s' "$fields" | sed -e 's/^{"fields"://' -e 's/}$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+            curl -fs -o /dev/null -X POST -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+              -d "{\"attributes\":{\"title\":\"$pattern\",\"timeFieldName\":\"startTimeMillis\",\"fields\":\"$fields\"}}" \
+              "$base/w/observability/api/saved_objects/index-pattern/jaeger-spans?overwrite=true"
+          }
+          attempt=0
+          until curl -fs -o /dev/null "$base/api/status"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 600 ]; then
+              echo "workspace-bootstrap: gave up; Dashboards did not start"
+              exit 0
+            fi
+            sleep 5
+          done
+          attempt=0
+          until ensure_workspace && ensure_spans; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 12 ]; then
+              echo "workspace-bootstrap: gave up; Dashboards did not create the workspace and span index pattern"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "workspace-bootstrap: the Observability workspace and span index pattern exist"

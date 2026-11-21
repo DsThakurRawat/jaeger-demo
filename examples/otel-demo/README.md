@@ -66,6 +66,14 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
     the hosted Dashboards route is public, so the Dev Tools console and Index
     Management are disabled. Other bundled plugins can still write to the
     cluster; do not treat the hosted Dashboards as read-only.
+    Workspaces and Explore (the new Discover, with PPL) are enabled. A
+    `postStart` hook creates the Observability workspace and its
+    `jaeger-main-jaeger-span-*` index pattern each time the container starts,
+    because any visitor can delete them. It waits up to 50 minutes for
+    Dashboards to start, then tries the API for one minute, and never fails the
+    container; look for `workspace-bootstrap:` in the container log. The
+    multiple data source feature stays disabled: it would let visitors make
+    the Dashboards pod connect to in-cluster addresses.
 - Namespace `jaeger`:
   - Jaeger all-in-one Deployment with OpenSearch-backed trace storage
   - HOTROD application
@@ -97,6 +105,14 @@ kubectl get svc -n otel-demo
 ```bash path=null start=null
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'osd-xsrf: true' \
   'https://opensearch.demo.jaegertracing.io/api/console/proxy?path=/&method=GET'
+```
+- The Observability workspace exists, and the hosted Dashboards root redirects
+  into it. The first read-only check below must print `true` and the second
+  must end in `/w/observability/app/workspace_navigation`. Then open **Logs** in the
+  workspace: `jaeger-main-jaeger-span-*` must be selected and show recent spans.
+```bash path=null start=null
+curl -s 'https://opensearch.demo.jaegertracing.io/api/workspaces/observability' | jq -e .success
+curl -s -o /dev/null -w '%{redirect_url}\n' 'https://opensearch.demo.jaegertracing.io/'
 ```
 - The load generator web UI and the feature-flag UI are disabled. After an
   OTel demo rollout, both control routes must return `503` while the shop

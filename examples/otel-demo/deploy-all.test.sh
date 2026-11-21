@@ -633,6 +633,133 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
   done
   assertNotContains "$rendered" "opensearch.username"
   assertNotContains "$rendered" "opensearch.password"
+  # Explore runs only inside a workspace, and the workspace UI needs the new
+  # navigation. A data source would let any visitor make the pod connect to
+  # in-cluster addresses, so it must stay off.
+  for setting in workspace.enabled explore.enabled '"home:useNewHomePage"'; do
+    printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*${setting//./\\.}: true"
+    assertTrue "Dashboards should render $setting: true" $?
+  done
+  assertNotContains "$rendered" "data_source."
+  assertContains "$rendered" "postStart:"
+  assertContains "$rendered" "workspace-bootstrap:"
+}
+
+# Write a fake curl that answers like Dashboards in the given scenario and
+# records each call, plus a fake sleep, into $SHUNIT_TMPDIR/hook-bin.
+make_workspace_hook_fakes() {
+  local bin="$SHUNIT_TMPDIR/hook-bin"
+  mkdir -p "$bin"
+  cat > "$bin/curl" <<'FAKE'
+#!/bin/bash
+body= method=GET
+while [ $# -gt 1 ]; do
+  case $1 in
+    -d) body=$2; shift ;;
+    -X) method=$2; shift ;;
+    -H|-o|-w) shift ;;
+  esac
+  shift
+done
+printf '%s %s\n' "$method" "$1" >> "$HOOK_LOG"
+[ "$HOOK_SCENARIO" = down ] && exit 7
+case "$method $1" in
+  "GET http://localhost:5601/api/status") ;;
+  "GET http://localhost:5601/api/workspaces/observability")
+    if [ "$HOOK_SCENARIO" = missing ] || [ "$HOOK_SCENARIO" = broken ]; then echo '{"success":false,"error":"not found"}'
+    else echo '{"success":true,"result":{"id":"observability"}}'; fi ;;
+  "POST http://localhost:5601/api/workspaces")
+    [ "$HOOK_SCENARIO" = broken ] && exit 22
+    printf '%s' "$body" > "$HOOK_LOG.workspace"; echo '{"success":true,"result":{"id":"observability"}}' ;;
+  "GET http://localhost:5601/api/index_patterns/_fields_for_wildcard?"*)
+    [ "$HOOK_SCENARIO" = nospans ] && exit 22
+    printf '%s' '{"fields":[{"name":"startTimeMillis","type":"date"},{"name":"q\"uote\\back","type":"string"}]}' ;;
+  "POST http://localhost:5601/w/observability/api/saved_objects/index-pattern/jaeger-spans?overwrite=true")
+    printf '%s' "$body" > "$HOOK_LOG.spans" ;;
+  *) exit 22 ;;
+esac
+FAKE
+  cat > "$bin/sleep" <<'FAKE'
+#!/bin/sh
+echo "sleep $1" >> "$HOOK_LOG"
+FAKE
+  chmod +x "$bin/curl" "$bin/sleep"
+}
+
+# Print the postStart hook script without its first line, which redirects
+# output to the container's PID 1 and would swallow the test's output.
+workspace_hook_script() {
+  local script
+  script=$(python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["lifecycle"]["postStart"]["exec"]["command"][2])' \
+    "$(dirname "$SCRIPT")/opensearch-dashboard-values.yaml")
+  assertEquals 'if [ -w /proc/1/fd/1 ]; then exec >/proc/1/fd/1 2>&1; fi' "${script%%$'\n'*}"
+  printf '%s\n' "${script#*$'\n'}"
+}
+
+run_workspace_hook() {
+  local scenario=$1
+  rm -f "$SHUNIT_TMPDIR"/hook-log*
+  HOOK_LOG="$SHUNIT_TMPDIR/hook-log" HOOK_SCENARIO=$scenario PATH="$SHUNIT_TMPDIR/hook-bin:$PATH" \
+    sh -c "$(workspace_hook_script)"
+}
+
+testWorkspaceHookCreatesMissingWorkspaceAndSpanPattern() {
+  make_workspace_hook_fakes
+  output=$(run_workspace_hook missing)
+  assertEquals "the hook must never fail the container" 0 $?
+  assertContains "$output" "workspace-bootstrap: the Observability workspace and span index pattern exist"
+  python3 - "$SHUNIT_TMPDIR/hook-log.workspace" <<'PY'
+import json, sys
+attributes = json.load(open(sys.argv[1]))["attributes"]
+assert attributes["id"] == "observability", attributes
+assert attributes["features"] == ["use-case-observability"], attributes
+PY
+  assertEquals "workspace body should name the observability use case" 0 $?
+}
+
+testWorkspaceHookKeepsExistingWorkspaceAndRefreshesSpanFields() {
+  make_workspace_hook_fakes
+  output=$(run_workspace_hook existing)
+  assertEquals 0 $?
+  assertNotContains "an existing workspace must not be recreated" "$(cat "$SHUNIT_TMPDIR/hook-log")" \
+    "POST http://localhost:5601/api/workspaces"
+  # The stored field list must survive JSON string escaping intact.
+  python3 - "$SHUNIT_TMPDIR/hook-log.spans" <<'PY'
+import json, sys
+attributes = json.load(open(sys.argv[1]))["attributes"]
+assert attributes["title"] == "jaeger-main-jaeger-span-*", attributes
+assert attributes["timeFieldName"] == "startTimeMillis", attributes
+assert json.loads(attributes["fields"]) == [
+    {"name": "startTimeMillis", "type": "date"},
+    {"name": 'q"uote\\back', "type": "string"},
+], attributes["fields"]
+PY
+  assertEquals "span index pattern should carry the escaped field list" 0 $?
+}
+
+testWorkspaceHookWaitsForAColdStartThenGivesUpWithoutFailing() {
+  make_workspace_hook_fakes
+  output=$(run_workspace_hook down)
+  assertEquals "down: the hook must never fail the container" 0 $?
+  assertContains "$output" "workspace-bootstrap: gave up; Dashboards did not start"
+  assertEquals "down: poll for 50 minutes" 600 "$(grep -c '^GET http://localhost:5601/api/status$' "$SHUNIT_TMPDIR/hook-log")"
+  assertEquals "down: five seconds between polls" 599 "$(grep -c '^sleep 5$' "$SHUNIT_TMPDIR/hook-log")"
+  assertNotContains "down: no API calls before Dashboards starts" "$(cat "$SHUNIT_TMPDIR/hook-log")" "workspaces"
+}
+
+testWorkspaceHookLimitsApiRetriesOnceDashboardsIsUp() {
+  make_workspace_hook_fakes
+  # A started Dashboards that rejects the requests must not keep the container
+  # out of service, so the API phase is short.
+  for scenario in broken nospans; do
+    output=$(run_workspace_hook "$scenario")
+    assertEquals "$scenario: the hook must never fail the container" 0 $?
+    assertContains "$output" "workspace-bootstrap: gave up; Dashboards did not create"
+    assertEquals "$scenario: try the API 12 times" 12 \
+      "$(grep -c '^GET http://localhost:5601/api/workspaces/observability$' "$SHUNIT_TMPDIR/hook-log")"
+    assertEquals "$scenario: five seconds between tries" 11 "$(grep -c '^sleep 5$' "$SHUNIT_TMPDIR/hook-log")"
+    assertFalse "$scenario: no index pattern without a workspace and span fields" "[ -e '$SHUNIT_TMPDIR/hook-log.spans' ]"
+  done
 }
 
 testDeploysPinnedOpenSearchChartsInOrder() {
