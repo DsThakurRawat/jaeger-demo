@@ -25,6 +25,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- Mermaid diagrams of the public routes, the trace flow and the manual and gated
+  daily deployment paths in the README, and of the daily executor sequence in
+  `docs/in-cluster-executor.md`.
+  ([#68](https://github.com/jaegertracing/jaeger-demo/pull/68),
+  fixes [#67](https://github.com/jaegertracing/jaeger-demo/issues/67))
 - This changelog, backfilled from the extraction onward. `AGENTS.md`,
   `CONTRIBUTING.md` and the PR template require an entry for notable changes, and
   `AGENTS.md` maps each kind of change to the documents it must update.
@@ -69,6 +74,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
+  set by the constrained `pycparser`. The README Development section now lists
+  PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
+  ([#68](https://github.com/jaegertracing/jaeger-demo/pull/68),
+  fixes [#67](https://github.com/jaegertracing/jaeger-demo/issues/67))
 - Workload image pins: BusyBox 1.38.0, Valkey 8.1.12-alpine, PostgreSQL 17.12,
   Python 3.11.18 and `jaeger-es-index-cleaner` 2.23.0, each pinned by digest.
   ([#52](https://github.com/jaegertracing/jaeger-demo/pull/52),
