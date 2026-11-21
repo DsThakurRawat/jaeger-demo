@@ -150,3 +150,15 @@ bundle-custody tests separately exercise signing, encryption and decryption.
 ## Production boundary
 
 All six fixture releases used the same synthetic chart. The frozen production scripts use automatic rollback for the two Jaeger releases and require operator inspection for the four other releases. The local test proves the six release identities can write, prune and roll back Helm history through this envelope. It checks neither the content of encoded Helm payloads nor full production chart operation. Monitoring application Secrets and hooks, real workloads, kube-system Services, the live PVC binding, the OKE identity, public health and the unattended GitHub job still require their own verification. A separately authorized manual OpenSearch backup/restore needs its own access and capacity assessment. Scope a production policy to the actual scheduled writer and include the separately reviewed chart-owned Secret handling. The fixture policy uses an inert test principal.
+
+Add `--verify-live-observation` when running from a checkout with PyYAML and
+cryptography installed to exercise the Helmfile observer. The harness grants a
+second fixture user read access, then uses the fixture administrator to change
+status, configuration and synthetic Helm history. A successful receipt records
+the observed changes under `liveObservation`. The read-only observer also checks
+a synthetic image digest through real Deployment, ReplicaSet and Pod objects.
+[Recorded local result](live-observation.json)
+
+The private API fixture has no
+workload controller or public endpoints, so its health callback checks the
+selected stack. [Observer command and access scope](../../../../docs/helmfile-bundles.md#acquiring-the-live-baseline)

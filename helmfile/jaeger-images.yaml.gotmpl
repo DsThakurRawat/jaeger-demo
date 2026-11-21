@@ -1,0 +1,14 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $images := index .Values.images .Release.Labels.stack }}
+allInOne:
+  image:
+    repository: {{ required "Jaeger image repository is required" $images.jaeger.repository | quote }}
+    tag: {{ required "Jaeger image tag is required" $images.jaeger.tag | quote }}
+    pullPolicy: {{ required "Jaeger image pull policy is required" $images.jaeger.pullPolicy | quote }}
+hotrod:
+  image:
+    repository: {{ required "HotROD image repository is required" $images.hotrod.repository | quote }}
+    tag: {{ required "HotROD image tag is required" $images.hotrod.tag | quote }}
+    pullPolicy: {{ required "HotROD image pull policy is required" $images.hotrod.pullPolicy | quote }}

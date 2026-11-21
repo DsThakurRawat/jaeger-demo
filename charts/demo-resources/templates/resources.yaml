@@ -1,0 +1,35 @@
+{{/*
+Copyright (c) 2026 The Jaeger Authors.
+SPDX-License-Identifier: Apache-2.0
+*/}}
+{{- if ne .Release.Name "demo-resources" }}{{ fail "expected release demo-resources" }}{{ end }}
+{{- $allowed := index (.Files.Get "allowlist.yaml" | fromYaml) .Release.Namespace }}
+{{- if not $allowed }}{{ fail (printf "unsupported demo namespace %s" .Release.Namespace) }}{{ end }}
+{{- $versions := dict "ConfigMap" "v1" "Service" "v1" "Deployment" "apps/v1" "Ingress" "networking.k8s.io/v1" }}
+{{- $seen := dict }}
+{{- range $obj := .Values.objects }}
+  {{- $kind := $obj.kind }}
+  {{- $name := $obj.metadata.name }}
+  {{- $id := printf "%s/%s" $kind $name }}
+  {{- if or (not (hasKey $allowed $kind)) (not (has $name (get $allowed $kind | default list))) }}{{ fail (printf "unexpected resource %s" $id) }}{{ end }}
+  {{- if ne (get $versions $kind) $obj.apiVersion }}{{ fail (printf "unexpected API version for %s" $id) }}{{ end }}
+  {{- if ne $.Release.Namespace ($obj.metadata.namespace | default $.Release.Namespace) }}{{ fail (printf "foreign namespace for %s" $id) }}{{ end }}
+  {{- if hasKey $seen $id }}{{ fail (printf "duplicate resource %s" $id) }}{{ end }}
+  {{- $_ := set $seen $id true }}
+  {{- $_ := set $obj.metadata "namespace" $.Release.Namespace }}
+  {{- $annotations := $obj.metadata.annotations | default dict }}
+  {{- /* Helm does not own a hook and deletes it before each run, despite the keep policy. */}}
+  {{- range $key, $value := $annotations }}
+    {{- if hasPrefix "helm.sh/hook" $key }}{{ fail (printf "hook annotation on %s" $id) }}{{ end }}
+  {{- end }}
+  {{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+  {{- $_ := set $obj.metadata "annotations" $annotations }}
+---
+{{ toYaml $obj }}
+{{ end -}}
+{{- range $kind, $names := $allowed }}
+  {{- range $name := $names }}
+    {{- $id := printf "%s/%s" $kind $name }}
+    {{- if not (hasKey $seen $id) }}{{ fail (printf "missing resource %s" $id) }}{{ end }}
+  {{- end }}
+{{- end }}

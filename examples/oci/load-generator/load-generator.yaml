@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: trace-generator
-        image: python:3.11.14@sha256:3b3706a90cb23f04fabb0d255824f9a70ceb46177041898133dd5a35f3a50f0a
+        image: python:3.11.18@sha256:55c475496e35ad8d898659c85f92b42d3b1c58f25f5d79023baf0840b0b4a462
         command:
           - /bin/sh
           - -c

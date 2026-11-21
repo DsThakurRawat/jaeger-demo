@@ -1,0 +1,16 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+releases:
+{{- range $namespace := list "default" "jaeger" "opensearch" "otel-demo" }}
+  - name: demo-resources
+    namespace: {{ $namespace }}
+    chart: ./charts/demo-resources
+    createNamespace: false
+    atomic: false
+    labels:
+      stack: {{ if eq $namespace "default" }}oci{{ else }}otel{{ end }}
+      component: demo-resources
+    values:
+      - {{ index $.Values.companions $namespace | toJson }}
+{{- end }}

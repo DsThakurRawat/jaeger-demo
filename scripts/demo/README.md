@@ -123,8 +123,9 @@ Known limits:
 - The Slack steps continue on error, so a failed post never changes a run's
   result. A failing run whose post fails is therefore not announced again,
   because the next failing run sees a failing predecessor.
-- A run that is cancelled or fails before its job starts sends no notification.
-  The next run checks again within 30 minutes
-  ([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
+- A run that is cancelled or fails before its job starts cannot post from its
+  own job. `.github/workflows/demo-run-observer.yml` reports it, for manual and
+  scheduled runs alike. A scheduled run that is cancelled after its job started
+  stays silent, as described above.
 - GitHub disables scheduled workflows in public repositories after 60 days
   without repository activity; re-enable the workflow if that happens.
