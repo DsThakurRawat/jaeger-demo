@@ -53,6 +53,12 @@ def bare(version):
     return version.removeprefix("v")
 
 
+def next_patch(version):
+    """A deliberately different version derived from a source-of-truth literal."""
+    major, minor, patch = bare(version).split(".")
+    return f"{'v' if version.startswith('v') else ''}{major}.{minor}.{int(patch) + 1}"
+
+
 def source_versions(root):
     text = (root / ADAPTER).read_text()
     found = {"helm": HELM_SOURCE.findall(text), "kube": KUBE_SOURCE.findall(text)}
@@ -112,14 +118,20 @@ class VersionLiteralTests(unittest.TestCase):
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(deploy.ROOT / path, root / path)
             self.assertEqual(stragglers(root), [])
+            helm, kube = source_versions(root)
+            stale_helm, stale_kube = next_patch(helm), next_patch(kube)
             workflow = root / WORKFLOWS[0]
-            workflow.write_text(workflow.read_text().replace("version: v4.3.2", "version: v4.3.3"))
+            text = workflow.read_text()
+            self.assertIn(f"version: {helm}", text)
+            workflow.write_text(text.replace(f"version: {helm}", f"version: {stale_helm}"))
             hooks = root / "ops/executor/monitoring_hooks.py"
-            hooks.write_text(hooks.read_text().replace("--kube-version=1.36.1", "--kube-version=1.36.2"))
+            text = hooks.read_text()
+            self.assertIn(f"--kube-version={bare(kube)}", text)
+            hooks.write_text(text.replace(f"--kube-version={bare(kube)}", f"--kube-version={bare(stale_kube)}"))
             bad = stragglers(root)
             self.assertEqual(len(bad), 2, bad)
-            self.assertTrue(any(line.startswith(WORKFLOWS[0]) and "v4.3.3" in line for line in bad))
-            self.assertTrue(any(line.startswith("ops/executor/monitoring_hooks.py") and "1.36.2" in line for line in bad))
+            self.assertTrue(any(line.startswith(WORKFLOWS[0]) and stale_helm in line for line in bad))
+            self.assertTrue(any(line.startswith("ops/executor/monitoring_hooks.py") and bare(stale_kube) in line for line in bad))
 
 
 if __name__ == "__main__":
