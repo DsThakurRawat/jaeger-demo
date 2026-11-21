@@ -121,7 +121,9 @@ class ProjectionTests(unittest.TestCase):
             for s in t.PARTITIONS
         }
         parts["daily-hosted-update"] = {"metadata": {"uid": "control"}}
-        get = lambda kind, name, ns: parts[name]
+        def get(kind, name, ns):
+            return parts[name]
+
         with patch.object(a, "get", side_effect=get):
             digest = a.aggregate(SLOT, RECEIPT, "control")
             auth = SimpleNamespace(approval_commitment=Mock(return_value=digest))
