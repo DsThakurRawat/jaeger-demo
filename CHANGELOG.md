@@ -27,7 +27,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 - Workspaces and Explore (the new Discover, with PPL) on the public OpenSearch
   Dashboards. Visitors land in an Observability workspace with the Jaeger span
-  index pattern selected; the container recreates both on each start because any
+  index pattern selected. A sidecar recreates both within a minute because any
   visitor can delete them. The multiple data source feature stays disabled.
   ([#89](https://github.com/jaegertracing/jaeger-demo/pull/89),
   fixes [#88](https://github.com/jaegertracing/jaeger-demo/issues/88))

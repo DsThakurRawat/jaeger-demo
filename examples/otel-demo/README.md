@@ -67,13 +67,15 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
     Management are disabled. Other bundled plugins can still write to the
     cluster; do not treat the hosted Dashboards as read-only.
     Workspaces and Explore (the new Discover, with PPL) are enabled. A
-    `postStart` hook creates the Observability workspace and its
-    `jaeger-main-jaeger-span-*` index pattern each time the container starts,
-    because any visitor can delete them. It waits up to 50 minutes for
-    Dashboards to start, then tries the API for one minute, and never fails the
-    container; look for `workspace-bootstrap:` in the container log. The
-    multiple data source feature stays disabled: it would let visitors make
-    the Dashboards pod connect to in-cluster addresses.
+    `workspace-bootstrap` sidecar in the Dashboards pod checks every minute
+    (every 15 seconds while waiting) that the Observability workspace and its
+    `jaeger-main-jaeger-span-*` index pattern exist and recreates them, because
+    any visitor can delete them and a fresh install has no span index until
+    Jaeger runs. It does not affect the Dashboards container's readiness. Read
+    its state with
+    `kubectl -n opensearch logs deploy/opensearch-dashboards -c workspace-bootstrap`.
+    The multiple data source feature stays disabled: it would let visitors
+    make the Dashboards pod connect to in-cluster addresses.
 - Namespace `jaeger`:
   - Jaeger all-in-one Deployment with OpenSearch-backed trace storage
   - HOTROD application
