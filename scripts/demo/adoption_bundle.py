@@ -24,7 +24,7 @@ import tarfile
 import tempfile
 import zipfile
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 import yaml
 
 import release_phases
@@ -164,12 +164,15 @@ def verify_frozen_source(checkout, expected, files, plan):
                 meta = obj["metadata"]
                 identity = obj["kind"], meta["name"]
                 annotations = meta.get("annotations") or {}
+                # A YAML tag such as !!binary loads as a non-text key that Helm still reads as text.
+                require(isinstance(annotations, dict) and all(isinstance(name, str) for name in annotations),
+                        "Companion resource annotations must be a mapping with text keys")
                 require(meta.get("namespace", ns) == ns and identity not in seen and
                         annotations.get("helm.sh/resource-policy") == "keep",
                         "Unsafe or duplicate companion resource")
                 # Helm does not own a hook, ignores its keep policy and by default deletes
                 # and recreates it before each run.
-                require(not any(str(name).startswith(HOOK_PREFIX) for name in annotations),
+                require(not any(name.startswith(HOOK_PREFIX) for name in annotations),
                         "Companion resource must not be a Helm hook")
                 seen.add(identity)
             require(seen == allowed, "Companion render differs from the checked-in allowlist")
@@ -191,9 +194,12 @@ def verify_frozen_source(checkout, expected, files, plan):
                         row["chart"]["version"] == version, "Chart differs from checked-in Helmfile")
                 if reviewed is None:
                     try:
-                        reviewed = read_json(blob(CHART_ARCHIVES, subprocess.DEVNULL))["charts"]
+                        document = read_json(blob(CHART_ARCHIVES, subprocess.DEVNULL))
                     except subprocess.CalledProcessError:
                         raise BundleError("Reviewed chart checksums are missing from the source tree") from None
+                    except ValueError:
+                        raise BundleError("Invalid reviewed chart checksums") from None
+                    reviewed = document.get("charts") if isinstance(document, dict) else None
                     require(isinstance(reviewed, dict), "Invalid reviewed chart checksums")
                 expected_sha = reviewed.get(f"{name}-{version}.tgz")
                 require(matches(SHA, expected_sha) and row["chart"]["sha256"] == expected_sha,
@@ -633,18 +639,20 @@ def unseal(path, cipher, approved, expected):
     return plan, live, files
 
 
-PRIVATE_ERRORS = (OSError, EOFError, KeyError, IndexError, TypeError, ValueError, InvalidToken, tarfile.TarError,
-                  zipfile.BadZipFile, yaml.YAMLError, subprocess.CalledProcessError)
 PRIVATE_FAILURE = "Invalid plan input, private key, bundle, or checkout"
 
 
 def without_private_errors(call, *args):
-    """Replace parser and decryption failures, which can quote private values, with a fixed message."""
+    """Replace every failure except BundleError with a fixed message.
+
+    Parser, archive and decryption errors can quote or reference private values. Only this
+    library's own code may run inside the call, so no caller's exception is hidden.
+    """
     try:
         return call(*args)
     except BundleError:
         raise
-    except PRIVATE_ERRORS:
+    except Exception:
         pass
     # Raised after the handler has ended, so the original exception is not chained to this one.
     raise BundleError(PRIVATE_FAILURE)
@@ -709,6 +717,6 @@ if __name__ == "__main__":
         main()
     except BundleError as error:
         sys.exit(str(error))
-    except PRIVATE_ERRORS:
+    except Exception:
         # Parsers and decryption failures can carry plaintext from private values. Do not log them.
         sys.exit(PRIVATE_FAILURE)

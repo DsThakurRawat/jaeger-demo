@@ -14,10 +14,11 @@ import unittest
 from unittest.mock import Mock, patch
 import warnings
 import zipfile
+import zlib
 
 import yaml
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 
 import adoption_bundle as b
 import helmfile_transaction
@@ -153,9 +154,9 @@ class BundleTests(unittest.TestCase):
         with self.assertRaises(OSError):
             b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, broken, apply, self.fail)
         for cipher, expected in ((self.cipher, "a"*64), (Fernet(Fernet.generate_key()), sha)):
-            with self.assertRaises((InvalidToken, b.BundleError)):
+            with self.assertRaises(b.BundleError):
                 b.consume(path, cipher, expected, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
-        with self.assertRaisesRegex(b.BundleError, "checkout"):
+        with self.assertRaisesRegex(b.BundleError, "differs from reviewed commit"):
             b.consume(path, self.cipher, sha, self.checkout, "a"*40, self.render, self.fail, apply, self.fail)
         (self.checkout / "unexpected").write_text("dirty")
         with self.assertRaisesRegex(b.BundleError, "local changes"):
@@ -188,7 +189,9 @@ class BundleTests(unittest.TestCase):
         # Independent of the installed parser: a failure that does quote a private value.
         good, sha = self.build()
         for error in (ValueError("fixture-private-value"), KeyError("fixture-private-value"),
-                      yaml.YAMLError("fixture-private-value")):
+                      yaml.YAMLError("fixture-private-value"), AttributeError("fixture-private-value"),
+                      RecursionError("fixture-private-value"), zlib.error("fixture-private-value"),
+                      NotImplementedError("fixture-private-value")):
             with self.subTest(error=type(error).__name__), patch("adoption_bundle.verify_frozen_source", side_effect=error), \
                     self.assertRaises(b.BundleError) as failure:
                 b.consume(good, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
@@ -197,6 +200,37 @@ class BundleTests(unittest.TestCase):
             self.assertIsNone(failure.exception.__cause__)
             self.assertIsNone(failure.exception.__context__)
         apply.assert_not_called()
+        # The same holds when the per-release post-render derivation fails after the live read.
+        real = b.transaction_render
+        calls = []
+        def second_call_fails(row, files):
+            calls.append(row["id"])
+            if len(calls) > 1:
+                raise AttributeError("fixture-private-value")
+            return real(row, files)
+        with patch("adoption_bundle.transaction_render", side_effect=second_call_fails), \
+                self.assertRaises(b.BundleError) as failure:
+            b.consume(good, self.cipher, sha, self.checkout, self.commit, self.render, lambda scope: self.live,
+                      apply, self.fail)
+        self.assertEqual((2, b.PRIVATE_FAILURE), (len(calls), str(failure.exception)))
+        self.assertIsNone(failure.exception.__context__)
+        apply.assert_not_called()
+
+    def test_callback_errors_reach_the_caller_unchanged(self):
+        path, sha = self.build()
+        for position in ("render", "observe", "reconcile", "verify"):
+            failure = RuntimeError(position + " callback failed")
+            def callback(*args, expected=position, error=failure, result=None):
+                if position == expected:
+                    raise error
+                return result
+            render = self.render if position != "render" else callback
+            observe = (lambda scope: self.live) if position != "observe" else callback
+            reconcile = (lambda *args: None) if position != "reconcile" else callback
+            verify = (lambda stack: True) if position != "verify" else callback
+            with self.subTest(callback=position), self.assertRaises(RuntimeError) as raised:
+                b.consume(path, self.cipher, sha, self.checkout, self.commit, render, observe, reconcile, verify)
+            self.assertIs(failure, raised.exception)
 
     def test_bundle_rejects_unexpected_duplicate_link_compressed_missing_or_modified_members(self):
         def other(rows):
@@ -242,6 +276,12 @@ class BundleTests(unittest.TestCase):
         for hook in (b"helm.sh/hook: pre-upgrade", b"helm.sh/hook-delete-policy: hook-succeeded"):
             files[prefix+"rendered.yaml"] = render.replace(b"{helm.sh", b"{" + hook + b", helm.sh")
             with self.subTest(hook=hook), self.assertRaisesRegex(b.BundleError, "Helm hook"):
+                b.verify_frozen_source(self.checkout,commit,files,plan)
+        # Helm reads a binary-tagged key as the text helm.sh/hook. PyYAML loads it as bytes.
+        for annotations in (b"{? !!binary aGVsbS5zaC9ob29r : pre-upgrade, helm.sh/resource-policy: keep}",
+                            b"[helm.sh/resource-policy, keep]", b"keep"):
+            files[prefix+"rendered.yaml"] = b"apiVersion: v1\nkind: Service\nmetadata: {name: fixture, annotations: " + annotations + b"}\n"
+            with self.subTest(annotations=annotations), self.assertRaisesRegex(b.BundleError, "text keys"):
                 b.verify_frozen_source(self.checkout,commit,files,plan)
         files[prefix+"rendered.yaml"] = render
         files[prefix+"chart.tgz"] = chart(dict(members, **{"demo-resources/templates/extra.yaml":b"unexpected"}))
@@ -335,17 +375,39 @@ class BundleTests(unittest.TestCase):
         with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
             self.build()
         self.assertEqual([], list(self.dest.iterdir()))
-        # An already sealed bundle is refused once the reviewed tree no longer lists its archive.
+        # A new build is refused once the reviewed tree no longer lists the archive.
         self.row["chart"]["sha256"] = b.digest(self.chart)
         (self.base / "chart.tgz").write_bytes(self.chart)
         self.archives.write_bytes(b.canonical({"charts": {"kube-prometheus-stack-82.10.5.tgz": b.digest(self.chart)}}))
         self.commit_fixture("Different reviewed version")
         with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
             self.build()
+        for malformed in (b"{}", b"[]", b'{"charts": []}', b"not json"):
+            self.archives.write_bytes(malformed)
+            self.commit_fixture("Malformed reviewed checksums")
+            with self.subTest(lock=malformed), self.assertRaisesRegex(b.BundleError, "Invalid reviewed chart checksums"):
+                self.build()
         self.archives.unlink()
         self.commit_fixture("No reviewed checksums")
         with self.assertRaisesRegex(b.BundleError, "checksums are missing"):
             self.build()
+
+    def test_sealed_bundle_is_refused_when_its_commit_reviews_another_archive(self):
+        # The bundle is valid and sealed. A bundle for a commit whose reviewed checksum differs
+        # can only be produced by a sealer that skips the build check, so construct one.
+        other = chart({"kube-prometheus-stack/Chart.yaml": b"apiVersion: v2\nname: kube-prometheus-stack\nversion: 82.10.4\n",
+                       "kube-prometheus-stack/values.yaml": b"# another archive\n"})
+        self.archives.write_bytes(b.canonical({"charts": {"kube-prometheus-stack-82.10.4.tgz": b.digest(other)}}))
+        self.commit_fixture("Reviewed checksum of another archive")
+        with patch("adoption_bundle.verify_frozen_source"):
+            path, sha = self.build()
+        _, _, files = b.unseal(path, self.cipher, sha, self.commit)
+        with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
+            b.verify_frozen_source(self.checkout, self.commit, files, b.read_json(files["plan.json"]))
+        apply = Mock()
+        with self.assertRaisesRegex(b.BundleError, "reviewed SHA-256"):
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
+        apply.assert_not_called()
 
     def test_jaeger_chart_is_bound_to_its_name_and_pinned_commit(self):
         source = "https://github.com/jaegertracing/helm-charts.git@" + "c"*40

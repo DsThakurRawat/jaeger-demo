@@ -106,8 +106,9 @@ versions and reviewed repository chart checksums, and recorded recovery targets.
 The live runner entry point is `consume(path, cipher, approved, checkout, expected,
 render_frozen, read_live, reconcile, verify_stack)`. Acquire the deployment lock before calling it.
 A failure while the library itself reads the checkout, decrypts the bundle or parses
-its members raises only `BundleError`. A parser or decryption error is replaced by one
-fixed message and is not chained, because such errors can quote private values.
+its members raises only `BundleError`. Every other error from those steps is replaced
+by one fixed message and is not chained, because parser, archive and decryption errors
+can quote or reference private values.
 Exceptions raised by the four callbacks propagate unchanged. Each integration must
 keep private values out of its own errors and logs.
 The trusted renderer receives the plan and read-only frozen bytes. It must use the
@@ -154,18 +155,25 @@ same guarded Helmfile upgrade as an application release. The first install is a
 frozen `install` operation with `atomic` false, and the callback accepts it only
 for the `apply` method. It runs the pinned Helm binary directly with the frozen
 chart, values and post-renderer, because `helm upgrade --install` cannot require
-an absent release. `helm install` fails on any stored record of that name. It
-never passes `--take-ownership`, so Helm refuses an existing object that lacks
-this release's ownership metadata. Apply the reviewed
+an absent release. `helm install` fails on any stored record of that name that
+Helm can read. `consume` has already observed the release as absent under the
+lock. The callback never passes `--take-ownership`, so Helm refuses an existing
+object that lacks this release's ownership metadata. Apply the reviewed
 [ownership patches](helmfile-companions.md#inspect-existing-ownership) first.
-A wrong name, a rejected render and an ownership conflict all stop before Helm
+A name in use, a rejected render and an ownership conflict all stop before Helm
 stores a release record. A failure after that point, such as a wait timeout,
-leaves failed revision 1 with every object kept. The observer has no successful
-rollback target for it and refuses the release. De-adopt it with `helm uninstall`,
-which keeps the objects, and review a fresh install plan.
+leaves failed revision 1. The observer has no successful rollback target for it
+and refuses the release, so this needs operator recovery. Stop automation and
+follow the companion rollback in [cutover.md](cutover.md#later-helmfile-adoption):
+de-adopt by removing only the recorded companion release metadata. Never use
+`helm uninstall` on a companion release. Then review a fresh install plan. The
+kind rehearsal constructs a failed revision 1, removes only that stored release
+record with every object unchanged, and installs again through the callback.
+The exact production commands for this recovery are not part of this tooling yet.
 
 The callback discards both subprocess output streams, including failure output.
-It uses the exact trusted kubeconfig and context passed by the runtime. The
+It uses the exact trusted kubeconfig and context passed by the runtime and refuses
+an empty or unnamed context, which Helm would replace with the kubeconfig's current one. The
 Helm subprocesses have a fresh `HOME` and no inherited OCI settings, signing
 keys or proxy environment. A kubeconfig exec credential plugin must be present
 on the pinned process's trusted `PATH` and authenticate with that environment.

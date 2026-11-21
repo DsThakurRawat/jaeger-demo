@@ -5,6 +5,7 @@
 import contextlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -14,6 +15,8 @@ from adoption_bundle import BundleError, RELEASES
 
 
 COMPANION = "/demo-resources"
+# Helm treats an empty --kube-context as unset and uses the kubeconfig's current context.
+CONTEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/=+-]{0,252}")
 
 
 def check_options(method, options):
@@ -25,8 +28,10 @@ def check_options(method, options):
 
 
 @contextlib.contextmanager
-def private_inputs(files, kubeconfig):
+def private_inputs(files, kubeconfig, context):
     """Yield the pinned tools, an owner-only scratch directory with the frozen inputs and a minimal environment."""
+    if not isinstance(context, str) or not CONTEXT.fullmatch(context):
+        raise BundleError("A named kubeconfig context is required")
     config = Path(kubeconfig).resolve(strict=True)
     tools = Path(os.environ.get("JAEGER_HELMFILE_TOOLCHAIN", ""))
     helm, helmfile = tools / "bin/helm", tools / "bin/helmfile"
@@ -57,7 +62,7 @@ def execute(command, root, env, description):
 
 def upgrade(key, method, options, files, kubeconfig, context):
     ns, name = key.split("/")
-    with private_inputs(files, kubeconfig) as (helm, helmfile, config, root, env):
+    with private_inputs(files, kubeconfig, context) as (helm, helmfile, config, root, env):
         state = {
             "helmDefaults": {"historyMax": options["historyMax"], "createNamespace": False, "timeout": options["timeoutSeconds"]},
             "releases": [{"name": name, "namespace": ns, "chart": "./chart.tgz"}],
@@ -92,8 +97,9 @@ def reconcile_companion(row, method, files, *, kubeconfig, context):
     Invoke under the pinned toolchain, within consume() and its deployment lock,
     after the reviewed ownership patches. The first install runs the pinned Helm
     directly. Helm's upgrade --install cannot require an absent release, whereas
-    install fails on any stored record of that name. Without --take-ownership it
-    also refuses an existing object that lacks this release's ownership metadata.
+    install fails on any stored record of that name that Helm can read. Without
+    --take-ownership it also refuses an existing object that lacks this release's
+    ownership metadata.
     """
     key, options = row["id"], row["helm"]
     if key not in RELEASES or not key.endswith(COMPANION) or options["operation"] not in ("install", "upgrade"):
@@ -106,7 +112,7 @@ def reconcile_companion(row, method, files, *, kubeconfig, context):
     if method != "apply" or options["atomic"] is not False:
         raise BundleError("The first companion install must be a non-atomic apply")
     ns, name = key.split("/")
-    with private_inputs(files, kubeconfig) as (helm, _, config, root, env):
+    with private_inputs(files, kubeconfig, context) as (helm, _, config, root, env):
         command = [helm, "install", name, "./chart.tgz", "--namespace", ns, "--kubeconfig", str(config),
                    "--kube-context", context, "--values=./values.yaml", "--post-renderer", "verify-frozen-manifests",
                    "--wait=" + options["wait"], "--timeout", f"{options['timeoutSeconds']}s",

@@ -145,6 +145,22 @@ class TransactionTests(unittest.TestCase):
             reconcile_companion(self.companion("install"), "apply", self.files, kubeconfig=self.kubeconfig, context="fixture")
         self.assertEqual(str(failure.exception), "Frozen Helm install failed for opensearch/demo-resources (exit 1)")
 
+    def test_a_named_context_is_required_for_every_transaction(self):
+        with patch("helmfile_transaction.subprocess.run") as execute:
+            for context in ("", None, "-n", "--take-ownership", "two words", "new\nline", "a" * 254):
+                for row, method in ((self.row, "apply"), (self.companion("install"), "apply"),
+                                    (self.companion("upgrade"), "sync")):
+                    with self.subTest(context=context, release=row["id"]), self.assertRaisesRegex(BundleError, "named kubeconfig context"):
+                        reconcile(row, method, self.files, kubeconfig=self.kubeconfig, context=context)
+            execute.assert_not_called()
+        accepted = []
+        with patch("helmfile_transaction.subprocess.run", side_effect=lambda command, **kwargs: accepted.append(command)
+                   or subprocess.CompletedProcess(command, 0)):
+            for context in ("fixture", "kind-jaeger-demo-adoption-fixture", "context-c5abcdefgh",
+                            "arn:aws:eks:us-east-1:123456789012:cluster/demo", "gke_project_zone_cluster"):
+                reconcile(self.companion("install"), "apply", self.files, kubeconfig=self.kubeconfig, context=context)
+                self.assertEqual(context, accepted[-1][accepted[-1].index("--kube-context") + 1])
+
     def test_failure_does_not_disclose_or_retain_private_input(self):
         paths = []
         def failed(command, *, cwd, **kwargs):
