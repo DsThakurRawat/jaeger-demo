@@ -239,6 +239,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('github.event.pull_request.number || github.sha', concurrency['group'])
         self.assertEqual("${{ github.event_name == 'pull_request' }}", concurrency['cancel-in-progress'])
 
+    def test_ci_flags_guarded_changes_for_pull_requests_without_failing(self):
+        steps = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['tests']['steps']
+        step = next(item for item in steps if 'guarded_changes.py' in item.get('run', ''))
+        self.assertEqual("github.event_name == 'pull_request'", step['if'])
+        self.assertNotIn('continue-on-error', step)
+        self.assertIn('git fetch', step['run'])
+        self.assertIn('::notice::', step['run'])
+        self.assertIn('GITHUB_STEP_SUMMARY', step['run'])
+        self.assertNotIn('exit 1', step['run'])
+
     def test_renovate_job_uses_the_discovery_make_target(self):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
         self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])
