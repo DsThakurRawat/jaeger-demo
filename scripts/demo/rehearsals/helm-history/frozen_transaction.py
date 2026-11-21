@@ -151,6 +151,14 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
     # Nothing else may differ. Chart 82 rendered one such Role; chart 93 renders none.
     empty = {a.identity(obj, "default") for obj in ordinary_rbac if obj.get("rules") == []}
     assert shapes == {ident: {"rules": ["list", "NoneType"]} for ident in empty}
+    # Keep that API behaviour covered when no chart object has an empty rule list.
+    synthetic = {"apiVersion": group + "/v1", "kind": "Role", "rules": [],
+                 "metadata": {"name": "fixture-empty-rule-list", "namespace": "default"}}
+    kube(["apply", "--server-side", "--field-manager=helm", "-f", "-"], body=json.dumps(synthetic))
+    persisted = json.loads(kube(["get", "Role", synthetic["metadata"]["name"], "-n", "default", "-o", "json"]).stdout)
+    assert persisted.get("rules") is None, "The API no longer stores an empty rule list as null"
+    a.check_live_rbac(synthetic, persisted)
+    kube(["delete", "Role", synthetic["metadata"]["name"], "-n", "default"])
     narrow = "fixture-ordinary-rbac-reader-writer"
     for scope in ("Role", "ClusterRole"):
         names = [o for o in ordinary_rbac if o["kind"].startswith("Cluster") == (scope == "ClusterRole")]
