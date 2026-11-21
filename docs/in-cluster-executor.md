@@ -7,7 +7,7 @@ The trusted preparer publishes the day's private, signed bundle. The executor in
 
 ## Daily sequence
 
-Each step below is described in this page, the [daily request protocol](daily-update-request.md) and the [release guide](releases.md). None of it runs until operators install the workloads and a maintainer approves activation: the preparer CronJob first, then the `DEMO_SCHEDULE_ENABLED` repository variable. Manual jobs in the `demo-apply` environment take the same writer lock instead of signalling.
+Each step below is described in this page, the [daily request protocol](daily-update-request.md) and the [release guide](releases.md). None of it runs until operators install the workloads and a maintainer approves activation: the preparer CronJob first, then the `DEMO_SCHEDULE_ENABLED` repository variable. Manual jobs in the `demo-apply` environment take the same writer lock instead of signalling. A failure before the lock release leaves the lock held. A request left `verified` after the release has no holder, and the recovery operator finalizes it ([concurrency and recovery](daily-update-request.md#concurrency-and-recovery)).
 
 ```mermaid
 sequenceDiagram
@@ -34,7 +34,7 @@ sequenceDiagram
     E->>B: Verify the signed receipt in custody
     E->>L: Claim the lock (UID and resourceVersion test)
     E->>C: Set the request to running
-    Note over E,L: From here, any failure leaves the lock held
+    Note over E,L: From here until the lock is released, any failure leaves it held
     E->>B: Authenticate and decrypt the bundle
     E->>H: Compare Helm histories and live state before the first write
     E->>H: Upgrade selected components in order: default/prometheus, default/jaeger,<br/>opensearch, opensearch-dashboards, jaeger/jaeger, otel-demo
@@ -42,7 +42,8 @@ sequenceDiagram
     alt All checks pass
         E->>C: Set running to verified
         E->>L: Release the lock
-        E->>C: Report succeeded
+        E->>C: Set verified to succeeded
+        Note over E,L: If this last update fails, the request stays verified<br/>and the lock is already released
     else Any check fails
         E->>C: Record the failure
         Note over E,L: The lock stays held for the recovery operator
