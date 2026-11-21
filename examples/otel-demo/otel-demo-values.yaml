@@ -116,9 +116,14 @@ components:
       - name: LOCUST_SPAWN_RATE
         value: "2"
 
-  # The chart owns the Valkey and PostgreSQL images (valkey-cart and astronomy-db).
-  # Both hold disposable demo data. Only the database memory limit is raised.
+  # The chart owns the Valkey image (valkey-cart). Both stores hold disposable demo data.
+  # The chart names PostgreSQL by the short name postgres:18.4, which the OKE 1.37 node
+  # image refuses (short-name mode is enforcing), so the same version is pinned here by
+  # its full registry name and digest. The database memory limit is raised.
   astronomy-db:
+    imageOverride:
+      repository: docker.io/library/postgres
+      tag: "18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636"
     resources:
       limits:
         memory: 256Mi
