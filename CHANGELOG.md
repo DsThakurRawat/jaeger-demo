@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- kube-prometheus-stack 93.6.1 (from 82.10.4, prometheus-operator v0.95.2), with
+  monitoring values that keep the release within the executor's hook and Secret
+  rules. The rollout needs an operator with cluster access. **Executor image.**
+  ([#59](https://github.com/jaegertracing/jaeger-demo/pull/59),
+  fixes [#58](https://github.com/jaegertracing/jaeger-demo/issues/58))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
