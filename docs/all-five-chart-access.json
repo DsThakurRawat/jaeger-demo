@@ -21,7 +21,7 @@
       "release": "default/prometheus",
       "chartArchive": "kube-prometheus-stack-93.6.1.tgz",
       "valuesSHA256": {
-        "examples/oci/monitoring-values.yaml": "8d7bc4f5ee3b712507d9014e289d1a42c83f27a0bffb0dbf4ce26f52e2e46b3f"
+        "examples/oci/monitoring-values.yaml": "c965602ae0dbc59f813dde4846da3aa4fa4b04528543454d3915152ffc2d795f"
       },
       "method": "python3 scripts/demo/access_matrix.py"
     }
