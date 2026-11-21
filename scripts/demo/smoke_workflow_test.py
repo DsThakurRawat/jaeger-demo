@@ -202,9 +202,10 @@ class AlertWiringTests(unittest.TestCase):
     def decide(self, result, event, runs, python=None, attempt=1, previous=''):
         history = json.dumps({'workflow_runs': runs}) if runs is not None else None
         runs_gh = 'cat <<\'EOF\'\n' + history + '\nEOF' if history else 'exit 1'
-        # The attempts endpoint answers with the previous attempt's conclusion
-        # (what `--jq` would print), or fails when previous is None.
-        attempts_gh = 'exit 1' if previous is None else 'echo "$TEST_PREVIOUS"'
+        # The attempts endpoint answers with the previous attempt's run, or
+        # fails when previous is None. smoke_alert.py makes that call itself.
+        attempts_gh = 'exit 1' if previous is None else \
+            'echo "{\\"conclusion\\": \\"$TEST_PREVIOUS\\", \\"updated_at\\": \\"T1\\"}"'
         gh = 'case "$*" in\n*"/attempts/"*)\n' + attempts_gh + '\n;;\n*)\n' + runs_gh + '\n;;\nesac'
         stubs = {'gh': gh}
         if python is not None:
@@ -255,8 +256,7 @@ class AlertWiringTests(unittest.TestCase):
         runs = [{'id': 99, 'conclusion': 'success'}]
         action, calls = self.decide('success', 'schedule', runs, attempt=2, previous='failure')
         self.assertEqual('action=recovered', action)
-        self.assertIn('gh api repos/jaegertracing/jaeger-demo/actions/runs/100/attempts/1 --jq .conclusion // ""',
-                      calls)
+        self.assertIn('gh api repos/jaegertracing/jaeger-demo/actions/runs/100/attempts/1', calls)
         # The run now counts as healthy, so the next scheduled run stays silent.
         runs = [{'id': 100, 'conclusion': 'success'}, {'id': 99, 'conclusion': 'success'}]
         self.assertEqual('action=none', self.decide('success', 'schedule', runs)[0])
@@ -265,12 +265,12 @@ class AlertWiringTests(unittest.TestCase):
         runs = [{'id': 99, 'conclusion': 'success'}]
         self.assertEqual('action=none', self.decide('failure', 'schedule', runs, attempt=2, previous='failure')[0])
 
-    def test_the_first_attempt_does_not_read_a_previous_attempt(self):
+    def test_the_first_attempt_reads_no_earlier_attempt(self):
         _, calls = self.decide('success', 'schedule', [{'id': 99, 'conclusion': 'failure'}])
         self.assertEqual(1, len(calls))
         self.assertNotIn('/attempts/', calls[0])
 
-    def test_an_unreadable_previous_attempt_does_not_hide_a_failure(self):
+    def test_an_unreadable_earlier_attempt_does_not_hide_a_failure(self):
         runs = [{'id': 99, 'conclusion': 'success'}]
         self.assertEqual('action=failed', self.decide('failure', 'schedule', runs, attempt=2, previous=None)[0])
         self.assertEqual('action=none', self.decide('success', 'schedule', runs, attempt=2, previous=None)[0])

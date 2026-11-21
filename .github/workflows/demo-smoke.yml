@@ -81,13 +81,9 @@ jobs:
           echo "::warning::Could not read earlier runs; a failure will still notify"
           rm -f "$history"
         fi
-        # A rerun is not completed yet, so the list above leaves it out. Its
-        # previous attempt is the newest earlier result.
-        previous=""
-        if [ "${RUN_ATTEMPT:-1}" -gt 1 ]; then
-          previous=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$((RUN_ATTEMPT - 1))" --jq '.conclusion // ""') || previous=""
-        fi
-        if ! action=$(python3 scripts/demo/smoke_alert.py --result "$RESULT" --event "$EVENT_NAME" --run-id "$RUN_ID" --history "$history" --previous-attempt "$previous"); then
+        # smoke_alert.py reads earlier attempts of reruns itself (gh api, same
+        # token), because a rerun and a cancelled last attempt hide a result.
+        if ! action=$(python3 scripts/demo/smoke_alert.py --result "$RESULT" --event "$EVENT_NAME" --run-id "$RUN_ID" --history "$history" --run-attempt "$RUN_ATTEMPT"); then
           echo "::warning::The alert decision failed; a failure will still notify"
           # Same as the helper without its history: a success and a scheduled
           # cancellation stay silent, any other result notifies.

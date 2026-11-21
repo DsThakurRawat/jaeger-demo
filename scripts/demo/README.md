@@ -82,9 +82,11 @@ Retries and alerts:
   failure and one recovery. Earlier `cancelled`, `skipped` and other
   inconclusive runs are skipped when looking back.
 - If the history cannot be read or holds no usable result, a failure still
-  posts and a success stays silent. A rerun is not in that list yet, so the step
-  also reads the previous attempt of the same run: a failed run fixed by a rerun
-  posts one recovery.
+  posts and a success stays silent. A run that was rerun, or whose last
+  attempt was cancelled, counts by its latest `success` or `failure` attempt,
+  read with `gh api .../attempts/N`, and results are ordered by when they were
+  observed. A failed run fixed by a rerun posts one recovery, and a rerun of an
+  old run cannot override a newer result.
 - A manual dispatch always posts a failure and never posts a recovery. A
   cancelled manual run posts a failure. A cancelled scheduled run is silent,
   because the next run checks again within 30 minutes.
