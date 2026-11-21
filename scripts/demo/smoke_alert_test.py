@@ -153,11 +153,19 @@ class BuildHistoryTests(unittest.TestCase):
         self.assertEqual(['failure', 'success'], smoke_alert.build_history(runs, 6, 1, fetch))
         self.assertEqual([(5, 2), (5, 1)], fetch.calls)
 
-    def test_an_unreadable_attempt_loses_only_that_attempt(self):
+    def test_an_unreadable_attempt_raises_instead_of_surfacing_a_stale_result(self):
+        # Attempt 1 failed, attempt 2 recovered but cannot be read, attempt 3 is current.
+        fetch = attempts({(7, 1): ('failure', 'T1')})
+        with self.assertRaises(OSError):
+            smoke_alert.build_history([run(6, 'success', 'T0')], 7, 3, fetch)
+        # The same for a cancelled last attempt of an earlier run.
         runs = [run(5, 'cancelled', 'T5c', attempt=3), run(4, 'success', 'T4')]
-        fetch = attempts({(5, 1): ('failure', 'T5a')})
-        self.assertEqual(['failure', 'success'], smoke_alert.build_history(runs, 6, 1, fetch))
-        self.assertEqual(['success'], smoke_alert.build_history(runs, 6, 1, attempts({})))
+        with self.assertRaises(OSError):
+            smoke_alert.build_history(runs, 6, 1, attempts({(5, 1): ('failure', 'T5a')}))
+
+    def test_an_unexpected_attempt_payload_raises(self):
+        with self.assertRaises(ValueError):
+            smoke_alert.build_history([], 7, 2, lambda run_id, attempt: ['not', 'a', 'dict'])
 
     def test_a_completed_rerun_counts_by_its_final_attempt(self):
         runs = [run(5, 'success', 'T5b', attempt=2), run(4, 'success', 'T4')]
@@ -238,11 +246,28 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual('none\n', self.run_main('--result', 'success', *args, '--run-attempt', '1'))
 
     def test_a_rerun_without_the_github_cli_still_decides(self):
-        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'jaegertracing/jaeger-demo', 'PATH': '/nonexistent'}):
+        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'jaegertracing/jaeger-demo', 'PATH': '/nonexistent'}), \
+                contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual('failed\n', self.run_main(
                 '--result', 'failure', '--event', 'schedule', '--run-id', '9', '--run-attempt', '3'))
             self.assertEqual('none\n', self.run_main(
                 '--result', 'success', '--event', 'schedule', '--run-id', '9', '--run-attempt', '3'))
+
+    def test_a_failed_attempt_lookup_fails_open_and_does_not_reuse_a_stale_failure(self):
+        # Attempt 1 failed, attempt 2 recovered (unreadable), attempt 3 fails now:
+        # the stale failure must not suppress this new outage.
+        with tempfile.TemporaryDirectory() as temp:
+            gh = Path(temp) / 'gh'
+            gh.write_text('#!/bin/sh\ncase "$*" in\n*/attempts/1) '
+                          'echo \'{"conclusion": "failure", "updated_at": "T1"}\';;\n*) exit 1;;\nesac\n')
+            gh.chmod(0o755)
+            with mock.patch.dict(os.environ, {'PATH': temp + os.pathsep + os.environ['PATH'],
+                                              'GITHUB_REPOSITORY': 'jaegertracing/jaeger-demo'}):
+                args = ('--event', 'schedule', '--run-id', '9', '--run-attempt', '3')
+                with contextlib.redirect_stderr(io.StringIO()) as warning:
+                    self.assertEqual('failed\n', self.run_main('--result', 'failure', *args))
+                    self.assertEqual('none\n', self.run_main('--result', 'success', *args))
+                self.assertIn('could not read earlier attempts', warning.getvalue())
 
     def test_rejects_an_unknown_result(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

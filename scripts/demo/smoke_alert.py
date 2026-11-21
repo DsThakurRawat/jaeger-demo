@@ -24,7 +24,9 @@ Rules for scheduled runs, which deduplicate on the state change:
   attempts, found with ``gh api .../attempts/N``. The run being rerun right now
   is not completed, so its earlier attempts count the same way. All results are
   ordered by the time they were observed (``updated_at``), newest first, so a
-  rerun of an old run cannot override a newer run.
+  rerun of an old run cannot override a newer run. If any of these lookups
+  fails the whole history counts as unreadable (see above), because skipping an
+  attempt could surface a stale result.
 * A cancelled run is silent. It proves nothing about the demos, and the next
   run checks again within 30 minutes.
 
@@ -87,21 +89,23 @@ def fetch_attempt(run_id, attempt):
     """Return one attempt of a workflow run from the GitHub API."""
     repo = os.environ['GITHUB_REPOSITORY']
     result = subprocess.run(['gh', 'api', f'repos/{repo}/actions/runs/{run_id}/attempts/{attempt}'],
-                            capture_output=True, text=True, check=True, timeout=60)
+                            capture_output=True, text=True, check=True, timeout=15)
     return json.loads(result.stdout)
 
 
 def latest_conclusive(run_id, attempt, fetch):
-    """Return ``(conclusion, observed_at)`` of the newest conclusive attempt up to ``attempt``."""
+    """Return ``(conclusion, observed_at)`` of the newest conclusive attempt up to ``attempt``.
+
+    A failed lookup raises. Skipping an unreadable attempt could surface an
+    older, stale result in its place.
+    """
     for number in range(attempt, 0, -1):
-        try:
-            data = fetch(run_id, number)
-            conclusion = data.get('conclusion')
-            observed = str(data.get('updated_at') or '')
-        except Exception:  # a failed lookup only loses that attempt
-            continue
+        data = fetch(run_id, number)
+        if not isinstance(data, dict):
+            raise ValueError(f'unexpected attempt {number} of run {run_id}')
+        conclusion = data.get('conclusion')
         if conclusion in ('success', 'failure'):
-            return conclusion, observed
+            return conclusion, str(data.get('updated_at') or '')
     return None
 
 
@@ -111,7 +115,7 @@ def build_history(runs, run_id=None, run_attempt=1, fetch=fetch_attempt):
     ``runs`` is the completed run list (newest first) or ``None``. The current
     run is left out of it, but its own earlier attempts count when it is a
     rerun. Results are ordered by when they were observed; ties and missing
-    timestamps keep the list order.
+    timestamps keep the list order. Raises when an attempt lookup fails.
     """
     found = []
     for run in runs or ():
@@ -141,7 +145,11 @@ def main(argv=None):
     parser.add_argument('--run-attempt', type=int, default=1, help='attempt number of this run')
     args = parser.parse_args(argv)
     runs = read_runs(args.history) if args.history else None
-    history = build_history(runs, args.run_id, args.run_attempt)
+    try:
+        history = build_history(runs, args.run_id, args.run_attempt)
+    except Exception as error:  # fail open: an unreadable history is treated as no history
+        print(f'warning: could not read earlier attempts: {error}', file=sys.stderr)
+        history = None
     print(decide(args.result, args.event, history))
     return 0
 

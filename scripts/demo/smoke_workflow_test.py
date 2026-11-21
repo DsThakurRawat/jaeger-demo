@@ -162,8 +162,11 @@ class RetryTests(unittest.TestCase):
         for stack in self.CHECKS:
             _, calls, _ = self.attempt(stack, 99)
             total += sum(int(call.split()[1]) for call in calls if call.startswith(('timeout ', 'sleep ')))
-        overhead = 120  # checkout and the alert decision
-        self.assertLessEqual(total + overhead, JOB['timeout-minutes'] * 60)
+        # The alert decision is bounded by its own timeouts; checkout and the
+        # Slack post are allowed 60 s together.
+        decision = sum(int(seconds) for seconds in re.findall(r'\btimeout (\d+) ', STEPS['Decide whether to notify']['run']))
+        self.assertEqual(90, decision)
+        self.assertLessEqual(total + decision + 60, JOB['timeout-minutes'] * 60)
         self.assertGreater(total, 2 * 3 * WORST_CASE_RUN_SECONDS)
 
 
@@ -199,7 +202,7 @@ class AlertWiringTests(unittest.TestCase):
         for step in (self.FAILED, self.RECOVERED):
             self.assertEqual('${{ secrets.SLACK_WEBHOOK_URL }}', step['env']['SLACK_WEBHOOK'])
 
-    def decide(self, result, event, runs, python=None, attempt=1, previous=''):
+    def decide(self, result, event, runs, python=None, attempt=1, previous='', timeout=PASS_THROUGH_TIMEOUT):
         history = json.dumps({'workflow_runs': runs}) if runs is not None else None
         runs_gh = 'cat <<\'EOF\'\n' + history + '\nEOF' if history else 'exit 1'
         # The attempts endpoint answers with the previous attempt's run, or
@@ -207,7 +210,7 @@ class AlertWiringTests(unittest.TestCase):
         attempts_gh = 'exit 1' if previous is None else \
             'echo "{\\"conclusion\\": \\"$TEST_PREVIOUS\\", \\"updated_at\\": \\"T1\\"}"'
         gh = 'case "$*" in\n*"/attempts/"*)\n' + attempts_gh + '\n;;\n*)\n' + runs_gh + '\n;;\nesac'
-        stubs = {'gh': gh}
+        stubs = {'gh': gh, 'timeout': timeout}
         if python is not None:
             stubs['python3'] = python
         outcome, calls, output = run_step(self.DECIDE, stubs, RESULT=result, EVENT_NAME=event, RUN_ID='100',
@@ -222,7 +225,7 @@ class AlertWiringTests(unittest.TestCase):
         action, calls = self.decide('failure', 'schedule', runs)
         self.assertEqual('action=none', action)
         self.assertEqual(['gh api repos/jaegertracing/jaeger-demo/actions/workflows/demo-smoke.yml/runs'
-                          '?event=schedule&status=completed&per_page=10'], calls)
+                          '?event=schedule&status=completed&per_page=10'], [c for c in calls if c.startswith('gh ')])
 
     def test_the_decision_follows_the_state_change_rules(self):
         failure, success = {'id': 99, 'conclusion': 'failure'}, {'id': 99, 'conclusion': 'success'}
@@ -251,6 +254,22 @@ class AlertWiringTests(unittest.TestCase):
             with self.subTest(result=result, event=event):
                 self.assertEqual(f'action={expected}', self.decide(result, event, runs, python='exit 2')[0])
 
+    def test_the_lookup_and_the_helper_are_time_bounded(self):
+        _, calls = self.decide('failure', 'schedule', [{'id': 99, 'conclusion': 'success'}])
+        bounds = {call.split()[2]: int(call.split()[1]) for call in calls if call.startswith('timeout ')}
+        self.assertEqual({'gh': 30, 'python3': 60}, bounds)
+
+    def test_a_hung_helper_or_lookup_does_not_hide_a_failure(self):
+        runs = [{'id': 99, 'conclusion': 'failure'}]
+        hung = 'case "$2" in python3|gh) exit 124;; esac\nshift; exec "$@"'
+        for result, event, expected in (('failure', 'schedule', 'failed'), ('success', 'schedule', 'none'),
+                                        ('cancelled', 'schedule', 'none'), ('cancelled', 'workflow_dispatch', 'failed')):
+            with self.subTest(result=result, event=event):
+                self.assertEqual(f'action={expected}', self.decide(result, event, runs, timeout=hung)[0])
+        # A hung run-list lookup alone still lets the helper decide, failing open.
+        lookup_hung = 'case "$2" in gh) exit 124;; esac\nshift; exec "$@"'
+        self.assertEqual('action=failed', self.decide('failure', 'schedule', runs, timeout=lookup_hung)[0])
+
     def test_a_successful_rerun_of_a_failed_run_posts_a_recovery(self):
         # The rerun is in progress, so the completed list ends at the healthy run before it.
         runs = [{'id': 99, 'conclusion': 'success'}]
@@ -267,8 +286,8 @@ class AlertWiringTests(unittest.TestCase):
 
     def test_the_first_attempt_reads_no_earlier_attempt(self):
         _, calls = self.decide('success', 'schedule', [{'id': 99, 'conclusion': 'failure'}])
-        self.assertEqual(1, len(calls))
-        self.assertNotIn('/attempts/', calls[0])
+        self.assertEqual(1, len([c for c in calls if c.startswith('gh ')]))
+        self.assertNotIn('/attempts/', ' '.join(calls))
 
     def test_an_unreadable_earlier_attempt_does_not_hide_a_failure(self):
         runs = [{'id': 99, 'conclusion': 'success'}]

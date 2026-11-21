@@ -86,7 +86,9 @@ Retries and alerts:
   attempt was cancelled, counts by its latest `success` or `failure` attempt,
   read with `gh api .../attempts/N`, and results are ordered by when they were
   observed. A failed run fixed by a rerun posts one recovery, and a rerun of an
-  old run cannot override a newer result.
+  old run cannot override a newer result. If one of those
+  lookups fails, the history counts as unreadable, so a failure still posts. The run
+  list lookup is capped at 30 seconds and the helper at 60, inside the job limit.
 - A manual dispatch always posts a failure and never posts a recovery. A
   cancelled manual run posts a failure. A cancelled scheduled run is silent,
   because the next run checks again within 30 minutes.
