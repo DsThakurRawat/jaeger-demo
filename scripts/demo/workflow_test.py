@@ -45,6 +45,35 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(source.index('    - name: Configure kubectl with OKE\n'), check)
         self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
 
+    def test_maintenance_workflows_constrain_and_verify_oci_cli_before_cluster_access(self):
+        for filename, script in (('ci-opensearch-recovery.yml', '    - name: Create and verify OpenSearch recovery point\n'),
+                                 ('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n')):
+            with self.subTest(workflow=filename):
+                source = (WORKFLOWS / filename).read_text()
+                configure_header = '    - name: Configure kubectl with OKE\n'
+                configure = source.split(configure_header, 1)[1].split('\n    - name:', 1)[0]
+                self.assertIn('      env:\n        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt\n', configure)
+                order = [source.index(step) for step in (
+                    '    - name: Checkout demo configuration\n', configure_header,
+                    '    - name: Verify OCI CLI version\n      run: python scripts/demo/verify_oci_cli.py\n',
+                    '    - name: Acquire the shared deployment lock\n', script)]
+                self.assertEqual(sorted(order), order)
+                self.assertEqual(1, source.count('verify_oci_cli.py'))
+
+    def test_recovery_diagnostics_and_cleanup_need_the_verified_lock_step(self):
+        source = (WORKFLOWS / 'ci-opensearch-recovery.yml').read_text()
+        for name, trigger in (('Collect failure diagnostics', 'failure()'), ('Remove disposable restore pod', 'always()')):
+            step = source.split('    - name: %s\n' % name, 1)[1].split('\n    - name:', 1)[0]
+            condition = re.search(r'^      if: (.+)$', step, re.MULTILINE)[1]
+            # A rejected OCI CLI check skips the lock step; kubectl must not run after it.
+            for lock in ('success', 'failure', 'cancelled', 'skipped'):
+                for job_failed in (True, False):
+                    with self.subTest(step=name, lock=lock, job_failed=job_failed):
+                        expression = condition.replace(trigger, repr(job_failed if trigger == 'failure()' else True))
+                        expression = expression.replace('steps.writer-lock.outcome', repr(lock)).replace('&&', 'and')
+                        expected = lock == 'success' and (job_failed or trigger == 'always()')
+                        self.assertEqual(expected, eval(expression, {'__builtins__': {}}, {}))
+
     def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
         for filename in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
             with self.subTest(workflow=filename):

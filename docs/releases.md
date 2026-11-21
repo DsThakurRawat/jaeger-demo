@@ -76,7 +76,9 @@ to OCI CLI 3.96.3 and the dependency versions observed in the same writer. After
 setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
 the CLI executable's version, including when the action's installed marker skips
 installation. A rejected tool check cannot start reconciliation or restore-pod
-cleanup. Credential-free CI installs and verifies these pins.
+cleanup. Credential-free CI installs and verifies these pins. The OpenSearch recovery and
+volume-expansion workflows apply the same constraint and check after checkout and
+before they acquire the deployment lock.
 Kubectl follows the live cluster's Kubernetes version; record its exact version
 and checksum along with the runner image used for handover. Supply
 `expected_config_sha` during the reviewed script handover. The workflow
