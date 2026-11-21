@@ -119,7 +119,7 @@ flowchart TB
         otel_gen -- "HTTP /dispatch" --> otel_hotrod
         otel_hotrod == "OTLP HTTP :4318" ==> otel_jaeger
         shop == "OTLP gRPC :4317" ==> otel_jaeger
-        otel_jaeger == "jaeger-main and jaeger-archive indices" ==> opensearch
+        otel_jaeger == "jaeger-main indices" ==> opensearch
         dashboards -- "queries" --> opensearch
     end
 
@@ -151,7 +151,7 @@ flowchart TB
         control["ConfigMap<br/>jaeger-demo-operations/daily-hosted-update"]
         preparer["jaeger-demo-preparer<br/>CronJob, 12:20 UTC"]
         custody[("Bundle custody")]
-        executor["jaeger-demo-executor<br/>verifies the bundle, claims the writer lock"]
+        executor["jaeger-demo-executor<br/>verifies the receipt, claims the writer lock,<br/>then decrypts the bundle"]
         oci["OCI first: default/prometheus, default/jaeger"]
         otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo"]
         outcomes[("Durable outcome records")]
@@ -160,7 +160,7 @@ flowchart TB
         preparer -- "ready request and receipt" --> control
         request -- "signal" --> control
         control -- "polled every 10 s" --> executor
-        custody -- "verified and decrypted" --> executor
+        custody -- "signed receipt, then bundle" --> executor
         executor -- "selected components" --> oci
         oci -- "health checks pass" --> otel
         executor --> outcomes

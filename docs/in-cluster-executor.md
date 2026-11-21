@@ -13,6 +13,7 @@ Each step below is described in this page, the [daily request protocol](daily-up
 sequenceDiagram
     participant P as jaeger-demo-preparer<br/>CronJob, 12:20 UTC
     participant B as Bundle custody
+    participant A as Admission approval records
     participant C as ConfigMap<br/>daily-hosted-update
     participant G as GitHub job request-daily<br/>13:00 UTC, demo-scheduled
     participant E as jaeger-demo-executor<br/>receiver
@@ -21,19 +22,25 @@ sequenceDiagram
     participant S as Slack #jaeger-operations
 
     Note over P,H: Gated: operator installation, then activation approval
-    P->>B: Freeze the plan, write the encrypted bundle, sign the dated index
-    P->>C: Stage admission approvals, publish the ready request and receipt
+    P->>B: Freeze the plan, write the encrypted bundle
+    P->>A: Stage admission approvals from the same frozen inputs
+    P->>B: Sign the dated index, including the approval digest
+    P->>A: Read the approvals back against the signed digest
+    P->>C: Publish the ready request and receipt
     G->>C: Check date, commit, engine scripts-v1 and expiry, then signal once
     loop Every 10 seconds
         E->>C: Poll the control record
     end
-    E->>B: Verify the signed receipt, decrypt the bundle
+    E->>B: Verify the signed receipt in custody
     E->>L: Claim the lock (UID and resourceVersion test)
+    E->>C: Set the request to running
+    Note over E,L: From here, any failure leaves the lock held
+    E->>B: Authenticate and decrypt the bundle
     E->>H: Compare Helm histories and live state before the first write
     E->>H: Upgrade selected components in order: default/prometheus, default/jaeger,<br/>opensearch, opensearch-dashboards, jaeger/jaeger, otel-demo
     Note over E,H: Each component passes its post-rollout health check before its checkpoint advances.<br/>A failure stops later components, so OCI health gates OTel.
     alt All checks pass
-        E->>C: running to verified
+        E->>C: Set running to verified
         E->>L: Release the lock
         E->>C: Report succeeded
     else Any check fails
