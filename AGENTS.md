@@ -25,3 +25,6 @@ output. Human approval is required for each proposed reply to review feedback.
   unresolved decision blocks progress. Do independent work while waiting.
 - Update commands, release procedures and operational documentation in the same
   PR as behavior changes. Record phase evidence without marking future work done.
+- Add a [CHANGELOG.md](CHANGELOG.md) entry in the same PR for any change an
+  operator or contributor would notice. Follow the rules in its header and in
+  [CONTRIBUTING.md](CONTRIBUTING.md#changelog). Do not claim a deployment there.
