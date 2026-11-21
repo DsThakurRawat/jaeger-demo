@@ -76,7 +76,9 @@ to OCI CLI 3.96.3 and the dependency versions observed in the same writer. After
 setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
 the CLI executable's version, including when the action's installed marker skips
 installation. A rejected tool check cannot start reconciliation or restore-pod
-cleanup. Credential-free CI installs and verifies these pins.
+cleanup. Credential-free CI installs and verifies these pins. The OpenSearch recovery and
+volume-expansion workflows apply the same constraint and check after checkout and
+before they acquire the deployment lock.
 Kubectl follows the live cluster's Kubernetes version; record its exact version
 and checksum along with the runner image used for handover. Supply
 `expected_config_sha` during the reviewed script handover. The workflow
@@ -139,7 +141,7 @@ current releases. Each successful component records its fingerprint in
 
 | Component | Helm releases | Daily action and checks |
 | --- | --- | --- |
-| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions against each chart's application version and write/read a fresh trace before recording success. |
+| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions against each chart's application version and write/read a fresh trace before recording success. After a Dashboards rollout, also run the [console and menu check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
 | OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. |
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
@@ -187,6 +189,16 @@ and storage bindings. The scheduled failure notification includes the run ID in
 `#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
 
 ## Failure handling
+
+A manual deployment or daily request job that fails, is cancelled or times out
+posts to `#jaeger-operations` with its status. The manual job is limited to
+330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
+failure diagnostics, restore-pod cleanup and the notification. The diagnostics
+and cleanup steps have their own 5- and 2-minute limits so that a hung request
+cannot use up the cancellation window. A run that is cancelled before its job starts, for example
+while it waits for approval or when a newer pending run replaces it, runs no
+steps and sends no notification
+([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
 
 A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running

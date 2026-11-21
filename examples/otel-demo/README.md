@@ -19,11 +19,10 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 - Network access to Helm repositories
 
 ## Quick start
-- Clean install (removes previous releases/namespaces, then installs everything):
-```bash path=null start=null
-./deploy-all.sh clean
-```
-- Upgrade (default) — installs if missing, upgrades if present:
+- Upgrade (default). Without a scope it deploys the `jaeger` scope only (Jaeger
+  and HotROD) and expects the OpenSearch service to exist already. It does not
+  install OpenSearch or the OpenTelemetry Demo, but it does reapply the Ingress
+  objects in the `opensearch` and `otel-demo` namespaces along with Jaeger's:
 ```bash path=null start=null
 ./deploy-all.sh
 # or explicitly
@@ -35,19 +34,38 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 # Example
 ./deploy-all.sh upgrade latest
 ```
+- Full-stack upgrade of an existing installation (OpenSearch, Jaeger and the
+  OpenTelemetry Demo). Direct script use applies the `required` recovery policy,
+  so the OpenSearch step first verifies a recent tested recovery point. See
+  [Manual recovery option](#manual-recovery-option). This is not fresh-cluster
+  setup:
+```bash path=null start=null
+JAEGER_DEMO_DEPLOY_SCOPE=all ./deploy-all.sh upgrade
+```
+- Clean install (removes previous releases/namespaces, then installs everything):
+
+> **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.**
+> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. It also removes any VolumeSnapshot and restored recovery PersistentVolumeClaim in that namespace. VolumeSnapshotContent objects with `deletionPolicy: Retain`, and the OCI backups behind them, survive, while content with `Delete` is removed together with its backup; see [OpenSearch recovery](./OPENSEARCH_RECOVERY.md#restore-after-namespace-or-workload-replacement). The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
+
+```bash path=null start=null
+./deploy-all.sh clean
+```
 
 Environment variables:
 - ROLLOUT_TIMEOUT: rollout wait timeout in seconds (default 600)
 - OPENSEARCH_DASHBOARDS_HELM_TIMEOUT: Helm wait timeout for OpenSearch Dashboards (default 60m)
 
 ```bash path=null start=null
-ROLLOUT_TIMEOUT=900 ./deploy-all.sh clean
+ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
 ```
 
 ## What gets deployed
 - Namespace `opensearch`:
   - OpenSearch (single node) StatefulSet
-  - OpenSearch Dashboards Deployment
+  - OpenSearch Dashboards Deployment. OpenSearch runs without authentication and
+    the hosted Dashboards route is public, so the Dev Tools console and Index
+    Management are disabled. Other bundled plugins can still write to the
+    cluster; do not treat the hosted Dashboards as read-only.
 - Namespace `jaeger`:
   - Jaeger all-in-one Deployment with OpenSearch-backed trace storage
   - HOTROD application
@@ -68,6 +86,14 @@ kubectl get pods -n otel-demo
 kubectl get svc -n opensearch
 kubectl get svc -n jaeger
 kubectl get svc -n otel-demo
+```
+- Dashboards console and Index Management are disabled. After a Dashboards
+  rollout, the hosted Dashboards must load, its menu must show neither Dev
+  Tools nor Index Management, and this read-only console probe must return
+  `404`:
+```bash path=null start=null
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'osd-xsrf: true' \
+  'https://opensearch.demo.jaegertracing.io/api/console/proxy?path=/&method=GET'
 ```
 
 

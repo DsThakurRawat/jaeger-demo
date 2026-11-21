@@ -25,6 +25,7 @@ expected = {
     ("examples/otel-demo/load-generator.yaml", "python"),
     ("examples/otel-demo/load-generator/requirements.txt", "requests"),
     ("scripts/demo/jaeger-chart.sh", "https://github.com/jaegertracing/helm-charts.git"),
+    ("scripts/utils/lint-requirements.txt", "ruff"),
 }
 monitoring_hooks = {
     "docker.io/library/busybox",

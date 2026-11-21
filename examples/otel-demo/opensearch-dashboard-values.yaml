@@ -15,7 +15,10 @@ config:
   opensearch_dashboards.yml: |
     server.host: 0.0.0.0
     opensearch.hosts: ["http://opensearch-cluster-single:9200"]
-    opensearch.username: "admin"
-    opensearch.password: "admin123"
     opensearch.ssl.verificationMode: none
     opensearch_security.enabled: false
+    # Dashboards is public and OpenSearch has no authentication. The Dev Tools
+    # console would proxy any REST request, including deletes, to the cluster.
+    console.enabled: false
+    # Index Management can also send requests to the cluster.
+    opensearch_index_management.enabled: false
