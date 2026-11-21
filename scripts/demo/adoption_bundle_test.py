@@ -171,9 +171,10 @@ class BundleTests(unittest.TestCase):
             index = b.canonical({i.filename: b.digest(v) for i, v in rows if i.filename != "index.json"})
             return [(i, index if i.filename == "index.json" else v) for i, v in rows]
         sha = self.rewrite(path, corrupt)
-        with self.assertRaises(yaml.YAMLError) as raw:
+        # Without the guard this surfaces as a parser error. PyYAML's pure Python loader
+        # quotes the offending line in it. The libyaml loader reports only the position.
+        with self.assertRaises(yaml.YAMLError):
             b.unseal(path, self.cipher, sha, self.commit)
-        self.assertIn("fixture-private-value", str(raw.exception))
         apply = Mock()
         with self.assertRaises(b.BundleError) as failure:
             b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
@@ -184,6 +185,17 @@ class BundleTests(unittest.TestCase):
             b.consume(path, Fernet(Fernet.generate_key()), sha, self.checkout, self.commit, self.render,
                       self.fail, apply, self.fail)
         self.assertEqual(b.PRIVATE_FAILURE, str(failure.exception))
+        # Independent of the installed parser: a failure that does quote a private value.
+        good, sha = self.build()
+        for error in (ValueError("fixture-private-value"), KeyError("fixture-private-value"),
+                      yaml.YAMLError("fixture-private-value")):
+            with self.subTest(error=type(error).__name__), patch("adoption_bundle.verify_frozen_source", side_effect=error), \
+                    self.assertRaises(b.BundleError) as failure:
+                b.consume(good, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
+            self.assertEqual(b.PRIVATE_FAILURE, str(failure.exception))
+            self.assertNotIn("fixture-private-value", repr(failure.exception))
+            self.assertIsNone(failure.exception.__cause__)
+            self.assertIsNone(failure.exception.__context__)
         apply.assert_not_called()
 
     def test_bundle_rejects_unexpected_duplicate_link_compressed_missing_or_modified_members(self):
