@@ -106,7 +106,8 @@ class RegistryTests(unittest.TestCase):
         cfg, child, index = registry_fixture()
         tag = "a" * 40
         token = (raw({"token": "fixture"}), {})
-        response = lambda body: (body, {"Docker-Content-Digest": digest(body)})
+        def response(body):
+            return (body, {"Docker-Content-Digest": digest(body)})
         with patch.object(p, "fetch", side_effect=[token, (index, {"Docker-Content-Digest": digest(cfg)})]):
             with self.assertRaisesRegex(ValueError, "manifest digest"):
                 p.registry_image(p.REPOS["jaeger"], tag)
