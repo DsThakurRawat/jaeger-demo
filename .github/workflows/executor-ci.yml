@@ -52,6 +52,10 @@ jobs:
         with open(os.environ["GITHUB_ENV"], "a") as env_file:
             print(f"MONITORING_CHART={monitoring}", file=env_file)
         PYTHON
+    # Names every rendered object the access matrix lacks, before the slower
+    # rehearsals reject the same charts without saying which object it was.
+    - name: Compare the pinned chart renders with the reviewed access matrix
+      run: python3 scripts/demo/access_matrix.py --charts "$RUNNER_TEMP/chart-sources/charts"
     - name: Verify create and delete for twelve exact hook objects and deny unapproved changes
       run: |
         python3 scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py \
