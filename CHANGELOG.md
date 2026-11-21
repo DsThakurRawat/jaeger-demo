@@ -11,9 +11,11 @@ categories: Added, Changed, Fixed, Removed and Security.
 
 A merge is not a production deployment. Deployment evidence and acceptance
 status live in [docs/MIGRATION.md](docs/MIGRATION.md) and the
-[release records](docs/releases.md). **Executor image** marks a change to a file in
+[release records](docs/releases.md). **Executor image** marks a merge for which
+`scripts/demo/guarded_changes.py` reports a changed file in
 `scheduled_inputs.GUARDED`: the daily preparation refuses to run until a matching
-executor image is published and installed.
+executor image is published and installed. The check normalizes chart pins, so a
+pin-only bump is not marked and needs no executor release.
 
 Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
@@ -38,8 +40,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `DEMO_SMOKE_ENABLED` variable.
   ([#26](https://github.com/jaegertracing/jaeger-demo/pull/26),
   fixes [#25](https://github.com/jaegertracing/jaeger-demo/issues/25))
-- Smoke check retries transient misses and posts to Slack only on a state change
-  (failed or recovered).
+- Smoke check retries transient misses. Scheduled runs post to Slack only on a
+  state change (failed or recovered); manual runs alert on every failure or
+  cancellation and never post a recovery.
   ([#48](https://github.com/jaegertracing/jaeger-demo/pull/48),
   fixes [#43](https://github.com/jaegertracing/jaeger-demo/issues/43))
 - Run observer that reports deploy and smoke runs that ended before any job
@@ -133,8 +136,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#15](https://github.com/jaegertracing/jaeger-demo/pull/15),
   refs [#11](https://github.com/jaegertracing/jaeger-demo/issues/11))
 - In-cluster executor for the daily update: GitHub signals a named ConfigMap,
-  and separate service accounts prepare and execute a signed, dated bundle. Ships
-  installed at zero replicas with the preparer suspended.
+  and separate service accounts prepare and execute a signed, dated bundle. The
+  rendered installation manifests start the receiver at zero replicas and the
+  preparer CronJob suspended; installation itself is a separate approved step.
   ([#17](https://github.com/jaegertracing/jaeger-demo/pull/17),
   refs [#11](https://github.com/jaegertracing/jaeger-demo/issues/11))
 
