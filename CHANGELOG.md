@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- OpenTelemetry Demo chart 0.42.7 (application 3.1.0): Valkey and PostgreSQL use
+  the chart's images, `product-catalog` keeps the chart's environment, and the
+  assistant stack stays disabled. **Executor image.**
+  ([#56](https://github.com/jaegertracing/jaeger-demo/pull/56),
+  fixes [#54](https://github.com/jaegertracing/jaeger-demo/issues/54))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
