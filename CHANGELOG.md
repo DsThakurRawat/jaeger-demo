@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
   ([#68](https://github.com/jaegertracing/jaeger-demo/pull/68),
   fixes [#67](https://github.com/jaegertracing/jaeger-demo/issues/67))
+- Helmfile adoption toolchain pins Helmfile v1.8.4. Its `apply` now also upgrades
+  a release that is not deployed and runs `helm list` once for each release it
+  diffs; the frozen-transaction rehearsal covers the new case.
+  ([#77](https://github.com/jaegertracing/jaeger-demo/pull/77),
+  fixes [#75](https://github.com/jaegertracing/jaeger-demo/issues/75))
 - Workload image pins: BusyBox 1.38.0, Valkey 8.1.12-alpine, PostgreSQL 17.12,
   Python 3.11.18 and `jaeger-es-index-cleaner` 2.23.0, each pinned by digest.
   ([#52](https://github.com/jaegertracing/jaeger-demo/pull/52),

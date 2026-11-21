@@ -125,6 +125,12 @@ The runner calls `reconcile(row, method, files)` in prerequisite order with the
 local chart, values and render for that release. Use native Helmfile `apply` for
 deployed releases. A failed release gets `sync` even when the diff is empty.
 An unexpected absence or pending operation blocks all selected releases.
+Since Helmfile v1.8.4, `apply` itself also upgrades a release whose latest
+revision is not `deployed`, even with an empty diff. The explicit `sync` and the
+pending-state check stay, because they decide before Helmfile runs. To learn the
+status, `apply` now runs `helm list` once for each release it diffs, which reads
+every Helm release Secret in that namespace. Count that read in the access review
+of the apply identity.
 `verify_stack(stack)` must return true after the required checks pass. OCI
 verification also gates an OTel-only run. A healthy no-op still runs the stack
 checks. Keep the lock through verification and record last-known-good only on
@@ -193,8 +199,8 @@ python3 scripts/demo/helmfile_tools.py run -- python3 \
 The fixture starts with an existing release and a packaged dependency whose
 repository is unreachable. It verifies unchanged revision and resources after
 guard rejection, a healthy no-op, a Secret-only change under suppressed diff
-output, an empty-diff failed release retry, the configured history limit and
-refusal to reinstall a deleted release.
+output, an empty-diff failed release retry with `sync` and with `apply`, the
+configured history limit and refusal to reinstall a deleted release.
 
 The [phase rehearsal](../scripts/demo/rehearsals/release-phases/exercise.py)
 uses two synthetic Helm releases on disposable Kubernetes. It checks a failed

@@ -103,12 +103,17 @@ def exercise(cfg, context):
         set_failed()
         invoke("sync")
         assert status() == (4,"deployed") and content() == "after" and records() == 3
+        # Helmfile v1.8.4 and later: apply also upgrades a release that is not deployed, even with an empty diff.
+        set_failed()
+        invoke("apply")
+        assert status() == (5,"deployed") and content() == "after" and records() == 3, "Apply skipped a failed release"
         run(helm + ["uninstall", "jaeger"])
         for method in ("apply","sync"):
             refuse(method)
             assert records() == 0 and run(ctl + ["get", "cm", "jaeger-transaction-fixture"], check=False).returncode
         print(json.dumps({"changedValuesRefusedBeforeMutation":True, "changedApplyVerified":True,
-                          "noOpRevisionUnchanged":True, "failedEmptyDiffSynced":True, "missingReleaseRefused":True,
+                          "noOpRevisionUnchanged":True, "failedEmptyDiffSynced":True, "failedEmptyDiffApplied":True,
+                          "missingReleaseRefused":True,
                           "approvedSecretOnlyChangeApplied":True, "historyLimitRespected":True}))
 
 
