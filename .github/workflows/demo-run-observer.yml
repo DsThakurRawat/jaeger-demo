@@ -34,8 +34,9 @@ jobs:
     # A job that reached a runner has steps. A job that was skipped, or was
     # cancelled while still pending, has none. started_at is set in both cases,
     # so it does not tell them apart. A run whose job did start reports itself,
-    # which is why this workflow stays silent for it. If the lookup fails, the
-    # run is reported anyway.
+    # which is why this workflow stays silent for it. If the lookup fails, times
+    # out or returns anything but a list of jobs, the run is reported anyway. The
+    # lookup is limited to 60 seconds so that a stalled API leaves time to post.
     - name: Check whether a job of the observed run started
       id: observed
       env:
@@ -45,8 +46,11 @@ jobs:
       run: |
         jobs="${RUNNER_TEMP:-/tmp}/observed-jobs.json"
         notify=true
-        if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" > "$jobs" &&
-           started=$(jq '[.jobs[] | select((.steps // []) | length > 0)] | length' "$jobs") &&
+        count='if (.jobs | type) == "array" and all(.jobs[]; type == "object" and ((.steps // []) | type) == "array")
+          then [.jobs[] | select((.steps // []) | length > 0)] | length
+          else error("unexpected job list") end'
+        if timeout 60 gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" > "$jobs" &&
+           started=$(jq "$count" "$jobs") &&
            [[ "$started" =~ ^[0-9]+$ ]]; then
           if [ "$started" -gt 0 ]; then
             notify=false

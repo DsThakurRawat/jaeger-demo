@@ -43,8 +43,8 @@ def job(steps=None, conclusion='cancelled', **extra):
 
 
 class RunObserverTests(unittest.TestCase):
-    def run_lookup(self, response=None, gh_status=0):
-        """Run the lookup step with a stub gh and return (result, notify output, gh arguments)."""
+    def run_lookup(self, response=None, gh_status=0, timeout='shift\nexec "$@"'):
+        """Run the lookup step with stub gh and timeout and return (result, notify output, their arguments)."""
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)
             (temp / 'response.json').write_text(response if response is not None else '')
@@ -53,6 +53,9 @@ class RunObserverTests(unittest.TestCase):
             stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
                             f'cat "{temp / "response.json"}"\nexit {gh_status}\n')
             stub.chmod(0o755)
+            limit = temp / 'bin' / 'timeout'
+            limit.write_text('#!/usr/bin/env bash\nprintf "timeout %s\\n" "$1" >> "$GH_CALLS"\n' + timeout + '\n')
+            limit.chmod(0o755)
             output = temp / 'output'
             output.write_text('')
             env = {'PATH': f'{stub.parent}:{os.environ["PATH"]}', 'GH_CALLS': str(temp / 'calls'),
@@ -125,7 +128,7 @@ class RunObserverTests(unittest.TestCase):
                 result, output, calls = self.run_lookup(json.dumps(response))
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual('notify=true\n', output)
-                self.assertEqual(['api repos/jaegertracing/jaeger-demo/actions/runs/123/attempts/2/jobs?per_page=100'], calls)
+                self.assertEqual(['timeout 60', 'api repos/jaegertracing/jaeger-demo/actions/runs/123/attempts/2/jobs?per_page=100'], calls)
 
     def test_a_run_whose_job_started_reports_itself_and_is_not_reported_again(self):
         cases = {
@@ -146,6 +149,11 @@ class RunObserverTests(unittest.TestCase):
             'not JSON': ('<html>', 0),
             'no jobs key': ('{"message": "Not Found"}', 0),
             'failed after a valid reply': (json.dumps({'jobs': [job(steps=5)]}), 1),
+            'jobs is an object': (json.dumps({'jobs': {'unexpected': {'steps': [{}]}}}), 0),
+            'steps is a string': (json.dumps({'jobs': [{'steps': 'not an array'}]}), 0),
+            'steps is a number': (json.dumps({'jobs': [job(steps=3), {'steps': 7}]}), 0),
+            'a job is not an object': (json.dumps({'jobs': [job(steps=3), 'job']}), 0),
+            'jobs is null': (json.dumps({'jobs': None}), 0),
         }
         for name, (response, status) in cases.items():
             with self.subTest(case=name):
@@ -153,6 +161,19 @@ class RunObserverTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual('notify=true\n', output)
                 self.assertIn('::warning::Could not read the jobs of run 123', result.stdout)
+
+    def test_a_stalled_lookup_is_cut_off_in_time_to_report_the_run(self):
+        # timeout(1) exits 124 without output when it has to stop the command.
+        result, output, calls = self.run_lookup(json.dumps({'jobs': [job(steps=5)]}), timeout='exit 124')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('notify=true\n', output)
+        self.assertEqual(['timeout 60'], calls)
+        self.assertIn('::warning::Could not read the jobs of run 123', result.stdout)
+        limits = [int(seconds) for seconds in re.findall(r'\btimeout (\d+) ', LOOKUP['run'])]
+        self.assertEqual([60], limits)
+        self.assertEqual(1, LOOKUP['run'].count('gh api'))
+        # The lookup may use at most a third of the job limit, which leaves the rest for the post.
+        self.assertLessEqual(sum(limits) * 3, JOB['timeout-minutes'] * 60)
 
     def test_slack_step_follows_the_lookup_and_fails_open(self):
         condition = SLACK['if']
