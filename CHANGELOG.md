@@ -102,6 +102,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   handover status.
   ([#28](https://github.com/jaegertracing/jaeger-demo/pull/28),
   fixes [#27](https://github.com/jaegertracing/jaeger-demo/issues/27))
+- OpenTelemetry Demo chart pin moves from 0.40.9 to 0.42.7 (application 3.1.0),
+  with the assistant stack and OpAMP server disabled and Valkey and PostgreSQL on
+  the chart's images. The object set changes, so the release needs a
+  [manual upgrade](docs/releases.md#when-a-change-alters-a-releases-objects)
+  before a scheduled run accepts it. **Executor image.**
+  ([#56](https://github.com/jaegertracing/jaeger-demo/pull/56),
+  fixes [#54](https://github.com/jaegertracing/jaeger-demo/issues/54))
 - OTel stack README leads with `upgrade` and warns that `clean` deletes the
   OpenSearch volume claim without a backup.
   ([#30](https://github.com/jaegertracing/jaeger-demo/pull/30),
@@ -113,8 +120,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1))
 - kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1, with values that
   keep the release inside the executor's hook and Secret rules. It needs an
-  operator installation review and a manual upgrade before a scheduled run
-  accepts it. **Executor image.**
+  operator installation review and a
+  [manual upgrade](docs/releases.md#when-a-change-alters-a-releases-objects)
+  before a scheduled run accepts it. **Executor image.**
   ([#59](https://github.com/jaegertracing/jaeger-demo/pull/59),
   fixes [#58](https://github.com/jaegertracing/jaeger-demo/issues/58))
 

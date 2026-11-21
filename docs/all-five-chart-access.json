@@ -5,10 +5,18 @@
   "chartArchiveSHA256": {
     "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
     "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",
-    "opentelemetry-demo-0.40.9.tgz": "33a381a62b2f8c6031cdee2935103877a5958af14a1f5d985d39602b53e6e07b",
+    "opentelemetry-demo-0.42.7.tgz": "8641be206f5282f3c489a4fd8481d343039d1c21298e37feb6d324e6997a3f89",
     "kube-prometheus-stack-93.6.1.tgz": "6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4"
   },
   "rederived": [
+    {
+      "release": "otel-demo/otel-demo",
+      "chartArchive": "opentelemetry-demo-0.42.7.tgz",
+      "valuesSHA256": {
+        "examples/otel-demo/otel-demo-values.yaml": "847f55e67a4eedc75877024ede83b06692d1b338472d0f8db207cae9926ceff3"
+      },
+      "method": "python3 scripts/demo/access_matrix.py"
+    },
     {
       "release": "default/prometheus",
       "chartArchive": "kube-prometheus-stack-93.6.1.tgz",
@@ -390,19 +398,6 @@
       "scope": "otel-demo",
       "apiGroup": "",
       "resource": "services",
-      "name": "llm",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "",
-      "resource": "services",
       "name": "load-generator",
       "verbs": [
         "get",
@@ -429,33 +424,7 @@
       "scope": "otel-demo",
       "apiGroup": "",
       "resource": "services",
-      "name": "postgresql",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "",
-      "resource": "services",
       "name": "product-catalog",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "",
-      "resource": "services",
-      "name": "product-reviews",
       "verbs": [
         "get",
         "patch"
@@ -689,19 +658,6 @@
       "scope": "otel-demo",
       "apiGroup": "apps",
       "resource": "deployments",
-      "name": "llm",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "apps",
-      "resource": "deployments",
       "name": "load-generator",
       "verbs": [
         "get",
@@ -728,33 +684,7 @@
       "scope": "otel-demo",
       "apiGroup": "apps",
       "resource": "deployments",
-      "name": "postgresql",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "apps",
-      "resource": "deployments",
       "name": "product-catalog",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "apps",
-      "resource": "deployments",
-      "name": "product-reviews",
       "verbs": [
         "get",
         "patch"
@@ -807,6 +737,71 @@
       "apiGroup": "apps",
       "resource": "deployments",
       "name": "valkey-cart",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "product-catalog-product-catalog-otel-config",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "astronomy-db",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "services",
+      "name": "telemetry-docs",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "astronomy-db",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "otel-demo",
+      "release": "otel-demo",
+      "scope": "otel-demo",
+      "apiGroup": "apps",
+      "resource": "deployments",
+      "name": "telemetry-docs",
       "verbs": [
         "get",
         "patch"
