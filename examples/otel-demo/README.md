@@ -21,7 +21,8 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 ## Quick start
 - Upgrade (default). Without a scope it deploys the `jaeger` scope only (Jaeger
   and HotROD) and expects the OpenSearch service to exist already. It does not
-  install OpenSearch or the OpenTelemetry Demo:
+  install OpenSearch or the OpenTelemetry Demo, but it does reapply the Ingress
+  objects in the `opensearch` and `otel-demo` namespaces along with Jaeger's:
 ```bash path=null start=null
 ./deploy-all.sh
 # or explicitly
@@ -44,7 +45,7 @@ JAEGER_DEMO_DEPLOY_SCOPE=all ./deploy-all.sh upgrade
 - Clean install (removes previous releases/namespaces, then installs everything):
 
 > **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.**
-> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. It also removes any VolumeSnapshot and restored recovery PersistentVolumeClaim in that namespace. Retained VolumeSnapshotContent objects and OCI backups survive; see [OpenSearch recovery](./OPENSEARCH_RECOVERY.md#restore-after-namespace-or-workload-replacement). The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
+> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. It also removes any VolumeSnapshot and restored recovery PersistentVolumeClaim in that namespace. VolumeSnapshotContent objects with `deletionPolicy: Retain`, and the OCI backups behind them, survive, while content with `Delete` is removed together with its backup; see [OpenSearch recovery](./OPENSEARCH_RECOVERY.md#restore-after-namespace-or-workload-replacement). The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
 
 ```bash path=null start=null
 ./deploy-all.sh clean
