@@ -14,27 +14,83 @@ permissions:
 jobs:
   smoke:
     name: Public demo health
-    # Scheduled runs wait for the opt-in switch. Keep it off until the check
-    # retries transient misses and alerts only on a state change. Manual
-    # dispatch is always available.
+    # Scheduled runs wait for the opt-in switch. Manual dispatch is always
+    # available.
     if: github.repository == 'jaegertracing/jaeger-demo' && (github.event_name != 'schedule' || vars.DEMO_SMOKE_ENABLED == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Worst case: each stack check is 3 attempts of at most 150 s (one
+    # stack_health.py run makes up to 9 requests with a 15 s socket timeout, so
+    # about 135 s) with a 20 s pause between attempts, which is
+    # 3 * 150 + 2 * 20 = 490 s. Two stacks take 980 s, about 16.3 minutes,
+    # and checkout and the alert decision add about a minute.
+    timeout-minutes: 20
+    # actions: read lets the alert decision list earlier runs of this workflow.
+    permissions:
+      actions: read
+      contents: read
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
         persist-credentials: false
+
+    # stack_health.py has no retry, and a change to it needs an executor image
+    # release, so the step reruns it. The step fails only when all attempts fail.
     - name: Check the OCI demo
-      run: python3 scripts/demo/stack_health.py --stack oci
+      run: |
+        for attempt in 1 2 3; do
+          if timeout 150 python3 scripts/demo/stack_health.py --stack oci; then
+            exit 0
+          fi
+          echo "::warning::The oci check failed (attempt $attempt of 3)"
+          if [ "$attempt" -lt 3 ]; then
+            sleep 20
+          fi
+        done
+        echo "::error::The oci check failed 3 times"
+        exit 1
+
     - name: Check the OpenTelemetry demo
       if: ${{ !cancelled() }}
-      run: python3 scripts/demo/stack_health.py --stack otel
+      run: |
+        for attempt in 1 2 3; do
+          if timeout 150 python3 scripts/demo/stack_health.py --stack otel; then
+            exit 0
+          fi
+          echo "::warning::The otel check failed (attempt $attempt of 3)"
+          if [ "$attempt" -lt 3 ]; then
+            sleep 20
+          fi
+        done
+        echo "::error::The otel check failed 3 times"
+        exit 1
+
+    # Post on a state change only. smoke_alert.py compares this result with the
+    # last completed scheduled runs. If the lookup fails, a failure still alerts.
+    - name: Decide whether to notify
+      id: alert
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RESULT: ${{ job.status }}
+        EVENT_NAME: ${{ github.event_name }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        history="${RUNNER_TEMP:-/tmp}/smoke-history.json"
+        if ! gh api "repos/$GITHUB_REPOSITORY/actions/workflows/demo-smoke.yml/runs?event=schedule&status=completed&per_page=10" > "$history"; then
+          echo "::warning::Could not read earlier runs; a failure will still notify"
+          rm -f "$history"
+        fi
+        if ! action=$(python3 scripts/demo/smoke_alert.py --result "$RESULT" --event "$EVENT_NAME" --run-id "$RUN_ID" --history "$history"); then
+          echo "::warning::The alert decision failed; a failure will still notify"
+          if [ "$RESULT" = success ]; then action=none; else action=failed; fi
+        fi
+        printf 'action=%s\n' "$action" >> "$GITHUB_OUTPUT"
 
     # SLACK_WEBHOOK_URL is the only secret used. It is a repository-level
     # secret only, with no deploy environment copy, and this job has no
     # environment.
     - name: Send Slack notification on failure
-      if: failure() || cancelled()
+      if: always() && steps.alert.outputs.action == 'failed'
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
       env:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -49,6 +105,28 @@ jobs:
           *Run ID:* ${{ github.run_id }}
           *Trigger:* ${{ github.event_name }}
           *Actor:* ${{ github.actor }}
+          Each stack check ran up to 3 times before this alert.
 
           <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Failed Run>
+        SLACK_FOOTER: 'Jaeger CI/CD Pipeline'
+
+    - name: Send Slack notification on recovery
+      if: always() && steps.alert.outputs.action == 'recovered'
+      uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
+      env:
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        SLACK_CHANNEL: '#jaeger-operations'
+        SLACK_COLOR: good
+        SLACK_USERNAME: 'Jaeger CI Bot'
+        SLACK_ICON_EMOJI: ':white_check_mark:'
+        SLACK_TITLE: '✅ Jaeger Public Demo Smoke Check Recovered'
+        SLACK_MESSAGE: |
+          *Repository:* ${{ github.repository }}
+          *Workflow:* ${{ github.workflow }}
+          *Run ID:* ${{ github.run_id }}
+          *Trigger:* ${{ github.event_name }}
+
+          The public demos pass again after a failing run.
+
+          <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|🔗 View Run>
         SLACK_FOOTER: 'Jaeger CI/CD Pipeline'

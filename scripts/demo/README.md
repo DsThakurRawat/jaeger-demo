@@ -65,15 +65,43 @@ and OCI infrastructure/add-on maintenance is outside this workflow.
 on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stacks,
 `scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
 Jaeger UI tracking configuration, recent application spans and finite span
-metrics. A failure or cancellation posts to Slack through `SLACK_WEBHOOK_URL`.
+metrics.
+
+Retries and alerts:
+
+- Each stack check runs up to three times, 20 seconds apart, and each attempt is
+  killed after 150 seconds. The step fails only when all three attempts fail, so
+  one slow probe does not fail a run. The job limit is 20 minutes, above the
+  worst case of about 16 minutes. The retry lives in the workflow because
+  `stack_health.py` is a guarded executor input.
+- A final step runs `scripts/demo/smoke_alert.py` with this run's result, the
+  event and the conclusions of the last 10 completed scheduled runs. A failure
+  posts to Slack through `SLACK_WEBHOOK_URL` only when the previous scheduled
+  run with a `success` or `failure` conclusion did not fail. A success posts a
+  green recovery message only when that run failed. A four-hour outage posts one
+  failure and one recovery. Earlier `cancelled`, `skipped` and other
+  inconclusive runs are skipped when looking back.
+- If the history cannot be read or holds no usable result, a failure still
+  posts and a success stays silent.
+- A manual dispatch always posts a failure and never posts a recovery. A
+  cancelled manual run posts a failure. A cancelled scheduled run is silent,
+  because the next run checks again within 30 minutes.
+- The job has `actions: read` and `contents: read`, and reads history with the
+  workflow token.
 
 Scheduled runs are off until the repository variable `DEMO_SMOKE_ENABLED` is
 `true`; manual dispatch always works. `SLACK_WEBHOOK_URL` is a repository-level
 secret only; no deploy environment holds a copy, and this job has no
-environment. Do not turn the switch on until the check retries a transient
-miss and posts only when the result changes. Today one slow probe fails a run,
-and every failed run posts. Once retry and deduplication have landed
-([#43](https://github.com/jaegertracing/jaeger-demo/issues/43)), enable it with:
+environment. Before enabling the schedule, run the workflow once by hand and
+confirm that it passes and that the "Decide whether to notify" step shows no
+"Could not read earlier runs" warning, which proves the history lookup and the
+token scope:
+
+```bash
+gh workflow run demo-smoke.yml --repo jaegertracing/jaeger-demo
+```
+
+Then enable the schedule:
 
 ```bash
 gh variable set DEMO_SMOKE_ENABLED --body true --repo jaegertracing/jaeger-demo
@@ -86,6 +114,8 @@ Known limits:
   block merges and until it is deployed, every run fails. Set
   `DEMO_SMOKE_ENABLED` to `false` when merging such a change and restore it
   after deployment.
+- A failing run whose Slack post fails is not announced again, because the next
+  failing run sees a failing predecessor.
 - A run that is cancelled or fails before its job starts sends no notification.
   The next run checks again within 30 minutes
   ([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
