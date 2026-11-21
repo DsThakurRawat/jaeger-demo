@@ -16,5 +16,6 @@ List local checks and CI evidence. State any remaining operational acceptance ga
 - [ ] The change is requested by an existing open issue and stays in its scope.
 - [ ] I ran the required checks and understand the implementation.
 - [ ] I updated relevant documentation and release procedures.
+- [ ] I added a [CHANGELOG.md](../CHANGELOG.md) entry, or this change needs none.
 - [ ] My commits include DCO sign-off.
 - [ ] I used AI assistance and reviewed the output under [AI_POLICY.md](../AI_POLICY.md).
