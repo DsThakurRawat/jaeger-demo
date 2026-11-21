@@ -34,6 +34,19 @@ and changes that only restate existing behavior need no entry.
 - A merge is not a deployment. Record production evidence in the release record
   and [docs/MIGRATION.md](docs/MIGRATION.md), not in the changelog.
 
+The `Changelog entry` check enforces this on every PR. It fails when a changed
+file other than a test (`*_test.py`, `*.test.sh`) or `CHANGELOG.md` has no new
+entry under a date and category heading. Rewording or moving an existing entry
+does not count as a new one. For a change that needs no entry, a maintainer applies
+the `skip-changelog` label, which reruns the check. The check also validates the
+heading structure (dates newest first, known categories) and warns when a new
+entry is not under today's UTC date or does not link the PR yet. Run it locally
+before pushing:
+
+```bash
+python3 scripts/demo/changelog_check.py origin/main HEAD
+```
+
 ## Local checks
 
 Install Bash, Python 3.11 or later with PyYAML and cryptography, Git, jq, Helm, ShellCheck, actionlint and ruff
