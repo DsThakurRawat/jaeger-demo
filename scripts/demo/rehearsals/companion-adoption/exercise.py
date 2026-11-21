@@ -102,24 +102,29 @@ def exercise(cfg, context):
             obj["metadata"]["uid"], obj.get("spec"), obj.get("data")
         ) for i in desired for obj in [get(i)]}
 
-    before = states()
-    for resource in desired:
-        assert resource["patch"]
-        kube(["-n", resource["namespace"], "patch", resource["kind"], resource["name"], "--type=json",
-              "--patch", json.dumps(resource["patch"])])
-    assert not any(i["patch"] for i in companion_ownership.plan(str(cfg), context))
-    assert before == states()
-
-    # Frozen companion transaction, as production runs it from an approved bundle.
-    name = companion_ownership.RELEASE
-    refusals = 0
-
     def full_states():
         # Identity, payload and every label and annotation, so a metadata-only write is visible too.
         return {(i["namespace"], i["kind"], i["name"]): {
             "uid": obj["metadata"]["uid"], "spec": obj.get("spec"), "data": obj.get("data"),
             "labels": obj["metadata"].get("labels", {}), "annotations": obj["metadata"].get("annotations", {}),
         } for i in desired for obj in [get(i)]}
+
+    before = states()
+    original = full_states()
+    assert all(resource["patch"] for resource in desired)
+    # Apply the reviewed plan with the documented script. The same plan is the record for de-adoption.
+    frozen_work = tempfile.TemporaryDirectory()
+    work = Path(frozen_work.name)
+    recorded = work / "ownership.json"
+    recorded.write_text(json.dumps(desired))
+    apply_script = str(ROOT / "scripts" / "demo" / "apply-ownership-patches.sh")
+    subprocess.run(["bash", apply_script, str(recorded), str(cfg), context], check=True, stdout=subprocess.DEVNULL)
+    assert not any(i["patch"] for i in companion_ownership.plan(str(cfg), context))
+    assert before == states()
+
+    # Frozen companion transaction, as production runs it from an approved bundle.
+    name = companion_ownership.RELEASE
+    refusals = 0
 
     def unchanged(expected, step):
         actual = full_states()
@@ -143,8 +148,6 @@ def exercise(cfg, context):
         return {"id": ns + "/" + name, "helm": {"operation": operation, "atomic": False, "wait": "legacy",
                 "timeoutSeconds": 300, "historyMax": 10, "skipCRDs": False, "createNamespace": False}}
 
-    frozen_work = tempfile.TemporaryDirectory()
-    work = Path(frozen_work.name)
     subprocess.run(["helm", "package", str(ROOT / "charts" / "demo-resources"), "--destination", str(work)],
                    check=True, stdout=subprocess.DEVNULL)
     archive, = work.glob("demo-resources-*.tgz")
@@ -251,17 +254,38 @@ def exercise(cfg, context):
     approved = frozen(ns, values["companions"][ns]["objects"])
     refusals += refused(ns, "install", approved, [(1, "failed")])
     snapshot = full_states()
-    kube(["-n", ns, "delete", "secret", secret])
+    selector = "owner=helm,name=" + name
+    kube(["-n", ns, "delete", "secret", "-l", selector])
     assert stored(ns) == []
     unchanged(snapshot, f"Removing the stored release record in {ns}")
     refusals += frozen_install(ns)
+
+    # Companion rollback with the commands in docs/cutover.md: remove only the stored release
+    # records, then only the recorded ownership metadata. The objects return to their state
+    # before adoption and the source manifests apply with no difference.
+    for ns in first_contact:
+        kube(["-n", ns, "delete", "secret", "-l", selector])
+        assert stored(ns) == []
+        release = work / (ns + "-de-adoption.json")
+        release.write_text(json.dumps(companion_ownership.release_plan(str(cfg), context, recorded, ns)))
+        subprocess.run(["bash", apply_script, str(release), str(cfg), context], check=True, stdout=subprocess.DEVNULL)
+        assert not any(i["patch"] for i in companion_ownership.release_plan(str(cfg), context, recorded, ns))
+        def additions(items):
+            return {(i["kind"], i["name"]): [op for op in i["patch"] if op["path"] != "/metadata/resourceVersion"]
+                    for i in items if i["namespace"] == ns}
+        assert additions(companion_ownership.plan(str(cfg), context, ns)) == additions(desired), f"{ns} is not ready for a fresh adoption"
+        for obj in values["companions"][ns]["objects"]:
+            diff = subprocess.run(kubectl + ["-n", ns, "diff", "-f", "-"], input=json.dumps(obj), text=True, capture_output=True)
+            assert diff.returncode == 0, f"De-adopted {ns}/{obj['kind']}/{obj['metadata']['name']} differs from its source"
+    unchanged({key: fields for key, fields in original.items() if key[0] in first_contact}, "Adoption followed by de-adoption")
     frozen_work.cleanup()
     print(json.dumps({"objectsPreserved": len(before), "releases": len(revisions),
                       "secondApplyCreatedRevisions": 0, "deploymentRestartAnnotationsPreserved": True,
                       "readOnlyPlan": True, "foreignOwnerRejected": True, "removedServiceKept": True,
                       "frozenFirstContactNamespaces": len(first_contact), "frozenRefusalsWithoutChange": refusals,
                       "frozenNoOpCreatedRevisions": 0, "failedFirstInstallRecovered": True,
-                      "recordRemovalKeptObjects": True}))
+                      "recordRemovalKeptObjects": True, "deAdoptedNamespaces": len(first_contact),
+                      "deAdoptionRestoredMetadata": True}))
 
 
 if __name__ == "__main__":

@@ -384,6 +384,118 @@ release metadata to de-adopt kept objects, and reapplies captured specs. Never u
 OpenSearch downgrade as a generic rollback. The old scripts can be a fallback only
 after de-adoption has completed.
 
+The commands for the ownership patches and for the companion rollback follow. The
+commands that run an approved bundle belong to the executor integration, which is
+not complete. See the [bundle contract](helmfile-bundles.md#verify-and-consume).
+
+### Apply the ownership patches
+
+Run this under the deployment lock, after the bundle is approved and before the
+first companion install. The planner reads the twelve allowlisted objects by name
+with the read-only plan identity. Each patch adds only the Helm ownership label,
+the two release annotations and the keep policy, and tests the UID and resource
+version it was planned for.
+
+```bash
+umask 077
+work=$(mktemp -d)
+python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
+  --context "$PLAN_CONTEXT" > "$work/ownership.json"
+```
+
+Review the plan. Store `ownership.json` with the private deployment record. It is
+the only input that de-adoption accepts. Then apply it with the write identity,
+which needs `patch` on the twelve named objects and nothing else for this step:
+
+```bash
+bash scripts/demo/apply-ownership-patches.sh "$work/ownership.json" \
+  "$APPLY_KUBECONFIG" "$APPLY_CONTEXT"
+python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
+  --context "$PLAN_CONTEXT" | jq -e 'all(.[]; .patch == [])'
+```
+
+The script refuses a plan that contains anything other than guarded label and
+annotation changes on the four allowlisted kinds, and stops at the first failed
+patch. A patch fails without a write when its object changed after planning. Plan
+again, review the new plan and replace the stored record. The second command must
+exit 0: an adopted object needs no further patch. Pass `--namespace default` to
+both planner commands to limit them to the OCI stack, or one OTel namespace at a time.
+
+### De-adopt companion releases
+
+Use this to roll back companion ownership, and to recover from a first companion
+install that left failed revision 1. Stop automation first, as in
+[If the handover fails](#if-the-handover-fails), and hold the deployment lock.
+Repeat the steps for each namespace `$ns` to de-adopt. `$RECORD` is the directory
+that holds the stored `ownership.json`.
+
+1. Remove only the stored release records. The listing prints names and statuses,
+   not Secret contents. The objects of the release are not touched.
+
+   ```bash
+   kubectl --kubeconfig "$APPLY_KUBECONFIG" --context "$APPLY_CONTEXT" --namespace "$ns" \
+     get secret --selector owner=helm,name=demo-resources \
+     --output custom-columns=NAME:.metadata.name,STATUS:.metadata.labels.status
+   kubectl --kubeconfig "$APPLY_KUBECONFIG" --context "$APPLY_CONTEXT" --namespace "$ns" \
+     delete secret --selector owner=helm,name=demo-resources
+   ```
+
+2. Plan the metadata removal read-only and review it. It removes exactly the fields
+   that the stored adoption plan added. It refuses an object with another UID, an
+   ownership value that changed since adoption, and a record that names anything
+   outside the allowlist.
+
+   ```bash
+   python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
+     --context "$PLAN_CONTEXT" --namespace "$ns" \
+     --de-adopt "$RECORD/ownership.json" > "$work/de-adoption-$ns.json"
+   ```
+
+3. Apply it and verify. The planner must then print only empty patches, and Helm
+   must report that the release is not found.
+
+   ```bash
+   bash scripts/demo/apply-ownership-patches.sh "$work/de-adoption-$ns.json" \
+     "$APPLY_KUBECONFIG" "$APPLY_CONTEXT"
+   python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
+     --context "$PLAN_CONTEXT" --namespace "$ns" \
+     --de-adopt "$RECORD/ownership.json" | jq -e 'all(.[]; .patch == [])'
+   helm --kubeconfig "$PLAN_KUBECONFIG" --kube-context "$PLAN_CONTEXT" \
+     --namespace "$ns" status demo-resources
+   ```
+
+4. Compare each object with its source at the recorded configuration commit, from
+   a clean checkout of that commit. Adoption changes metadata only, so no
+   difference is expected. Apply a source only after reviewing a reported difference.
+
+   ```bash
+   python3 scripts/demo/companion_values.py > "$work/sources.json"
+   jq -c --arg ns "$ns" '.companions[$ns].objects[]' "$work/sources.json" |
+     while IFS= read -r object; do
+       kubectl --kubeconfig "$APPLY_KUBECONFIG" --context "$APPLY_CONTEXT" --namespace "$ns" \
+         diff --filename - <<<"$object" || echo "Review the difference above"
+     done
+   ```
+
+   ```bash
+   kubectl --kubeconfig "$APPLY_KUBECONFIG" --context "$APPLY_CONTEXT" --namespace "$ns" \
+     apply --filename reviewed-object.json
+   ```
+
+Step 1 needs `list` and `delete` on Secrets in the namespace. Kubernetes cannot
+limit a list to Helm records, so review that access like the observer's. Steps 2
+to 4 need named `get` and `patch` on the allowlisted objects. For a failed first
+install, stop after step 1 when the ownership metadata should stay for a fresh
+install plan.
+
+The [kind rehearsal](helmfile-companions.md#rehearse-in-a-fresh-local-cluster) runs
+the planner in both directions, the apply script, the record removal and the source
+comparison. It checks that the adoption patches change no UID, spec or payload,
+that removing the release records changes no object, and that after de-adoption
+every label and annotation equals its value before adoption, the planner proposes
+the original adoption again and each source manifest shows no difference. OKE
+authentication and the production RBAC for these commands are not rehearsed.
+
 Verified initial adoption unlocks guarded automation. Final acceptance requires
 successful scheduled refresh and reviewed Renovate chart update, a healthy no-op
 apply, at least 24 hours of observation, and verified documentation/release

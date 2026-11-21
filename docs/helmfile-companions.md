@@ -25,6 +25,8 @@ python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
   --context "$PLAN_CONTEXT" > "$work/ownership.json"
 ```
 
+Apply a reviewed plan with `scripts/demo/apply-ownership-patches.sh`, and reverse a stored plan with the planner's `--de-adopt` option. The exact commands are in [Apply the ownership patches](cutover.md#apply-the-ownership-patches) and [De-adopt companion releases](cutover.md#de-adopt-companion-releases).
+
 This ownership plan is one input to the reviewed deployment bundle. The production decision also requires full configuration and live-state comparison, including chart inputs, Services, pod templates and rollback state. Keep raw production inventory and release data in private storage.
 
 ## Rehearse in a fresh local cluster
@@ -36,6 +38,8 @@ The direct `helmfile apply` in this test checks the chart and the state file. It
 The test exercises that callback first, on objects that only kubectl and the ownership patches have written, as in production. An upgrade of the absent release, unapproved values and an object without this release's ownership metadata are each refused with no stored release and no change to any UID, spec, payload, label or annotation. The frozen install must then produce deployed revision 1 with those same fields unchanged. A second install is refused, and the frozen upgrade path adds no revision. The kind run does this in the `otel-demo` and `jaeger` namespaces. Envtest covers `otel-demo` only, because it runs no workload controllers. The direct apply that follows must find nothing to change in those namespaces.
 
 The last step rehearses recovery from a failed first install in `opensearch`. It marks the stored revision 1 as failed, confirms that an install is refused, removes only that stored release record and confirms that no object changed. A frozen install then adopts the unchanged objects again. The test never runs `helm uninstall`.
+
+The test applies the adoption plan with the documented script. At the end it de-adopts the first-contact namespaces with the documented commands. Every label and annotation must equal its value before adoption, the planner must propose the original adoption again, and each source manifest must show no difference.
 
 ```bash
 kind create cluster --name jaeger-demo-adoption-fixture --kubeconfig "$work/kind.yaml" \

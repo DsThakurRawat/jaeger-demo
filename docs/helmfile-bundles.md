@@ -164,12 +164,12 @@ A name in use, a rejected render and an ownership conflict all stop before Helm
 stores a release record. A failure after that point, such as a wait timeout,
 leaves failed revision 1. The observer has no successful rollback target for it
 and refuses the release, so this needs operator recovery. Stop automation and
-follow the companion rollback in [cutover.md](cutover.md#later-helmfile-adoption):
-de-adopt by removing only the recorded companion release metadata. Never use
-`helm uninstall` on a companion release. Then review a fresh install plan. The
-kind rehearsal constructs a failed revision 1, removes only that stored release
-record with every object unchanged, and installs again through the callback.
-The exact production commands for this recovery are not part of this tooling yet.
+follow [De-adopt companion releases](cutover.md#de-adopt-companion-releases):
+remove only the stored release records, and the recorded ownership metadata when
+rolling back. Never use `helm uninstall` on a companion release. Then review a
+fresh install plan. The kind rehearsal constructs a failed revision 1, removes
+only its stored release record with every object unchanged, and installs again
+through the callback.
 
 The callback discards both subprocess output streams, including failure output.
 It uses the exact trusted kubeconfig and context passed by the runtime and refuses
