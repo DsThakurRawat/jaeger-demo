@@ -11,7 +11,7 @@ from unittest.mock import patch
 import yaml
 
 from adoption_bundle import BundleError
-from helmfile_transaction import reconcile_existing
+from helmfile_transaction import reconcile, reconcile_companion, reconcile_existing
 
 
 class TransactionTests(unittest.TestCase):
@@ -82,6 +82,68 @@ class TransactionTests(unittest.TestCase):
             with patch.dict(os.environ, {"JAEGER_HELMFILE_TOOLCHAIN": ""}), self.assertRaises(BundleError):
                 self.call("sync")
             execute.assert_not_called()
+
+    def companion(self, operation, **options):
+        helm = dict(self.row["helm"], operation=operation, atomic=False, skipCRDs=False)
+        return {"id": "opensearch/demo-resources", "helm": dict(helm, **options)}
+
+    def test_first_companion_install_uses_pinned_helm_install_with_the_frozen_guard(self):
+        paths = []
+        def execute(command, *, cwd, env, stdin, stdout, stderr):
+            paths.append(cwd)
+            self.assertEqual((stdin, stdout, stderr), (subprocess.DEVNULL,) * 3)
+            self.assertEqual((cwd.stat().st_mode & 0o777, env["HOME"], env["TMPDIR"]), (0o700, str(cwd), str(cwd)))
+            self.assertFalse({"OCI_CLI_KEY_CONTENT", "HELMFILE_ENVIRONMENT", "HELM_DIFF_IGNORE_UNKNOWN_FLAGS"} & env.keys())
+            self.assertEqual(Path(env["JAEGER_APPROVED_MANIFEST"]), cwd / "postrender.yaml")
+            for name, content in self.files.items():
+                self.assertEqual((cwd / name).read_bytes(), content)
+                self.assertEqual((cwd / name).stat().st_mode & 0o777, 0o600)
+            self.assertFalse((cwd / "helmfile.yaml").exists())
+            self.assertEqual(command, [
+                self.root / "bin/helm", "install", "demo-resources", "./chart.tgz", "--namespace", "opensearch",
+                "--kubeconfig", str(self.kubeconfig.resolve()), "--kube-context", "fixture", "--values=./values.yaml",
+                "--post-renderer", "verify-frozen-manifests", "--wait=legacy", "--timeout", "45s",
+                "--rollback-on-failure=false", "--skip-crds=false", "--create-namespace=false"])
+            return subprocess.CompletedProcess(command, 0)
+        with patch("helmfile_transaction.subprocess.run", side_effect=execute):
+            reconcile(self.companion("install"), "apply", self.files, kubeconfig=self.kubeconfig, context="fixture")
+        self.assertEqual(1, len(paths))
+        self.assertFalse(paths[0].exists())
+
+    def test_installed_companion_uses_the_same_guarded_helmfile_upgrade_as_an_application(self):
+        commands = []
+        def execute(command, *, cwd, **kwargs):
+            state = yaml.safe_load((cwd / "helmfile.yaml").read_bytes())
+            commands.append((command[10], state["releases"], [a for a in command if str(a).startswith("--sync-args=")]))
+            return subprocess.CompletedProcess(command, 0)
+        with patch("helmfile_transaction.subprocess.run", side_effect=execute):
+            for method in ("apply", "sync"):
+                reconcile(self.companion("upgrade"), method, self.files, kubeconfig=self.kubeconfig, context="fixture")
+        self.assertEqual(["apply", "sync"], [c[0] for c in commands])
+        for _, releases, sync in commands:
+            self.assertEqual([{"name": "demo-resources", "namespace": "opensearch", "chart": "./chart.tgz"}], releases)
+            self.assertIn("--install=false", sync[0])
+
+    def test_companion_refuses_applications_atomic_or_synced_installs_and_unsafe_flags(self):
+        with patch("helmfile_transaction.subprocess.run") as execute:
+            for row, method in ((self.row, "apply"), (self.companion("install", atomic=True), "apply"),
+                                (self.companion("install"), "sync"), (self.companion("uninstall"), "apply"),
+                                (self.companion("install", createNamespace=True), "apply"),
+                                (self.companion("install", wait="--take-ownership"), "apply"),
+                                (dict(self.companion("install"), id="kube-system/demo-resources"), "apply")):
+                with self.subTest(row=row, method=method), self.assertRaises(BundleError):
+                    reconcile_companion(row, method, self.files, kubeconfig=self.kubeconfig, context="fixture")
+            # The dispatcher keeps application rows on the upgrade-only path.
+            self.row["helm"]["operation"] = "install"
+            with self.assertRaises(BundleError):
+                reconcile(self.row, "apply", self.files, kubeconfig=self.kubeconfig, context="fixture")
+            execute.assert_not_called()
+
+    def test_failed_companion_install_does_not_disclose_private_input(self):
+        failed = subprocess.CompletedProcess([], 1, stdout=b"private-output", stderr=b"private-error")
+        with patch("helmfile_transaction.subprocess.run", return_value=failed), self.assertRaises(BundleError) as failure:
+            reconcile_companion(self.companion("install"), "apply", self.files, kubeconfig=self.kubeconfig, context="fixture")
+        self.assertEqual(str(failure.exception), "Frozen Helm install failed for opensearch/demo-resources (exit 1)")
 
     def test_failure_does_not_disclose_or_retain_private_input(self):
         paths = []

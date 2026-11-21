@@ -633,11 +633,36 @@ def unseal(path, cipher, approved, expected):
     return plan, live, files
 
 
+PRIVATE_ERRORS = (OSError, EOFError, KeyError, IndexError, TypeError, ValueError, InvalidToken, tarfile.TarError,
+                  zipfile.BadZipFile, yaml.YAMLError, subprocess.CalledProcessError)
+PRIVATE_FAILURE = "Invalid plan input, private key, bundle, or checkout"
+
+
+def without_private_errors(call, *args):
+    """Replace parser and decryption failures, which can quote private values, with a fixed message."""
+    try:
+        return call(*args)
+    except BundleError:
+        raise
+    except PRIVATE_ERRORS:
+        pass
+    # Raised after the handler has ended, so the original exception is not chained to this one.
+    raise BundleError(PRIVATE_FAILURE)
+
+
 def consume(path, cipher, approved, checkout, expected, render_frozen, read_live, reconcile, verify_stack):
-    """Called inside the deployment lock. The observer gets identities only, never old hashes."""
-    verify_source(checkout, expected)
-    plan, previous, files = unseal(path, cipher, approved, expected)
-    verify_frozen_source(checkout, expected, files, read_json(files["plan.json"]))
+    """Called inside the deployment lock. The observer gets identities only, never old hashes.
+
+    Failures while this library reads the bundle raise only BundleError with a fixed message.
+    Exceptions raised by the four callbacks propagate unchanged. Those integrations own
+    the content of their own errors.
+    """
+    def verified():
+        verify_source(checkout, expected)
+        plan, previous, files = unseal(path, cipher, approved, expected)
+        verify_frozen_source(checkout, expected, files, read_json(files["plan.json"]))
+        return plan, previous, files
+    plan, previous, files = without_private_errors(verified)
     files = MappingProxyType(files)
     rendered = render_frozen(read_json(files["plan.json"]), files)
     keys = {row["id"] for row in plan["releases"]}
@@ -649,7 +674,7 @@ def consume(path, cipher, approved, checkout, expected, render_frozen, read_live
     def run_release(row, method):
         prefix = f"releases/{row['id']}/"
         inputs = {name: files[prefix + name] for name in ("chart.tgz", "values.yaml", "rendered.yaml")}
-        inputs["postrender.yaml"] = transaction_render(row, files)
+        inputs["postrender.yaml"] = without_private_errors(transaction_render, row, files)
         reconcile(row, method, MappingProxyType(inputs))
 
     return release_phases.run(plan, previous, read_live, run_release, verify_stack)
@@ -684,7 +709,6 @@ if __name__ == "__main__":
         main()
     except BundleError as error:
         sys.exit(str(error))
-    except (OSError, EOFError, KeyError, IndexError, TypeError, ValueError, InvalidToken, tarfile.TarError,
-            zipfile.BadZipFile, yaml.YAMLError, subprocess.CalledProcessError):
+    except PRIVATE_ERRORS:
         # Parsers and decryption failures can carry plaintext from private values. Do not log them.
-        sys.exit("Invalid plan input, private key, bundle, or checkout")
+        sys.exit(PRIVATE_FAILURE)

@@ -31,6 +31,8 @@ This ownership plan is one input to the reviewed deployment bundle. The producti
 
 The test requires a fresh loopback kind cluster. It seeds all twelve objects as kubectl-managed resources and restarts both generators, as the extracted scripts do. It checks foreign ownership rejection, runs the planner with named GET permissions, applies metadata patches, then runs Helmfile twice. It compares each complete spec, ConfigMap payload and UID across adoption. The second apply must preserve every Helm revision. A final chart update drops one Service and verifies that its UID and spec survive.
 
+The direct `helmfile apply` in this test checks the chart and the state file. It reads the working tree and is not a production procedure. Production installs a companion release only from an approved bundle through `helmfile_transaction.reconcile_companion`, described in the [bundle contract](helmfile-bundles.md#verify-and-consume). The test then exercises that callback. It uninstalls a release, confirms that every object is kept, and checks that an upgrade of the absent release, unapproved values and an object without this release's ownership metadata are each refused with no stored release and no object change. The frozen install must then produce deployed revision 1 with every UID, spec and payload unchanged. A second install is refused, and the frozen upgrade path adds no revision. The kind run covers the `opensearch`, `otel-demo` and `jaeger` namespaces. Envtest covers the first two, because it runs no workload controllers.
+
 ```bash
 kind create cluster --name jaeger-demo-adoption-fixture --kubeconfig "$work/kind.yaml" \
   --image kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5

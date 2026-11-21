@@ -2,20 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import functools
 import io
+import os
 from pathlib import Path
 import stat
 import subprocess
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import warnings
 import zipfile
+
+import yaml
 
 from cryptography.fernet import Fernet, InvalidToken
 
 import adoption_bundle as b
+import helmfile_transaction
 
 
 def chart(files):
@@ -157,6 +162,30 @@ class BundleTests(unittest.TestCase):
             b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
         apply.assert_not_called()
 
+    def test_consume_never_raises_a_parser_error_that_quotes_private_values(self):
+        path, _ = self.build()
+        def corrupt(rows):
+            # A syntax error on the line that holds the private value.
+            bad = b"kind: Secret\npassword: fixture-private-value: [unclosed\n"
+            rows = [(i, bad if i.filename.endswith("/rendered.yaml") else v) for i, v in rows]
+            index = b.canonical({i.filename: b.digest(v) for i, v in rows if i.filename != "index.json"})
+            return [(i, index if i.filename == "index.json" else v) for i, v in rows]
+        sha = self.rewrite(path, corrupt)
+        with self.assertRaises(yaml.YAMLError) as raw:
+            b.unseal(path, self.cipher, sha, self.commit)
+        self.assertIn("fixture-private-value", str(raw.exception))
+        apply = Mock()
+        with self.assertRaises(b.BundleError) as failure:
+            b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
+        self.assertEqual(b.PRIVATE_FAILURE, str(failure.exception))
+        self.assertIsNone(failure.exception.__cause__)
+        self.assertIsNone(failure.exception.__context__)
+        with self.assertRaises(b.BundleError) as failure:
+            b.consume(path, Fernet(Fernet.generate_key()), sha, self.checkout, self.commit, self.render,
+                      self.fail, apply, self.fail)
+        self.assertEqual(b.PRIVATE_FAILURE, str(failure.exception))
+        apply.assert_not_called()
+
     def test_bundle_rejects_unexpected_duplicate_link_compressed_missing_or_modified_members(self):
         def other(rows):
             info = copy.copy(rows[0][0])
@@ -206,6 +235,63 @@ class BundleTests(unittest.TestCase):
         files[prefix+"chart.tgz"] = chart(dict(members, **{"demo-resources/templates/extra.yaml":b"unexpected"}))
         with self.assertRaisesRegex(b.BundleError, "Unexpected companion chart files"):
             b.verify_frozen_source(self.checkout,commit,files,plan)
+
+    def test_companion_first_install_reaches_the_frozen_helm_install_through_consume(self):
+        root = self.checkout / "charts/demo-resources"
+        root.mkdir(parents=True)
+        descriptor, allowed = b"name: demo-resources\nversion: 0.1.0\n", b"default: {Service: [fixture]}\n"
+        (root / "Chart.yaml").write_bytes(descriptor)
+        (root / "allowlist.yaml").write_bytes(allowed)
+        self.commit_fixture("Companion fixture")
+        key, obj = "default/demo-resources", "v1:Service:default:fixture"
+        package = chart({"demo-resources/Chart.yaml": descriptor, "demo-resources/allowlist.yaml": allowed})
+        render = b"apiVersion: v1\nkind: Service\nmetadata: {name: fixture, annotations: {helm.sh/resource-policy: keep}}\n"
+        self.row.update(id=key, observe=[obj], rollback={"strategy": "de-adopt", "revision": 0},
+                        chart={"name": "demo-resources", "version": "0.1.0", "source": "charts/demo-resources",
+                               "sha256": b.digest(package)})
+        self.row["helm"].update(operation="install", timeoutSeconds=120)
+        self.plan.update(requested=[key], selector={"stack": "oci", "component": "demo-resources"})
+        self.live.update(objects={obj: {"uid": "uid-1", "stateSHA256": "c" * 64}},
+                         releases={key: {"status": "absent", "revision": 0, "recordSHA256": None}},
+                         rollbackTargets={key: None})
+        for name in ("chart.tgz", "values.yaml", "rendered.yaml"):
+            (self.base / name).unlink()
+        self.base.rmdir()
+        self.base = self.source / "releases" / key
+        self.base.mkdir(parents=True)
+        (self.base / "chart.tgz").write_bytes(package)
+        (self.base / "values.yaml").write_bytes(b"objects: []\n")
+        (self.base / "rendered.yaml").write_bytes(render)
+        path, sha = self.build()
+
+        tools = self.root / "tools"
+        (tools / "bin").mkdir(parents=True)
+        for name in ("helm", "helmfile"):
+            (tools / "bin" / name).touch()
+        kubeconfig = self.root / "fixture.yaml"
+        kubeconfig.touch()
+        commands = []
+        def execute(command, *, cwd, **kwargs):
+            commands.append(command)
+            self.assertEqual({"chart.tgz": package, "values.yaml": b"objects: []\n", "postrender.yaml": render},
+                             {name: (cwd / name).read_bytes() for name in ("chart.tgz", "values.yaml", "postrender.yaml")})
+            return subprocess.CompletedProcess(command, 0)
+        callback = functools.partial(helmfile_transaction.reconcile, kubeconfig=kubeconfig, context="fixture")
+        def reconcile(*args):
+            # Replace only the Helm process. The library's own Git reads stay real.
+            with patch.dict(os.environ, {"JAEGER_HELMFILE_TOOLCHAIN": str(tools)}), \
+                    patch("helmfile_transaction.subprocess.run", side_effect=execute):
+                callback(*args)
+        receipt = b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render,
+                            lambda scope: self.live, reconcile, lambda stack: True)
+        self.assertEqual({"releases": {key: "apply"}, "verifiedStacks": ["oci"]}, receipt)
+        self.assertEqual([[tools / "bin/helm", "install", "demo-resources", "./chart.tgz", "--namespace", "default"]],
+                         [command[:6] for command in commands])
+        self.assertNotIn("--take-ownership", commands[0])
+        # An atomic first install never passes bundle validation.
+        self.row["helm"]["atomic"] = True
+        with self.assertRaisesRegex(b.BundleError, "Unsafe atomic"):
+            self.build()
 
     def test_omitting_transitive_otel_prerequisites_cannot_change_source_selection(self):
         self.plan["requested"] = ["otel-demo/otel-demo"]

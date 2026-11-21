@@ -105,6 +105,11 @@ versions and reviewed repository chart checksums, and recorded recovery targets.
 
 The live runner entry point is `consume(path, cipher, approved, checkout, expected,
 render_frozen, read_live, reconcile, verify_stack)`. Acquire the deployment lock before calling it.
+A failure while the library itself reads the checkout, decrypts the bundle or parses
+its members raises only `BundleError`. A parser or decryption error is replaced by one
+fixed message and is not chained, because such errors can quote private values.
+Exceptions raised by the four callbacks propagate unchanged. Each integration must
+keep private values out of its own errors and logs.
 The trusted renderer receives the plan and read-only frozen bytes. It must use the
 bundled local charts, values and rendering context, verify its running toolchain,
 and return exact rendered bytes per release. Use private scratch storage for tools
@@ -125,9 +130,10 @@ checks. Keep the lock through verification and record last-known-good only on
 successful completion. Kubernetes actors outside that lock can still change
 objects. Enforce resource preconditions at each mutation boundary.
 
-For the six existing application releases, pass
-`functools.partial(helmfile_transaction.reconcile_existing, kubeconfig=path, context=name)`
-to the consumer. Start the trusted process with `scripts/demo/helmfile_tools.py run`
+Pass `functools.partial(helmfile_transaction.reconcile, kubeconfig=path, context=name)`
+to the consumer. It sends the six existing application releases to
+`reconcile_existing` and the four companion releases to `reconcile_companion`.
+A bundle holds one kind or the other. Start the trusted process with `scripts/demo/helmfile_tools.py run`
 from the approved checkout. The launcher verifies the tool archives and supplies
 the isolated Helm, Helmfile, helm-diff and post-renderer directory. Prefill
 the locked tool cache when the runtime has no public download access.
@@ -139,10 +145,24 @@ literal values that Helmfile itself could interpret as external references.
 Both commands require the frozen post-renderer. Helmfile prepends
 `--install` to its upgrade command, so the callback adds `--install=false` to
 the final upgrade arguments and `--allow-unreleased=false` to the diff. A
-deleted release needs operator review. The separate companion adoption process
-owns first installs. The caller must still hold the writer lock and reobserve
+deleted release needs operator review. The caller must still hold the writer lock and reobserve
 live state. Helm has no compare-and-swap flag for a release deleted and recreated
 by another actor between observation and upgrade.
+
+`reconcile_companion` owns the companion releases. An installed companion uses the
+same guarded Helmfile upgrade as an application release. The first install is a
+frozen `install` operation with `atomic` false, and the callback accepts it only
+for the `apply` method. It runs the pinned Helm binary directly with the frozen
+chart, values and post-renderer, because `helm upgrade --install` cannot require
+an absent release. `helm install` fails on any stored record of that name. It
+never passes `--take-ownership`, so Helm refuses an existing object that lacks
+this release's ownership metadata. Apply the reviewed
+[ownership patches](helmfile-companions.md#inspect-existing-ownership) first.
+A wrong name, a rejected render and an ownership conflict all stop before Helm
+stores a release record. A failure after that point, such as a wait timeout,
+leaves failed revision 1 with every object kept. The observer has no successful
+rollback target for it and refuses the release. De-adopt it with `helm uninstall`,
+which keeps the objects, and review a fresh install plan.
 
 The callback discards both subprocess output streams, including failure output.
 It uses the exact trusted kubeconfig and context passed by the runtime. The

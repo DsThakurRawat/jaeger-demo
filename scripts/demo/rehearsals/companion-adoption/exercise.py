@@ -5,6 +5,7 @@
 """Exercise the companion chart on a newly created, disposable local API server."""
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -18,7 +19,9 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import companion_ownership
+from adoption_bundle import BundleError
 from companion_values import ROOT, source_values
+from helmfile_transaction import reconcile
 
 
 def exercise(cfg, context):
@@ -137,9 +140,72 @@ def exercise(cfg, context):
                         "upgrade", "demo-resources", str(chart), "--reset-values", "-f", "-"],
                        input=json.dumps({"objects": remaining}), text=True, check=True)
         assert states()[retained] == before[retained]
+
+    # Frozen companion transaction. Uninstalling keeps every object, which reproduces the reviewed
+    # state before a first install: ownership metadata in place and no stored release.
+    name = companion_ownership.RELEASE
+    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context]
+    # Envtest runs no workload controllers, so only the kind node can wait for the generator Deployment.
+    frozen_namespaces = ["opensearch", "otel-demo"] + (["jaeger"] if context == "kind-jaeger-demo-adoption-fixture" else [])
+
+    def stored(ns):
+        # Helm's own storage index: every revision and its status, including failed or pending ones.
+        records = json.loads(kube(["-n", ns, "get", "secrets", "-l", "owner=helm,name=" + name, "-o", "json"]))["items"]
+        return sorted((int(r["metadata"]["labels"]["version"]), r["metadata"]["labels"]["status"]) for r in records)
+
+    def row(ns, operation):
+        return {"id": ns + "/" + name, "helm": {"operation": operation, "atomic": False, "wait": "legacy",
+                "timeoutSeconds": 300, "historyMax": 10, "skipCRDs": False, "createNamespace": False}}
+
+    kept = states()
+    refusals = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        subprocess.run(["helm", "package", str(ROOT / "charts" / "demo-resources"), "--destination", str(work)],
+                       check=True, stdout=subprocess.DEVNULL)
+        archive, = work.glob("demo-resources-*.tgz")
+
+        def frozen(ns, objects):
+            inputs = work / (ns + ".json")
+            inputs.write_text(json.dumps({"objects": objects}))
+            render = subprocess.check_output(["helm", "template", name, str(archive), "--namespace", ns,
+                                              "--values", str(inputs)], env=dict(os.environ, KUBECONFIG=os.devnull))
+            return {"chart.tgz": archive.read_bytes(), "values.yaml": inputs.read_bytes(), "postrender.yaml": render}
+
+        def refused(ns, operation, files, expected):
+            try:
+                reconcile(row(ns, operation), "apply", files, kubeconfig=cfg, context=context)
+            except BundleError:
+                assert stored(ns) == expected and states() == kept, f"Refused {operation} changed {ns}"
+                return 1
+            raise AssertionError(f"Unexpected frozen {operation} in {ns}")
+
+        for ns in frozen_namespaces:
+            objects = values["companions"][ns]["objects"]
+            approved = frozen(ns, objects)
+            subprocess.run(helm + ["-n", ns, "uninstall", name], check=True, stdout=subprocess.DEVNULL)
+            assert stored(ns) == [] and states() == kept, f"De-adoption must keep every object in {ns}"
+            # No install fallback for an absent release, and no write for unapproved values.
+            refusals += refused(ns, "upgrade", approved, [])
+            changed = copy.deepcopy(objects)
+            changed[0]["metadata"].setdefault("labels", {})["unapproved"] = "true"
+            refusals += refused(ns, "install", dict(approved, **{"values.yaml": json.dumps({"objects": changed}).encode()}), [])
+            # The callback never takes ownership of an object that lacks this release's metadata.
+            first = ["-n", ns, "annotate", objects[0]["kind"] + "/" + objects[0]["metadata"]["name"]]
+            kube(first + ["meta.helm.sh/release-name-"])
+            refusals += refused(ns, "install", approved, [])
+            kube(first + ["meta.helm.sh/release-name=" + name])
+            reconcile(row(ns, "install"), "apply", approved, kubeconfig=cfg, context=context)
+            assert stored(ns) == [(1, "deployed")] and states() == kept, f"Frozen install changed {ns}"
+            # A stored release cannot be installed again. The frozen upgrade path is then a no-op.
+            refusals += refused(ns, "install", approved, [(1, "deployed")])
+            reconcile(row(ns, "upgrade"), "apply", approved, kubeconfig=cfg, context=context)
+            assert stored(ns) == [(1, "deployed")] and states() == kept, f"Frozen no-op changed {ns}"
     print(json.dumps({"objectsPreserved": len(before), "releases": len(revisions),
                       "secondApplyCreatedRevisions": 0, "deploymentRestartAnnotationsPreserved": True,
-                      "readOnlyPlan": True, "foreignOwnerRejected": True, "removedServiceKept": True}))
+                      "readOnlyPlan": True, "foreignOwnerRejected": True, "removedServiceKept": True,
+                      "frozenInstallNamespaces": len(frozen_namespaces), "frozenRefusalsWithoutChange": refusals,
+                      "frozenNoOpCreatedRevisions": 0, "deAdoptionKeptObjects": True}))
 
 
 if __name__ == "__main__":
