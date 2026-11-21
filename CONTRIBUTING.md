@@ -36,7 +36,7 @@ access is required for the chart repositories, but no production credentials are
 used. The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 
-`make lint` runs ShellCheck for shared scripts, actionlint for workflows, JSON
+`make lint` runs ShellCheck for shared and example scripts, actionlint for workflows, JSON
 syntax validation, and ruff for Python with the rules in `ruff.toml`. Imported
 application configuration is kept unchanged during extraction. Toolchain
 centralization and Helmfile render/schema checks belong to the next
