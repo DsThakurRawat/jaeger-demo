@@ -9,8 +9,9 @@
 # otherwise they deploy the newest published commit SHA tag (never the mutable
 # :latest tag). The search reads at most MAX_TAG_PAGES pages of the tag list.
 #
-# An explicit tag must exist on Docker Hub for every event, including a
-# schedule. An explicit latest is verified, then resolved to a concrete SHA tag.
+# An explicit tag must use Docker tag syntax and exist on Docker Hub for every
+# event, including a schedule. An explicit latest is verified, then resolved to
+# a concrete SHA tag.
 #
 # Manual workflow_dispatch runs use the requested tag (default MAIN_SHA) and
 # fail if that tag is missing.
@@ -135,6 +136,13 @@ resolve_snapshot_tag() {
 
   if [[ -z "$preferred" ]]; then
     echo "Preferred tag is empty for ${label}" >&2
+    return 1
+  fi
+
+  # Docker tag syntax only. A value such as "?" or ".." addresses another Docker Hub
+  # endpoint that answers 200, which would pass as an existing tag.
+  if [[ ! "$preferred" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+    echo "::error::Invalid snapshot image tag syntax (${label})" >&2
     return 1
   fi
 

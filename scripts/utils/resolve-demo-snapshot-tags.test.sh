@@ -45,10 +45,13 @@ emit() {
   fi
 }
 
+printf '%s\n' "\$url" >> "\${HUB_ALL_REQUESTS:-/dev/null}"
+if [[ "\$url" == */tags/\?page_size=* ]]; then
+  printf '%s\n' "\$url" >> "\${HUB_REQUESTS:-/dev/null}"
+fi
 no_sha_page='"next":"more","results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"}]'
 if [[ "\$url" == */tags/\?page_size=*ordering=last_updated* && -n "\${HUB_PAGES:-}" ]]; then
   # Every page lists only a non-SHA tag and announces a further page.
-  printf '%s\n' "\$url" >> "\${HUB_REQUESTS:-/dev/null}"
   case "\$HUB_PAGES" in
     # 30 pages, so a missing limit fails this test instead of stalling it.
     many) emit "200" '{"count":3000,'"\$no_sha_page"'}' ;;
@@ -70,20 +73,29 @@ case "\$url" in
     emit "404" '{}'
     ;;
   */tags/${MAIN_SHA}/)
-    emit "404" '{}'
+    emit "\${MAIN_STATUS:-404}" '{}'
     ;;
   */tags/${NEWEST}/)
-    emit "200" '{"digest":"sha256:newest"}'
+    emit "\${NEWEST_STATUS:-200}" '{"digest":"sha256:newest"}'
+    ;;
+  */tags/${OLDER}/)
+    emit "200" '{"digest":"sha256:older"}'
     ;;
   */tags/?page_size=*ordering=last_updated\&page=2)
-    emit "200" '{"results":[{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}],"next":null}'
+    if [[ "\${PAGE_TWO:-}" == "true" ]]; then
+      emit "200" '{"results":[{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}],"next":null}'
+      exit 0
+    fi
+    # Only an older tag: a search that pages past a first page with SHA tags selects it.
+    emit "200" '{"results":[{"name":"'${OLDER}'","last_updated":"2023-01-01T00:00:00Z"}],"next":null}'
     ;;
   */tags/?page_size=*ordering=last_updated*)
     if [[ "\${PAGE_TWO:-}" == "true" ]]; then
       emit "200" '{"count":102,"next":"page2","results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"}]}'
       exit 0
     fi
-    emit "200" '{"results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"},{"name":"'${OLDER}'","last_updated":"2023-01-01T00:00:00Z"},{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}]}'
+    # Like the live repositories: SHA tags on the first page and a further page announced.
+    emit "200" '{"count":250,"next":"https://hub.docker.com/v2/repositories/other/tags/?page=2","results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"},{"name":"'${OLDER}'","last_updated":"2023-01-01T00:00:00Z"},{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}]}'
     ;;
   */tags/?page_size=*)
     emit "500" '{"error":"unexpected ordering"}'
@@ -158,6 +170,55 @@ testScheduledFallsBackToNewestPublishedSha() {
   assertContains "$out" "Jaeger tag=$NEWEST"
   assertContains "$out" "HotROD tag=$NEWEST"
   assertContains "$out" "Main HEAD ${MAIN_SHA} has no published Jaeger snapshot"
+}
+
+testScheduledFallbackUsesOnlyTheFirstPageWhenItHoldsShaTags() {
+  requests="$TMPDIR_TEST/hub-requests"
+  : > "$requests"
+  out=$(run_script GITHUB_EVENT_NAME=schedule HUB_REQUESTS="$requests" 2>&1)
+  rc=$?
+  assertEquals "exit 0" 0 "$rc"
+  assertContains "$out" "Jaeger tag=$NEWEST"
+  assertContains "$out" "HotROD tag=$NEWEST"
+  assertEquals "one list request per repository" 2 "$(wc -l < "$requests" | tr -d ' ')"
+  assertEquals "the announced next page is never requested" 0 "$(grep -c 'page=' "$requests")"
+}
+
+testScheduledRunFailsWhenDockerHubCannotAnswer() {
+  out=$(run_script GITHUB_EVENT_NAME=schedule MAIN_STATUS=503 2>&1)
+  rc=$?
+  assertEquals "an unverifiable core tag does not fall back" 1 "$rc"
+  assertContains "$out" "Failed to verify Docker Hub tag for ${REPO}:${MAIN_SHA} (Jaeger); Docker Hub API returned HTTP 503."
+  assertNotContains "$out" "Jaeger tag="
+
+  out=$(run_script GITHUB_EVENT_NAME=schedule HUB_PAGES=unavailable 2>&1)
+  rc=$?
+  assertEquals "a failed tag list fails the run" 1 "$rc"
+  assertContains "$out" "Docker Hub tag list for ${REPO} returned HTTP 500"
+  assertNotContains "$out" "Jaeger tag="
+}
+
+testFallbackTagIsVerifiedBeforeItIsExported() {
+  out=$(run_script GITHUB_EVENT_NAME=schedule NEWEST_STATUS=404 2>&1)
+  rc=$?
+  assertEquals "a listed tag that no longer exists is rejected" 1 "$rc"
+  assertContains "$out" "Snapshot image tag not found on Docker Hub: ${REPO}:${NEWEST} (Jaeger)"
+  assertNotContains "$out" "Jaeger tag="
+}
+
+testExplicitTagMustUseDockerTagSyntax() {
+  requests="$TMPDIR_TEST/hub-all-requests"
+  long=$(printf 'a%.0s' $(seq 1 129))
+  for event in workflow_dispatch schedule; do
+    for tag in '?' '#' '.' '..' 'a/b' '-leading' "$long"; do
+      : > "$requests"
+      out=$(run_script GITHUB_EVENT_NAME="$event" JAEGER_DEMO_IMAGE_TAG="$tag" HUB_ALL_REQUESTS="$requests" 2>&1)
+      rc=$?
+      assertEquals "$event: tag '$tag' is rejected" 1 "$rc"
+      assertContains "$out" "Invalid snapshot image tag syntax (Jaeger)"
+      assertEquals "$event: no request is made for '$tag'" 0 "$(wc -l < "$requests" | tr -d ' ')"
+    done
+  done
 }
 
 testScheduledFallbackFindsShaBeyondFirstHubPage() {
