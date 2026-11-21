@@ -54,6 +54,39 @@ next reconciliation or `monitoring`-scope run.
 
 Run `make lint` and `SHUNIT2=/path/to/shunit2 make test`; the latter runs the
 maintenance tests through `scripts/utils/run-tests.sh`. To inspect discovery
-without updating dependencies, use Renovate's local platform with
-`--dry-run=extract`. Kubernetes and OCI infrastructure/add-on maintenance is
-outside this workflow.
+without updating dependencies, run `make renovate-discovery`, which validates
+the configuration and checks Renovate's credential-free extraction. Kubernetes
+and OCI infrastructure/add-on maintenance is outside this workflow.
+
+## Scheduled smoke check
+
+`.github/workflows/demo-smoke.yml` checks the public demos every 30 minutes and
+on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stacks,
+`scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
+Jaeger UI tracking configuration, recent application spans and finite span
+metrics. A failure or cancellation posts to Slack through `SLACK_WEBHOOK_URL`.
+
+Scheduled runs are off until the repository variable `DEMO_SMOKE_ENABLED` is
+`true`; manual dispatch always works. `SLACK_WEBHOOK_URL` is a repository-level
+secret only; no deploy environment holds a copy, and this job has no
+environment. Do not turn the switch on until the check retries a transient
+miss and posts only when the result changes. Today one slow probe fails a run,
+and every failed run posts. Once retry and deduplication have landed
+([#43](https://github.com/jaegertracing/jaeger-demo/issues/43)), enable it with:
+
+```bash
+gh variable set DEMO_SMOKE_ENABLED --body true --repo jaegertracing/jaeger-demo
+```
+
+Known limits:
+
+- The tracking check compares the live Jaeger UI with
+  `examples/oci/ui-config.json` on `main`. After a change to its `tracking`
+  block merges and until it is deployed, every run fails. Set
+  `DEMO_SMOKE_ENABLED` to `false` when merging such a change and restore it
+  after deployment.
+- A run that is cancelled or fails before its job starts sends no notification.
+  The next run checks again within 30 minutes
+  ([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).
+- GitHub disables scheduled workflows in public repositories after 60 days
+  without repository activity; re-enable the workflow if that happens.

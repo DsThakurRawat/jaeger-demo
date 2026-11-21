@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / '.github/workflows'
@@ -44,6 +46,35 @@ class WorkflowTests(unittest.TestCase):
         check = source.index('    - name: Verify OCI CLI version\n      run: python scripts/demo/verify_oci_cli.py\n')
         self.assertLess(source.index('    - name: Configure kubectl with OKE\n'), check)
         self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
+
+    def test_maintenance_workflows_constrain_and_verify_oci_cli_before_cluster_access(self):
+        for filename, script in (('ci-opensearch-recovery.yml', '    - name: Create and verify OpenSearch recovery point\n'),
+                                 ('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n')):
+            with self.subTest(workflow=filename):
+                source = (WORKFLOWS / filename).read_text()
+                configure_header = '    - name: Configure kubectl with OKE\n'
+                configure = source.split(configure_header, 1)[1].split('\n    - name:', 1)[0]
+                self.assertIn('      env:\n        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt\n', configure)
+                order = [source.index(step) for step in (
+                    '    - name: Checkout demo configuration\n', configure_header,
+                    '    - name: Verify OCI CLI version\n      run: python scripts/demo/verify_oci_cli.py\n',
+                    '    - name: Acquire the shared deployment lock\n', script)]
+                self.assertEqual(sorted(order), order)
+                self.assertEqual(1, source.count('verify_oci_cli.py'))
+
+    def test_recovery_diagnostics_and_cleanup_need_the_verified_lock_step(self):
+        source = (WORKFLOWS / 'ci-opensearch-recovery.yml').read_text()
+        for name, trigger in (('Collect failure diagnostics', 'failure()'), ('Remove disposable restore pod', 'always()')):
+            step = source.split('    - name: %s\n' % name, 1)[1].split('\n    - name:', 1)[0]
+            condition = re.search(r'^      if: (.+)$', step, re.MULTILINE)[1]
+            # A rejected OCI CLI check skips the lock step; kubectl must not run after it.
+            for lock in ('success', 'failure', 'cancelled', 'skipped'):
+                for job_failed in (True, False):
+                    with self.subTest(step=name, lock=lock, job_failed=job_failed):
+                        expression = condition.replace(trigger, repr(job_failed if trigger == 'failure()' else True))
+                        expression = expression.replace('steps.writer-lock.outcome', repr(lock)).replace('&&', 'and')
+                        expected = lock == 'success' and (job_failed or trigger == 'always()')
+                        self.assertEqual(expected, eval(expression, {'__builtins__': {}}, {}))
 
     def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
         for filename in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
@@ -195,6 +226,58 @@ class WorkflowTests(unittest.TestCase):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         job = source.split('\n    steps:', 1)[0]
         self.assertIn('      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}\n', job)
+
+    def test_ci_jobs_have_timeouts(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        self.assertTrue(jobs)
+        for name, job in jobs.items():
+            with self.subTest(job=name):
+                self.assertIsInstance(job.get('timeout-minutes'), int)
+
+    def test_ci_cancels_only_superseded_pull_request_runs(self):
+        concurrency = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['concurrency']
+        self.assertIn('github.event.pull_request.number || github.sha', concurrency['group'])
+        self.assertEqual("${{ github.event_name == 'pull_request' }}", concurrency['cancel-in-progress'])
+
+    def test_renovate_job_uses_the_discovery_make_target(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
+        self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])
+        script = (ROOT / 'scripts/utils/renovate-discovery.sh').read_text()
+        self.assertIn('RENOVATE_ENABLED_MANAGERS=custom.regex,kubernetes,helm-values,pip_requirements', script)
+        self.assertIn('python3 scripts/demo/check-renovate-extraction.py', script)
+
+
+    def test_unsuccessful_deployments_notify_and_reconcile_stops_inside_the_job_limit(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        header = '    - name: Send detailed Slack notification on failure\n'
+        manual, daily = source.split(header)[1:]
+        # Both jobs end with the notification and the daily job reuses the manual message.
+        self.assertNotIn('\n    - name:', manual.split('\n  request-daily:', 1)[0])
+        self.assertNotIn('\n    - name:', daily)
+        self.assertIn('      env: *demo-failure-alert\n', daily)
+        self.assertIn('*Status:* ${{ job.status }}', manual)
+        for notify in (manual, daily):
+            condition = re.search(r'^      if: (.+)$', notify, re.MULTILINE)[1]
+            for status in ('success', 'failure', 'cancelled'):
+                with self.subTest(status=status):
+                    expression = condition.replace('failure()', repr(status == 'failure'))
+                    expression = expression.replace('cancelled()', repr(status == 'cancelled')).replace('||', 'or')
+                    self.assertEqual(status != 'success', eval(expression, {'__builtins__': {}}, {}))
+
+        job_limit = int(re.search(r'^    timeout-minutes: (\d+)$', source, re.MULTILINE)[1])
+        reconcile = source.split('    - name: Reconcile demo components\n', 1)[1].split('\n    - name:', 1)[0]
+        step_limit = int(re.search(r'^      timeout-minutes: (\d+)$', reconcile, re.MULTILINE)[1])
+        # Reconcile keeps the 300 minutes the job allowed before the step had a limit
+        # of its own. Setup and the later steps get the remaining 30 minutes.
+        self.assertGreaterEqual(step_limit, 300)
+        self.assertGreaterEqual(job_limit - step_limit, 30)
+        self.assertLess(job_limit, 360)
+        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 2\n', cleanup)
+        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 5\n', diagnostics)
+        self.assertEqual(3, diagnostics.count(' --request-timeout=30s || true'))
+        self.assertIn(' --request-timeout=30s ', cleanup)
 
 
 if __name__ == '__main__':
