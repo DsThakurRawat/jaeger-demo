@@ -57,34 +57,29 @@ dockerhub_tag_status() {
 
 newest_published_sha() {
   local repo=$1
-  local status tag tags_file
-  local page=1
-  local url="https://hub.docker.com/v2/repositories/${repo}/tags/?page_size=100&ordering=last_updated"
+  local status
+  local tag
+  local tags_file
 
   tags_file=$(mktemp "${TMPDIR:-/tmp}/docker-tags-page.XXXXXX")
-  while :; do
-    status=$(run_curl -o "$tags_file" -w "%{http_code}" "$url" || true)
-    if [[ "${status:-000}" != "200" ]]; then
-      rm -f "$tags_file"
-      echo "Docker Hub tag list for ${repo} returned HTTP ${status:-000}" >&2
-      return 1
-    fi
-    if ! tag=$(jq -r '[.results[] | select(.name | test("^[0-9a-f]{40}$"))] | sort_by(.last_updated) | last | .name // empty' "$tags_file"); then
-      rm -f "$tags_file"
-      return 1
-    fi
-    if [[ -n "$tag" ]] || ! jq -e '.next != null' "$tags_file" >/dev/null; then
-      break
-    fi
-    # Keep requests on the intended repository when following ordered pages.
-    page=$((page + 1))
-    if ! jq -e --argjson page "$page" '.count > (($page - 1) * 100)' "$tags_file" >/dev/null; then
-      rm -f "$tags_file"
-      echo "Invalid pagination for ${repo} SHA tags" >&2
-      return 1
-    fi
-    url="https://hub.docker.com/v2/repositories/${repo}/tags/?page_size=100&ordering=last_updated&page=${page}"
-  done
+
+  status=$(run_curl -o "$tags_file" -w "%{http_code}" \
+    "https://hub.docker.com/v2/repositories/${repo}/tags/?page_size=100&ordering=last_updated" || true)
+  status=${status:-000}
+  if [[ "$status" != "200" ]]; then
+    rm -f "$tags_file"
+    echo "Docker Hub tag list for ${repo} returned HTTP ${status}" >&2
+    return 1
+  fi
+
+  # Both snapshot repos have far more than one page of SHA tags, so we rely on
+  # ordering=last_updated to surface the newest tags on the first (only) page we
+  # fetch, then sort that page by last_updated as a guard against out-of-order
+  # results and take the newest. This does not scan beyond the first page.
+  if ! tag=$(jq -r '[.results[] | select(.name | test("^[0-9a-f]{40}$"))] | sort_by(.last_updated) | last | .name // empty' "$tags_file"); then
+    rm -f "$tags_file"
+    return 1
+  fi
   rm -f "$tags_file"
 
   if [[ -z "$tag" ]]; then
@@ -115,7 +110,6 @@ resolve_snapshot_tag() {
   local repo=$1
   local preferred=$2
   local label=$3
-  local override=$4
   local status
   local resolved
 
@@ -125,7 +119,6 @@ resolve_snapshot_tag() {
   fi
 
   if [[ "$preferred" == "latest" ]]; then
-    verify_deploy_tag "$repo" "$preferred" "$label" || return 1
     resolved=$(newest_published_sha "$repo") || return 1
     echo "$resolved"
     return 0
@@ -141,7 +134,7 @@ resolve_snapshot_tag() {
     return 1
   fi
 
-  if [[ "$GITHUB_EVENT_NAME" != "schedule" || -n "$override" ]]; then
+  if [[ "$GITHUB_EVENT_NAME" != "schedule" ]]; then
     echo "::error::Snapshot image tag not found on Docker Hub: ${repo}:${preferred} (${label})" >&2
     return 1
   fi
@@ -167,11 +160,11 @@ main() {
   local hotrod_tag
   local main_status
 
-  jaeger_preferred="${JAEGER_DEMO_JAEGER_IMAGE_TAG:-${JAEGER_DEMO_IMAGE_TAG:-}}"
-  hotrod_preferred="${JAEGER_DEMO_HOTROD_IMAGE_TAG:-${JAEGER_DEMO_IMAGE_TAG:-}}"
+  jaeger_preferred="${JAEGER_DEMO_JAEGER_IMAGE_TAG:-${JAEGER_DEMO_IMAGE_TAG:-$MAIN_SHA}}"
+  hotrod_preferred="${JAEGER_DEMO_HOTROD_IMAGE_TAG:-${JAEGER_DEMO_IMAGE_TAG:-$MAIN_SHA}}"
 
-  jaeger_tag=$(resolve_snapshot_tag "$JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY" "${jaeger_preferred:-$MAIN_SHA}" "Jaeger" "$jaeger_preferred")
-  hotrod_tag=$(resolve_snapshot_tag "$JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY" "${hotrod_preferred:-$MAIN_SHA}" "HotROD" "$hotrod_preferred")
+  jaeger_tag=$(resolve_snapshot_tag "$JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY" "$jaeger_preferred" "Jaeger")
+  hotrod_tag=$(resolve_snapshot_tag "$JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY" "$hotrod_preferred" "HotROD")
 
   verify_deploy_tag "$JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY" "$jaeger_tag" "Jaeger"
   verify_deploy_tag "$JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY" "$hotrod_tag" "HotROD"
