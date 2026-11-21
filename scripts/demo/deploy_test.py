@@ -244,6 +244,29 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual("backup-test", run.call_args_list[0].args[0][-1])
         self.assertTrue(run.call_args_list[1].args[0][1].endswith("deploy-all.sh"))
         self.assertTrue(run.call_args_list[2].args[0][1].endswith("verify_trace.py"))
+        pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
+        self.assertEqual([pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]],
+                         run.call_args_list[2].args[0][2:])
+        self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+
+    @patch("deploy.run")
+    def test_verifier_receives_each_chart_pin_in_order(self, run):
+        # The shipped pins can be equal, so use a copy of the stack with distinct pins.
+        script = (deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()
+        script = re.sub(r'^OPENSEARCH_CHART_VERSION="[^"]+"$', 'OPENSEARCH_CHART_VERSION="9.1.0"', script, flags=re.M)
+        script = re.sub(r'^OPENSEARCH_DASHBOARDS_CHART_VERSION="[^"]+"$', 'OPENSEARCH_DASHBOARDS_CHART_VERSION="9.2.0"',
+                        script, flags=re.M)
+        self.assertEqual({"OPENSEARCH_CHART_VERSION": "9.1.0", "OPENSEARCH_DASHBOARDS_CHART_VERSION": "9.2.0"},
+                         {k: v for k, v in deploy.PIN_LINE.findall(script) if k.startswith("OPENSEARCH")})
+        with tempfile.TemporaryDirectory() as temp:
+            stack = Path(temp) / "examples/otel-demo"
+            stack.mkdir(parents=True)
+            (stack / "deploy-all.sh").write_text(script)
+            with patch.object(deploy, "ROOT", Path(temp)):
+                deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
+        verifier = run.call_args_list[2].args[0]
+        self.assertTrue(verifier[1].endswith("verify_trace.py"))
+        self.assertEqual(["9.1.0", "9.2.0"], verifier[2:])
         self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
     @patch("deploy.run", side_effect=subprocess.CalledProcessError(1, "recovery"))

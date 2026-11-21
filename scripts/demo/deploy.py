@@ -154,8 +154,9 @@ def deploy_component(component, env):
     if scope == "opensearch":
         if binding is not None and opensearch_data_binding() != binding:
             raise ScheduledReleaseError("OpenSearch data PVC or bound PV changed during the scheduled upgrade")
-        version = dict(PIN_LINE.findall((directory / "deploy-all.sh").read_text()))["OPENSEARCH_CHART_VERSION"]
-        run(["python3", str(ROOT / "scripts/demo/verify_trace.py"), version], env=child_env)
+        pins = dict(PIN_LINE.findall((directory / "deploy-all.sh").read_text()))
+        run(["python3", str(ROOT / "scripts/demo/verify_trace.py"), pins["OPENSEARCH_CHART_VERSION"],
+             pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]], env=child_env)
 
 
 def reconcile(env, root=ROOT):

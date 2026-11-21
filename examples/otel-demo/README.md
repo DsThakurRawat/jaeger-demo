@@ -62,7 +62,10 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
 ## What gets deployed
 - Namespace `opensearch`:
   - OpenSearch (single node) StatefulSet
-  - OpenSearch Dashboards Deployment
+  - OpenSearch Dashboards Deployment. OpenSearch runs without authentication and
+    the hosted Dashboards route is public, so the Dev Tools console and Index
+    Management are disabled. Other bundled plugins can still write to the
+    cluster; do not treat the hosted Dashboards as read-only.
 - Namespace `jaeger`:
   - Jaeger all-in-one Deployment with OpenSearch-backed trace storage
   - HOTROD application
@@ -83,6 +86,14 @@ kubectl get pods -n otel-demo
 kubectl get svc -n opensearch
 kubectl get svc -n jaeger
 kubectl get svc -n otel-demo
+```
+- Dashboards console and Index Management are disabled. After a Dashboards
+  rollout, the hosted Dashboards must load, its menu must show neither Dev
+  Tools nor Index Management, and this read-only console probe must return
+  `404`:
+```bash path=null start=null
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'osd-xsrf: true' \
+  'https://opensearch.demo.jaegertracing.io/api/console/proxy?path=/&method=GET'
 ```
 
 

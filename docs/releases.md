@@ -141,7 +141,7 @@ current releases. Each successful component records its fingerprint in
 
 | Component | Helm releases | Daily action and checks |
 | --- | --- | --- |
-| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions and write/read a fresh trace before recording success. |
+| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions against each chart's application version and write/read a fresh trace before recording success. After a Dashboards rollout, also run the [console and menu check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
 | OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. |
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
@@ -153,6 +153,28 @@ format becomes unusable, historical traces may be lost. After an explicitly
 approved repair, new traffic can repopulate the demo. Use the
 [manual recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md) when a
 separately authorized operation requires a tested backup.
+
+A chart version and its application version can differ: a chart-only release
+repackages the same OpenSearch or Dashboards version. The daily executor takes
+each application version from its reviewed chart archive. A manual deployment
+requires each release to be `deployed` at its chart pin and reads the
+application version with `helm get metadata`, which uses the Helm release
+Secret reads the upgrade already needs.
+
+Once the schedule is enabled, a merged OpenSearch chart change is applied in
+place by the next daily run, without a backup. When an engine upgrade
+should start from a tested recovery point, dispatch the manual `otel` /
+`opensearch` upgrade with `opensearch_recovery=required` and let it finish
+before that day's preparation. The preparation window opens at 11:00 UTC for
+the 13:00 UTC slot; the CronJob runs at 12:20 UTC, but a one-off preparer Job
+can run earlier. Preparation freezes the checkpoint and Helm history for the
+slot, and a later retry reuses that frozen plan. An upgrade that completes after
+preparation makes the executor reject the changed state and leaves the writer
+lock for operator recovery. If the upgrade cannot finish before preparation,
+first pause both the GitHub signal and the preparer, and let running preparers
+and writers drain. Resuming the same day reuses the frozen plan, so keep the
+signal off until the next day's slot is prepared after the upgrade.
+[Activation and pause order](in-cluster-executor.md#activation-approval)
 
 An OpenSearch failure holds both dependent OTel components. Independent OCI
 updates may succeed in the same run. A failed component keeps its preceding
