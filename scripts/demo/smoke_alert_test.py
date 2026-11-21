@@ -136,6 +136,28 @@ class CommandLineTests(unittest.TestCase):
             '--result', 'failure', '--event', 'schedule', '--history', '/nonexistent/runs.json'))
         self.assertEqual('none\n', self.run_main('--result', 'success', '--event', 'schedule'))
 
+    def test_a_successful_rerun_of_a_failed_run_recovers_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'runs.json'
+            path.write_text(json.dumps({'workflow_runs': [{'id': 8, 'conclusion': 'success'}]}))
+            args = ('--event', 'schedule', '--history', str(path), '--run-id', '9')
+            self.assertEqual('recovered\n', self.run_main(
+                '--result', 'success', *args, '--previous-attempt', 'failure'))
+            # The next scheduled run sees the rerun's success and stays silent.
+            self.assertEqual('none\n', self.run_main('--result', 'success', *args))
+
+    def test_a_failed_rerun_of_a_failed_run_stays_silent(self):
+        self.assertEqual('none\n', self.run_main(
+            '--result', 'failure', '--event', 'schedule', '--previous-attempt', 'failure'))
+
+    def test_previous_attempt_counts_without_readable_history(self):
+        self.assertEqual('recovered\n', self.run_main(
+            '--result', 'success', '--event', 'schedule', '--previous-attempt', 'failure'))
+
+    def test_an_empty_previous_attempt_is_ignored(self):
+        self.assertEqual('failed\n', self.run_main(
+            '--result', 'failure', '--event', 'schedule', '--previous-attempt', ''))
+
     def test_rejects_an_unknown_result(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             smoke_alert.main(['--result', 'skipped', '--event', 'schedule'])

@@ -199,13 +199,18 @@ class AlertWiringTests(unittest.TestCase):
         for step in (self.FAILED, self.RECOVERED):
             self.assertEqual('${{ secrets.SLACK_WEBHOOK_URL }}', step['env']['SLACK_WEBHOOK'])
 
-    def decide(self, result, event, runs, python=None):
+    def decide(self, result, event, runs, python=None, attempt=1, previous=''):
         history = json.dumps({'workflow_runs': runs}) if runs is not None else None
-        gh = 'cat <<\'EOF\'\n' + history + '\nEOF' if history else 'exit 1'
+        runs_gh = 'cat <<\'EOF\'\n' + history + '\nEOF' if history else 'exit 1'
+        # The attempts endpoint answers with the previous attempt's conclusion
+        # (what `--jq` would print), or fails when previous is None.
+        attempts_gh = 'exit 1' if previous is None else 'echo "$TEST_PREVIOUS"'
+        gh = 'case "$*" in\n*"/attempts/"*)\n' + attempts_gh + '\n;;\n*)\n' + runs_gh + '\n;;\nesac'
         stubs = {'gh': gh}
         if python is not None:
             stubs['python3'] = python
-        outcome, calls, output = run_step(self.DECIDE, stubs, RESULT=result, EVENT_NAME=event, RUN_ID='100')
+        outcome, calls, output = run_step(self.DECIDE, stubs, RESULT=result, EVENT_NAME=event, RUN_ID='100',
+                                          RUN_ATTEMPT=str(attempt), TEST_PREVIOUS=previous or '')
         self.assertEqual(0, outcome.returncode, outcome.stderr)
         self.assertEqual(1, len(output))
         return output[0], calls
@@ -238,9 +243,44 @@ class AlertWiringTests(unittest.TestCase):
 
     def test_a_broken_helper_does_not_hide_a_failure(self):
         runs = [{'id': 99, 'conclusion': 'failure'}]
-        for result, expected in (('failure', 'failed'), ('cancelled', 'failed'), ('success', 'none')):
-            with self.subTest(result=result):
-                self.assertEqual(f'action={expected}', self.decide(result, 'schedule', runs, python='exit 2')[0])
+        cases = [('failure', 'schedule', 'failed'), ('success', 'schedule', 'none'),
+                 ('cancelled', 'schedule', 'none'), ('failure', 'workflow_dispatch', 'failed'),
+                 ('success', 'workflow_dispatch', 'none'), ('cancelled', 'workflow_dispatch', 'failed')]
+        for result, event, expected in cases:
+            with self.subTest(result=result, event=event):
+                self.assertEqual(f'action={expected}', self.decide(result, event, runs, python='exit 2')[0])
+
+    def test_a_successful_rerun_of_a_failed_run_posts_a_recovery(self):
+        # The rerun is in progress, so the completed list ends at the healthy run before it.
+        runs = [{'id': 99, 'conclusion': 'success'}]
+        action, calls = self.decide('success', 'schedule', runs, attempt=2, previous='failure')
+        self.assertEqual('action=recovered', action)
+        self.assertIn('gh api repos/jaegertracing/jaeger-demo/actions/runs/100/attempts/1 --jq .conclusion // ""',
+                      calls)
+        # The run now counts as healthy, so the next scheduled run stays silent.
+        runs = [{'id': 100, 'conclusion': 'success'}, {'id': 99, 'conclusion': 'success'}]
+        self.assertEqual('action=none', self.decide('success', 'schedule', runs)[0])
+
+    def test_a_failed_rerun_of_a_failed_run_stays_silent(self):
+        runs = [{'id': 99, 'conclusion': 'success'}]
+        self.assertEqual('action=none', self.decide('failure', 'schedule', runs, attempt=2, previous='failure')[0])
+
+    def test_the_first_attempt_does_not_read_a_previous_attempt(self):
+        _, calls = self.decide('success', 'schedule', [{'id': 99, 'conclusion': 'failure'}])
+        self.assertEqual(1, len(calls))
+        self.assertNotIn('/attempts/', calls[0])
+
+    def test_an_unreadable_previous_attempt_does_not_hide_a_failure(self):
+        runs = [{'id': 99, 'conclusion': 'success'}]
+        self.assertEqual('action=failed', self.decide('failure', 'schedule', runs, attempt=2, previous=None)[0])
+        self.assertEqual('action=none', self.decide('success', 'schedule', runs, attempt=2, previous=None)[0])
+
+    def test_a_failed_slack_post_cannot_change_the_run_result(self):
+        self.assertIs(True, self.FAILED['continue-on-error'])
+        self.assertIs(True, self.RECOVERED['continue-on-error'])
+        self.assertNotIn('continue-on-error', self.DECIDE)
+        self.assertNotIn('continue-on-error', STEPS['Check the OCI demo'])
+        self.assertNotIn('continue-on-error', STEPS['Check the OpenTelemetry demo'])
 
 
 if __name__ == '__main__':

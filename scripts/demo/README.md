@@ -82,7 +82,9 @@ Retries and alerts:
   failure and one recovery. Earlier `cancelled`, `skipped` and other
   inconclusive runs are skipped when looking back.
 - If the history cannot be read or holds no usable result, a failure still
-  posts and a success stays silent.
+  posts and a success stays silent. A rerun is not in that list yet, so the step
+  also reads the previous attempt of the same run: a failed run fixed by a rerun
+  posts one recovery.
 - A manual dispatch always posts a failure and never posts a recovery. A
   cancelled manual run posts a failure. A cancelled scheduled run is silent,
   because the next run checks again within 30 minutes.
@@ -114,8 +116,9 @@ Known limits:
   block merges and until it is deployed, every run fails. Set
   `DEMO_SMOKE_ENABLED` to `false` when merging such a change and restore it
   after deployment.
-- A failing run whose Slack post fails is not announced again, because the next
-  failing run sees a failing predecessor.
+- The Slack steps continue on error, so a failed post never changes a run's
+  result. A failing run whose post fails is therefore not announced again,
+  because the next failing run sees a failing predecessor.
 - A run that is cancelled or fails before its job starts sends no notification.
   The next run checks again within 30 minutes
   ([#37](https://github.com/jaegertracing/jaeger-demo/issues/37)).

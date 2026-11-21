@@ -19,6 +19,10 @@ Rules for scheduled runs, which deduplicate on the state change:
 * A success posts ``recovered`` only when that earlier run failed.
 * With no readable history or no usable conclusion, a failure posts (fail
   open, so a broken lookup never hides a real outage) and a success is silent.
+* A rerun is still in progress, so the completed-run list leaves it out. The
+  caller passes the conclusion of the rerun's previous attempt, which counts
+  as the newest earlier run. A failed run that a rerun fixes then posts
+  ``recovered``.
 * A cancelled run is silent. It proves nothing about the demos, and the next
   run checks again within 30 minutes.
 
@@ -84,8 +88,12 @@ def main(argv=None):
     parser.add_argument('--event', required=True, help='triggering event name')
     parser.add_argument('--history', help='JSON from the workflow runs API, newest run first')
     parser.add_argument('--run-id', help='id of this run, excluded from the history')
+    parser.add_argument('--previous-attempt', default='',
+                        help='conclusion of the previous attempt of this run, if it is a rerun')
     args = parser.parse_args(argv)
     history = read_history(args.history, args.run_id) if args.history else None
+    if args.previous_attempt:
+        history = [args.previous_attempt] + (history or [])
     print(decide(args.result, args.event, history))
     return 0
 
