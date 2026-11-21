@@ -70,7 +70,10 @@ The target cluster, bootstrap resource UIDs, existing protocol and empty lock,
 effective permissions, release baselines, key projections and budgeted capacity
 all require verification. Seed only absent objects. Preserve an existing
 control or dated parameter record. Create or server-side apply the immutable
-monitoring hook archive to avoid the client-side annotation size limit. Wait
+monitoring hook archive to avoid the client-side annotation size limit. An
+existing archive with different content cannot be updated: delete and recreate
+it with the hook grants removed
+([replacing the archive](releases.md#when-a-change-alters-a-releases-objects)). Wait
 for the CRD and admission policies and bindings to be effective. Verify fingerprints and parameter references on each serving API endpoint. Exercise the bootstrap request barrier before granting its binding. With runtime actors idle, check effective rights and admission-policy denials under each real subject as its approved binding is staged. An RBAC denial occurs before admission and cannot establish that a named admission policy ran.
 
 The requester RoleBinding in phase 21 is a **proposal**. After approved guard

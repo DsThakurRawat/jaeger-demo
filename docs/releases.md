@@ -333,3 +333,22 @@ hook package for the new chart on the target cluster
 In step 3, generate the packet from the merge commit with the published image
 digest and the reviewed hooks, and have it approved before installing
 ([Review the daily executor installation](daily-production-install-review.md)).
+
+A chart that changes a monitoring CRD also changes
+`jaeger-demo-reviewed-monitoring-crds`, the archive in `jaeger-demo-operations`
+that the hook policies compare the CRD hook's ConfigMap with. That ConfigMap is
+immutable, so creating or server-side applying the new packet cannot update
+it, and with the old archive in place the guard rejects the new CRD hook.
+Replace it as part of the approved installation in step 3, in this order:
+
+1. Pause the GitHub signal and the preparer, let running preparers and writers
+   drain, and confirm that the checkpoint names no lock holder.
+2. Remove the executor's `jaeger-demo-monitoring-hook` roles and bindings. Grants
+   go before guards.
+3. Delete the old archive and create the new one from the approved packet. While
+   it is missing, the hook policy denies, because a missing parameter is denied.
+4. Compare the new archive's `binaryData`, and each hook policy and binding, with
+   the reviewed definitions in the packet, and wait until they are effective on
+   every API endpoint.
+5. Restore the hook grants, then run the manual monitoring upgrade in step 4
+   above before resuming the preparer and the signal.
