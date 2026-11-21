@@ -34,9 +34,11 @@ jobs:
         path: .tools/shunit2
         persist-credentials: false
     - name: Install Helm for credential-free chart tests
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
+      uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       with:
         version: v4.3.2
+        # Fail when the published checksum is missing or does not match.
+        checksum-policy: required
     - name: Verify the pinned Helmfile toolchain
       run: make helmfile-tools
     - name: Install and verify constrained OCI CLI without credentials
