@@ -47,3 +47,6 @@ every document the change makes stale:
   plan.
 - Stale documentation found outside the PR's scope gets its own issue rather than
   a wider PR.
+- Run `python3 scripts/demo/changelog_check.py origin/main HEAD` before pushing.
+  Never apply the `skip-changelog` label yourself; when you think a change needs
+  no entry, say why and let the human decide.
