@@ -43,10 +43,10 @@ The test applies the adoption plan with the documented script. One patch is made
 
 ```bash
 kind create cluster --name jaeger-demo-adoption-fixture --kubeconfig "$work/kind.yaml" \
-  --image kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+  --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/companion-adoption/exercise.py \
   --kubeconfig "$work/kind.yaml" --context kind-jaeger-demo-adoption-fixture
 kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$work/kind.yaml"
 ```
 
-The same test can use an explicitly isolated envtest API server with context `fixture` to check Kubernetes defaults, Helm behavior and ownership. Envtest runs the API server and etcd. The kind rehearsal additionally runs workload controllers and Pods. [kind 0.32.0 and its Kubernetes 1.36.1 node image](https://github.com/kubernetes-sigs/kind/releases/tag/v0.32.0)
+The same test can use an explicitly isolated envtest API server with context `fixture` to check Kubernetes defaults, Helm behavior and ownership. Envtest runs the API server and etcd. The kind rehearsal additionally runs workload controllers and Pods. [kind 0.33.0 and its Kubernetes 1.37.0 node image](https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0)

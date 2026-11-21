@@ -151,7 +151,7 @@ Use credential-free inputs for local render and validation. The cache includes t
 hash-verified Kubernetes OpenAPI specification when running schema validation.
 
 Pass complete YAML streams with the monitoring chart's CRDs included. The validator
-uses the upstream Kubernetes v1.36.1 OpenAPI definitions and the exact served CRD
+uses the upstream Kubernetes v1.37.0 OpenAPI definitions and the exact served CRD
 schemas in those streams. It checks exact API group, version and kind, applies
 strict field and type checks, and fails on missing schemas. Native optional fields
 accept Kubernetes' null-as-omitted representation. Server-side defaulting, CEL and

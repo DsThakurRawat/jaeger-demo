@@ -48,7 +48,7 @@ Save the example as `.tools/images.yaml`. For an OCI or all-stack render, supply
 python3 scripts/demo/helmfile_selection.py --stack otel --component otel-demo
 helmfile --file helmfile.yaml --state-values-file .tools/images.yaml \
   --selector stack=otel,component=otel-demo --skip-deps template \
-  --include-transitive-needs --include-crds --kube-version 1.36.1
+  --include-transitive-needs --include-crds --kube-version 1.37.0
 ```
 
 The first command prints all three release identities in dependency order. Both commands use the same stack and component. Always specify the stack when selecting a component because both Jaeger releases are named `jaeger`. Render OCI and OTel separately when evaluating an all-stack change. The production runner must verify OCI's functional checks before beginning OTel mutations.

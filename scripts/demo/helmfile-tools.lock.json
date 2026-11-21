@@ -46,7 +46,7 @@
     }
   },
   "kubernetesSchema": {
-    "version": "v1.36.1",
-    "sha256": "dcede2063da1d7ad62ecb5af8adb6d7fabd0b52385a7fa0048afb491dac90450"
+    "version": "v1.37.0",
+    "sha256": "465276aedf437726de5a6ed23a41b86d78bb0d347edf251a755ae26a93cdd8a6"
   }
 }

@@ -81,7 +81,7 @@ chart policy and can move in their registries. Server-side dry-run performs live
 chart lookups, including Grafana credentials. Keep both the bundle and renderer
 output in private custody.
 
-Both processes require Helm 4.3.2, the reviewed Kubernetes v1.36.1 and a
+Both processes require Helm 4.3.2, the reviewed Kubernetes v1.37.0 and a
 matching `SCHEDULED_CLUSTER_UID` for the `kube-system` Namespace. The executor
 calls `scheduled_adapter.apply(files, slot=..., configuration_sha=..., assert_locked=...)`.
 It compares all six Helm histories and named resource projections before its

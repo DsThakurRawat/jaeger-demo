@@ -17,7 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
 STATE = ROOT / "helmfile.yaml"
-TARGET = ["--kube-version", "1.36.1", "--include-crds"]
+TARGET = ["--kube-version", "1.37.0", "--include-crds"]
 # Exercise digit-only tags, independent pins, tag-only adoption and digest promotion.
 IMAGES = {
     "oci": {

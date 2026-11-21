@@ -28,7 +28,7 @@ selection=.tools/promotion/image-selection.json
 selection_sha=$(shasum -a 256 "$selection" | awk '{print $1}')
 for stack in oci otel; do
   helmfile -f helmfile.yaml --state-values-file "$selection" --skip-deps \
-    -l "stack=$stack,component=jaeger" template --skip-needs --kube-version 1.36.1 \
+    -l "stack=$stack,component=jaeger" template --skip-needs --kube-version 1.37.0 \
     > ".tools/promotion/$stack-jaeger.yaml"
 done
 python3 scripts/demo/promotion_images.py validate --selection "$selection" \

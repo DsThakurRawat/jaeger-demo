@@ -147,7 +147,7 @@ def run(cfg, scratch, kube, packages, chart_root):
                         pkg,
                         "-n",
                         ns,
-                        "--kube-version=1.36.1",
+                        "--kube-version=1.37.0",
                         "--is-upgrade",
                         "-f",
                         "-",
@@ -256,7 +256,7 @@ def run(cfg, scratch, kube, packages, chart_root):
         "data": {"ca": "ZmFrZQ=="},
     }
     protected_get = a.get_object
-    ctx = {"clusterUID": "fixture", "kubernetes": "v1.36.1"}
+    ctx = {"clusterUID": "fixture", "kubernetes": "v1.37.0"}
     records = {
         k: [{"revision": 5, "status": "deployed", "uid": "fixture-" + k, "sha256": a.sha(a.encode(v))}]
         for k, v in previous.items()
