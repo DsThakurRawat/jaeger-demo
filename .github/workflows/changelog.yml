@@ -1,0 +1,40 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+# Separate from ci.yml so that adding or removing the skip label reruns only
+# this check, not the tests and rehearsals.
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    name: Changelog entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Require an entry or the skip-changelog label
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        SKIP: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+      run: |
+        git fetch --no-tags --depth=1 origin "$BASE_SHA"
+        args=(--pr "$PR_NUMBER")
+        if [ "$SKIP" = true ]; then
+          args+=(--skip)
+          echo "::notice::The skip-changelog label is set; only the changelog structure is checked."
+        fi
+        python3 scripts/demo/changelog_check.py "${args[@]}" "$BASE_SHA" HEAD

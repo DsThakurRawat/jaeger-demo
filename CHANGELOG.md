@@ -25,6 +25,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- `Changelog entry` CI check: a pull request that changes a non-test file fails
+  without a new dated entry unless a maintainer applies the `skip-changelog` label.
+  It also validates the changelog's date and category headings.
+  ([#80](https://github.com/jaegertracing/jaeger-demo/pull/80),
+  fixes [#79](https://github.com/jaegertracing/jaeger-demo/issues/79))
 - Mermaid diagrams of the public routes, the trace flow and the manual and gated
   daily deployment paths in the README, and of the daily executor sequence in
   `docs/in-cluster-executor.md`.
@@ -79,6 +84,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
   ([#68](https://github.com/jaegertracing/jaeger-demo/pull/68),
   fixes [#67](https://github.com/jaegertracing/jaeger-demo/issues/67))
+- Helmfile adoption toolchain pins Helmfile v1.8.4. Its `apply` now also upgrades
+  a release that is not deployed and runs `helm list` once for each release it
+  diffs; the frozen-transaction rehearsal covers the new case.
+  ([#77](https://github.com/jaegertracing/jaeger-demo/pull/77),
+  fixes [#75](https://github.com/jaegertracing/jaeger-demo/issues/75))
 - Workload image pins: BusyBox 1.38.0, Valkey 8.1.12-alpine, PostgreSQL 17.12,
   Python 3.11.18 and `jaeger-es-index-cleaner` 2.23.0, each pinned by digest.
   ([#52](https://github.com/jaegertracing/jaeger-demo/pull/52),
