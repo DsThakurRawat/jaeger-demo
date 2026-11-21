@@ -24,7 +24,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 ### Added
 
 - This changelog, backfilled from the extraction onward. `AGENTS.md`,
-  `CONTRIBUTING.md` and the PR template require an entry for notable changes.
+  `CONTRIBUTING.md` and the PR template require an entry for notable changes, and
+  `AGENTS.md` maps each kind of change to the documents it must update.
   ([#64](https://github.com/jaegertracing/jaeger-demo/pull/64),
   fixes [#63](https://github.com/jaegertracing/jaeger-demo/issues/63))
 - Helmfile adoption candidate for the six application releases and twelve
