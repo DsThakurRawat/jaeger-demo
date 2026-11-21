@@ -66,9 +66,10 @@ jobs:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: bash examples/otel-demo/opensearch-recovery.sh backup-test
 
-    # Skip unless the lock was acquired. If the CLI check failed, kubectl would run an
+    # Skip unless the lock step succeeded. If the CLI check failed, kubectl would run an
     # unverified CLI. If the lock was refused, the recovery script never started and
-    # there is nothing to collect.
+    # there is nothing to collect. A successful step can report held=false, so this
+    # condition does not prove that the run holds the lock.
     - name: Collect failure diagnostics
       if: failure() && steps.writer-lock.outcome == 'success'
       run: |
