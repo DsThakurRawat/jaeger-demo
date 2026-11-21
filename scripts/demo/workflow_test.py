@@ -226,5 +226,38 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('      EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}\n', job)
 
 
+    def test_unsuccessful_deployments_notify_and_reconcile_stops_inside_the_job_limit(self):
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        header = '    - name: Send detailed Slack notification on failure\n'
+        manual, daily = source.split(header)[1:]
+        # Both jobs end with the notification and the daily job reuses the manual message.
+        self.assertNotIn('\n    - name:', manual.split('\n  request-daily:', 1)[0])
+        self.assertNotIn('\n    - name:', daily)
+        self.assertIn('      env: *demo-failure-alert\n', daily)
+        self.assertIn('*Status:* ${{ job.status }}', manual)
+        for notify in (manual, daily):
+            condition = re.search(r'^      if: (.+)$', notify, re.MULTILINE)[1]
+            for status in ('success', 'failure', 'cancelled'):
+                with self.subTest(status=status):
+                    expression = condition.replace('failure()', repr(status == 'failure'))
+                    expression = expression.replace('cancelled()', repr(status == 'cancelled')).replace('||', 'or')
+                    self.assertEqual(status != 'success', eval(expression, {'__builtins__': {}}, {}))
+
+        job_limit = int(re.search(r'^    timeout-minutes: (\d+)$', source, re.MULTILINE)[1])
+        reconcile = source.split('    - name: Reconcile demo components\n', 1)[1].split('\n    - name:', 1)[0]
+        step_limit = int(re.search(r'^      timeout-minutes: (\d+)$', reconcile, re.MULTILINE)[1])
+        # Reconcile keeps the 300 minutes the job allowed before the step had a limit
+        # of its own. Setup and the later steps get the remaining 30 minutes.
+        self.assertGreaterEqual(step_limit, 300)
+        self.assertGreaterEqual(job_limit - step_limit, 30)
+        self.assertLess(job_limit, 360)
+        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 2\n', cleanup)
+        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
+        self.assertIn('\n      timeout-minutes: 5\n', diagnostics)
+        self.assertEqual(3, diagnostics.count(' --request-timeout=30s || true'))
+        self.assertIn(' --request-timeout=30s ', cleanup)
+
+
 if __name__ == '__main__':
     unittest.main()
