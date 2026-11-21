@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` now tracks the daily schedule's first-run evidence and open
+  gates, and lists what to inspect (preparer, request record and checkpoint lock
+  holder) before the next scheduled slot or a manual write.
+  ([#78](https://github.com/jaegertracing/jaeger-demo/pull/78),
+  refs [#11](https://github.com/jaegertracing/jaeger-demo/issues/11))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
@@ -130,6 +135,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Management, which made the unauthenticated cluster writable.
   ([#32](https://github.com/jaegertracing/jaeger-demo/pull/32),
   fixes [#31](https://github.com/jaegertracing/jaeger-demo/issues/31))
+- OTel demo values run the load generator headless and drop the `flagd-ui`
+  sidecar, which closes the unauthenticated `/loadgen/` and `/feature` controls
+  on the public shop route.
+  ([#60](https://github.com/jaegertracing/jaeger-demo/pull/60),
+  refs [#57](https://github.com/jaegertracing/jaeger-demo/issues/57))
 - OpenSearch recovery and volume-expansion workflows install the constrained OCI
   CLI and verify it before taking the deployment lock.
   ([#24](https://github.com/jaegertracing/jaeger-demo/pull/24),
