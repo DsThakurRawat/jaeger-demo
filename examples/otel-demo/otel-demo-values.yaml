@@ -65,6 +65,10 @@ components:
       - name: wait-for-valkey-cart
         image: docker.io/busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
         command: ["sh", "-c", "until nc -z -v -w30 valkey-cart 6379; do echo waiting for valkey-cart; sleep 2; done;"]
+    # No OpAMP server runs here (see opamp-server below). An empty endpoint turns the client off.
+    envOverrides:
+      - name: OPAMP_SERVER_ENDPOINT
+        value: ""
 
   checkout:
     initContainers:
@@ -121,6 +125,9 @@ components:
     envOverrides:
       - name: GOMEMLIMIT
         value: 48MiB
+      # No OpAMP server runs here (see opamp-server below). An empty endpoint turns the client off.
+      - name: OPAMP_SERVER_ENDPOINT
+        value: ""
     resources:
       limits:
         memory: 64Mi
@@ -139,6 +146,12 @@ components:
   agent:
     enabled: false
   mcp:
+    enabled: false
+
+  # The shop's proxy serves the OpAMP server's interface at /opamp/, and the
+  # shop is public. That interface changes client configuration and connection
+  # settings without authentication, so the server is not deployed.
+  opamp-server:
     enabled: false
   chatbot:
     enabled: false

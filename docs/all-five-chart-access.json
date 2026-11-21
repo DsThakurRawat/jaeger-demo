@@ -757,19 +757,6 @@
       "scope": "otel-demo",
       "apiGroup": "",
       "resource": "services",
-      "name": "opamp-server",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "",
-      "resource": "services",
       "name": "telemetry-docs",
       "verbs": [
         "get",
@@ -784,19 +771,6 @@
       "apiGroup": "apps",
       "resource": "deployments",
       "name": "astronomy-db",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "otel-demo",
-      "release": "otel-demo",
-      "scope": "otel-demo",
-      "apiGroup": "apps",
-      "resource": "deployments",
-      "name": "opamp-server",
       "verbs": [
         "get",
         "patch"

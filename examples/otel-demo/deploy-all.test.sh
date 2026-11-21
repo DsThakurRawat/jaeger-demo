@@ -430,8 +430,13 @@ testPinnedChartRendersReviewedApplicationShape() {
   count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(agent|mcp|chatbot)'?\$" || true)
   assertEquals "the assistant stack should stay disabled" 0 "$count"
   assertNotContains "$rendered" "name: agent-fixtures"
-  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(opamp-server|telemetry-docs)'?\$" || true)
-  assertEquals "the OpAMP server and the telemetry documentation should be deployed" 2 "$count"
+  # The shop's public proxy would expose the OpAMP server's unauthenticated interface.
+  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-opamp-server'?\$" || true)
+  assertEquals "the OpAMP server should stay disabled" 0 "$count"
+  count=$(printf '%s\n' "$rendered" | grep -c -E 'value: "?wss?://opamp-server' || true)
+  assertEquals "no service should be configured to reach an OpAMP server" 0 "$count"
+  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-telemetry-docs'?\$" || true)
+  assertEquals "the telemetry documentation should be deployed" 1 "$count"
 
   count=$(printf '%s\n' "$rendered" | grep -E 'image: .*busybox' | grep -c -v '@sha256:' || true)
   assertEquals "every busybox init container should be pinned by digest" 0 "$count"
