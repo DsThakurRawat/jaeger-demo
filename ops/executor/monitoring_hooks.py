@@ -34,7 +34,7 @@ def pinned_hooks(archive):
         env = {"PATH": os.environ["PATH"], "HOME": home, "KUBECONFIG": os.devnull}
         r.require(adapter.command(["helm", "version", "--template={{.Version}}"], env=env) == b"v4.3.2", "Unexpected Helm version")
         values = adapter.values_for("oci-monitoring", ROOT, {})
-        data = adapter.command(["helm", "template", "prometheus", archive, "-n", "default", "--kube-version=1.36.1",
+        data = adapter.command(["helm", "template", "prometheus", archive, "-n", "default", "--kube-version=1.37.0",
                                 "--is-upgrade", "--values", "-"], body=adapter.encode(values), env=env)
     hooks = [obj for obj in adapter.docs(data) if "helm.sh/hook" in (obj["metadata"].get("annotations") or {})]
     targets = {(s["scope"], s["resource"], s["name"]) for s in r.inventory() if s.get("hookEvents")}

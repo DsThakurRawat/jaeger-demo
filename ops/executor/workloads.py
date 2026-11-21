@@ -14,8 +14,11 @@ CLAIM = PREFIX + "bundles"
 ENTRY = "/opt/jaeger-demo/scripts/demo/scheduled_receiver.py"
 ACCOUNT = {"prepare": PREFIX + "preparer", "serve": PREFIX + "executor"}
 IMAGE = re.compile(r"ghcr\.io/jaegertracing/jaeger-demo-executor@sha256:[a-f0-9]{64}")
+# The preparer and executor share one volume. Kubernetes 1.37 mounts volumes with the pod's SELinux
+# label by default, which stops a second pod with a different label; keep recursive relabeling.
 POD_SECURITY = {"runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001, "fsGroup": 10001,
-                "fsGroupChangePolicy": "OnRootMismatch", "seccompProfile": {"type": "RuntimeDefault"}}
+                "fsGroupChangePolicy": "OnRootMismatch", "seccompProfile": {"type": "RuntimeDefault"},
+                "seLinuxChangePolicy": "Recursive"}
 SECURITY = {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}}
 
 

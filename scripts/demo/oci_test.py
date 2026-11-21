@@ -269,7 +269,7 @@ elif command == "curl":
         # The OCI mirror serves the same chart without the repository's large index.
         result = subprocess.run(
             ["helm", "template", "prometheus", "oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack",
-             "--version", version, "--kube-version", "1.36.1", "--is-upgrade",
+             "--version", version, "--kube-version", "1.37.0", "--is-upgrade",
              "--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true", *options],
             text=True, capture_output=True)
         self.assertEqual(0, result.returncode, result.stderr)

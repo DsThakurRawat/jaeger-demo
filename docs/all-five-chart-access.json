@@ -1,7 +1,7 @@
 {
   "configCommit": "df261c2e025ac3b102d17fda170b09972fa498f9",
   "helm": "4.3.2",
-  "targetKubernetes": "1.36.1",
+  "targetKubernetes": "1.37.0",
   "chartArchiveSHA256": {
     "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
     "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",

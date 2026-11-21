@@ -79,6 +79,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The executor, CI rehearsals and render checks target Kubernetes v1.37.0 (kind
+  v0.33.0, kubectl v1.37.0, the 1.37.0 OpenAPI schema and the monitoring CRD hook's
+  kubectl image), and the executor's pods keep recursive SELinux relabeling. The
+  cluster upgrade and a manual monitoring upgrade go with it. **Executor image.**
+  ([#83](https://github.com/jaegertracing/jaeger-demo/pull/83),
+  fixes [#82](https://github.com/jaegertracing/jaeger-demo/issues/82))
 - `docs/MIGRATION.md` now tracks the daily schedule's first-run evidence and open
   gates, and lists what to inspect (preparer, request record and checkpoint lock
   holder) before the next scheduled slot or a manual write.
