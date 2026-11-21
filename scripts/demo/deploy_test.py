@@ -247,6 +247,7 @@ class DeploymentTests(unittest.TestCase):
         pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
         self.assertEqual([pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]],
                          run.call_args_list[2].args[0][2:])
+        self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
     @patch("deploy.run")
     def test_verifier_receives_each_chart_pin_in_order(self, run):
