@@ -80,15 +80,8 @@ else
   echo "⚠️ OTEL Demo Frontend service not found"
 fi
 
-# Load Generator
-if check_service "load-generator" "otel-demo"; then
-  kubectl port-forward -n otel-demo svc/load-generator 8089:8089 &
-  started_services+=("Load Generator (http://localhost:8089)")
-  echo " Started: Load Generator on port 8089"
-else
-  failed_services+=("Load Generator (service not found)")
-  echo "⚠️ Load Generator service not found"
-fi
+# The load generator runs headless (issue #57), so there is no web UI to
+# port-forward on the load-generator service.
 
 # HotROD Demo App (from Jaeger Helm chart v2)
 if check_service "jaeger-hotrod" "jaeger"; then

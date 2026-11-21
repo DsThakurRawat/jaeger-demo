@@ -448,6 +448,89 @@ testPinnedChartRendersCheckoutMemoryHeadroom() {
   assertContains "$resources" "memory: 64Mi"
 }
 
+testPinnedChartRendersHeadlessLoadGeneratorWithoutFlagdUi() {
+  local chart_version
+  local rendered
+  local render_rc
+  local load_generator
+  local headless_count
+  local headless
+  local autostart
+  local users
+  local spawn_rate
+  local flagd_deploy
+  local flagd_service
+
+  chart_version=$(bash -c \
+    'source "$1"; printf "%s" "$OTEL_DEMO_CHART_VERSION"' \
+    _ "$SCRIPT")
+
+  rendered=$(helm template otel-demo opentelemetry-demo \
+    --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+    --version "$chart_version" \
+    --namespace otel-demo \
+    --values "$(dirname "$SCRIPT")/otel-demo-values.yaml" \
+    --show-only templates/component.yaml)
+  render_rc=$?
+
+  assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
+  [[ "$render_rc" -eq 0 ]] || return
+
+  # Issue #57: the public /loadgen/ and /feature routes must have no backend.
+  # Headless Locust opens no web UI and the flagd-ui sidecar is not rendered.
+  load_generator=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (dep && named) printf "%s", doc; doc = ""; dep = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Deployment$/ { dep = 1 }
+    /^  name: load-generator$/ { named = 1 }
+    END { if (dep && named) printf "%s", doc }
+  ')
+  assertContains "$load_generator" "kind: Deployment"
+
+  headless_count=$(printf '%s\n' "$load_generator" | grep -c -- '- name: LOCUST_HEADLESS$' || true)
+  assertEquals "load generator should render exactly one LOCUST_HEADLESS" 1 "$headless_count"
+
+  headless=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_HEADLESS$' | tail -1)
+  assertContains "$headless" '"true"'
+
+  # Load must still autostart from the reviewed users and spawn rate.
+  autostart=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_AUTOSTART$' | tail -1)
+  assertContains "$autostart" '"true"'
+
+  users=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_USERS$' | tail -1)
+  assertContains "$users" '"5"'
+
+  spawn_rate=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_SPAWN_RATE$' | tail -1)
+  assertContains "$spawn_rate" '"2"'
+
+  assertNotContains "$rendered" "flagd-ui"
+
+  # flagd itself keeps serving the reviewed flag file: the init container that
+  # copies it onto the shared writable volume stays, only the UI sidecar goes.
+  flagd_deploy=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (dep && named) printf "%s", doc; doc = ""; dep = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Deployment$/ { dep = 1 }
+    /^  name: flagd$/ { named = 1 }
+    END { if (dep && named) printf "%s", doc }
+  ')
+  assertContains "$flagd_deploy" "kind: Deployment"
+  assertContains "$flagd_deploy" "name: init-config"
+  assertContains "$flagd_deploy" "name: config-rw"
+
+  flagd_service=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (svc && named) printf "%s", doc; doc = ""; svc = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Service$/ { svc = 1 }
+    /^  name: flagd$/ { named = 1 }
+    END { if (svc && named) printf "%s", doc }
+  ')
+  assertContains "$flagd_service" "kind: Service"
+  assertContains "$flagd_service" "port: 8013"
+  assertContains "$flagd_service" "port: 8016"
+  assertNotContains "$flagd_service" "4000"
+}
+
 testPinsCompatibleOpenSearchCharts() {
   output=$(bash -c 'source "$1"; printf "%s|%s" "$OPENSEARCH_CHART_VERSION" "$OPENSEARCH_DASHBOARDS_CHART_VERSION"' _ "$SCRIPT")
   local opensearch=${output%%|*}
