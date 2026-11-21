@@ -25,6 +25,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- `Changelog entry` CI check: a pull request that changes a non-test file fails
+  without a new dated entry unless a maintainer applies the `skip-changelog` label.
+  It also validates the changelog's date and category headings.
+  ([#80](https://github.com/jaegertracing/jaeger-demo/pull/80),
+  fixes [#79](https://github.com/jaegertracing/jaeger-demo/issues/79))
 - Mermaid diagrams of the public routes, the trace flow and the manual and gated
   daily deployment paths in the README, and of the daily executor sequence in
   `docs/in-cluster-executor.md`.
