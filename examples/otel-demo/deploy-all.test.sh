@@ -411,6 +411,8 @@ testPinnedChartRendersReviewedApplicationShape() {
   local rendered
   local render_rc
   local count
+  local pipeline
+  local attribute
 
   chart_version=$(bash -c \
     'source "$1"; printf "%s" "$OTEL_DEMO_CHART_VERSION"' \
@@ -445,6 +447,22 @@ testPinnedChartRendersReviewedApplicationShape() {
   assertContains "$rendered" "value: /otel-config.yml"
   assertContains "$rendered" "astronomy_user:astronomy_password@astronomy-db/astronomy_db"
   assertNotContains "$rendered" "@postgresql/"
+
+  # Jaeger is public. The chart's emitRawPii flag puts the customer's email, card
+  # number and CVV on checkout and payment spans, and the collector override
+  # replaces the chart pipeline that would remove them.
+  pipeline=$(printf '%s\n' "$rendered" | awk '
+    /^ +pipelines:$/ { inside = 1; next }
+    inside && /^ +processors:$/ { list = 1; next }
+    list && /^ +- / { sub(/^ +- /, ""); printf "%s ", $0; next }
+    list { exit }
+  ')
+  assertEquals "the trace pipeline should drop raw personal data before batching" \
+    "memory_limiter k8s_attributes resource transform/drop_raw_pii batch " "$pipeline"
+  for attribute in user.email demo.payment.card_number demo.payment.card_cvv; do
+    count=$(printf '%s\n' "$rendered" | grep -c -F "delete_key(attributes, \"$attribute\")" || true)
+    assertEquals "the collector should delete $attribute from spans" 1 "$count"
+  done
 }
 
 testPinnedChartRendersCheckoutMemoryHeadroom() {

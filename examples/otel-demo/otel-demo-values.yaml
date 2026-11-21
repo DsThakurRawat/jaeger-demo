@@ -217,6 +217,18 @@ opentelemetry-collector:
           - key: service.instance.id
             from_attribute: k8s.pod.uid
             action: insert
+      # The chart's emitRawPii feature flag makes checkout and payment put the
+      # customer's email, card number and CVV on their spans. The chart removes them
+      # in its default collector pipeline, which alternateConfig replaces. Jaeger is
+      # public here, so drop the three attributes whatever the flag says.
+      transform/drop_raw_pii:
+        error_mode: ignore
+        trace_statements:
+          - context: span
+            statements:
+              - delete_key(attributes, "user.email")
+              - delete_key(attributes, "demo.payment.card_number")
+              - delete_key(attributes, "demo.payment.card_cvv")
       batch: {}
     exporters:
       otlp/jaeger:
@@ -236,5 +248,5 @@ opentelemetry-collector:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, k8sattributes, resource, batch]
+          processors: [memory_limiter, k8sattributes, resource, transform/drop_raw_pii, batch]
           exporters: [otlp/jaeger]
