@@ -136,7 +136,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   and digest. The chart's short name `postgres:18.4` is refused by the OKE
   Kubernetes 1.37 node image, which stopped the chart 0.42.7 upgrade.
   **Executor image.**
-  ([#PR](https://github.com/jaegertracing/jaeger-demo/pull/PR),
+  ([#86](https://github.com/jaegertracing/jaeger-demo/pull/86),
   fixes [#85](https://github.com/jaegertracing/jaeger-demo/issues/85))
 - OpenSearch verification compares live versions with each release's
   `appVersion` rather than the chart pin, so a chart-only upgrade no longer fails
