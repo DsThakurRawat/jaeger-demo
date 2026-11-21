@@ -13,7 +13,7 @@
       "release": "otel-demo/otel-demo",
       "chartArchive": "opentelemetry-demo-0.42.7.tgz",
       "valuesSHA256": {
-        "examples/otel-demo/otel-demo-values.yaml": "1d7d780aa7b9a0d5934f4be5c61083fd84866177d78c4423d605eb53a171694e"
+        "examples/otel-demo/otel-demo-values.yaml": "847f55e67a4eedc75877024ede83b06692d1b338472d0f8db207cae9926ceff3"
       },
       "method": "python3 scripts/demo/access_matrix.py"
     }
