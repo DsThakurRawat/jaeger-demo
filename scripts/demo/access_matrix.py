@@ -59,15 +59,21 @@ def hook_events(obj):
     return (obj["metadata"].get("annotations") or {}).get(a.HELM_HOOK, "")
 
 
-def rendered_rows(key, objects, supplements):
-    """Map each object the executor would check to its matrix key. Helm test hooks are not run."""
+def rendered_rows(key, objects, supplements, reviewed=()):
+    """Map each object the executor would check to its matrix key.
+
+    A scheduled upgrade does not run Helm test hooks, so a test-only object needs
+    no record. One that already has a record is kept: its hook events changed,
+    and that has to be reviewed like any other hook change.
+    """
     namespace = a.RELEASES[key][0]
     found = {}
     for obj in objects:
         hook = hook_events(obj)
-        if hook and set(hook.split(",")) <= TEST_HOOKS:
+        row = row_key(key, a.identity(obj, namespace), False)
+        if hook and set(hook.split(",")) <= TEST_HOOKS and row not in reviewed:
             continue
-        found[row_key(key, a.identity(obj, namespace), False)] = {"kind": obj["kind"], "hook": hook}
+        found[row] = {"kind": obj["kind"], "hook": hook}
     for obj in supplements:
         found[row_key(key, a.identity(obj, namespace), True)] = {"kind": obj["kind"], "hook": ""}
     return found
@@ -152,9 +158,10 @@ def gather(root, charts, kube_version, env):
 
 def check(root, renders, out):
     matrix = json.loads((root / MATRIX).read_bytes())
+    reviewed = chart_rows(matrix["records"])
     found, counts = {}, []
     for key, (objects, supplements) in renders.items():
-        rows = rendered_rows(key, objects, supplements)
+        rows = rendered_rows(key, objects, supplements, reviewed)
         if found.keys() & rows.keys():
             raise ValueError("Two releases render the same reviewed identity")
         found.update(rows)
@@ -163,7 +170,8 @@ def check(root, renders, out):
     print("Compared the pinned renders with " + MATRIX + ":", file=out)
     print("\n".join(counts), file=out)
     if unused:
-        print(f"\n{len(unused)} reviewed record(s) match no rendered object. Remove them once no rollback target needs them:", file=out)
+        print(f"\n{len(unused)} reviewed record(s) match no rendered object. A scheduled run refuses the removal until a\n"
+              "manual upgrade has established the new release. Remove the records once no rollback target needs them:", file=out)
         for key in unused:
             print("  - " + describe(key), file=out)
     if hooks:
@@ -209,7 +217,9 @@ def main(argv=None, out=sys.stdout):
         print("\nThe daily executor rejects these charts until " + MATRIX + " is updated. Run\n"
               "  python3 scripts/demo/access_matrix.py --propose\n"
               "for draft records, review each one, and edit the matrix by hand. The matrix is\n"
-              "executor-guarded, so the change needs a new executor image: " + PROCEDURE, file=sys.stderr)
+              "executor-guarded, so the change needs a new executor image: " + PROCEDURE + "\n"
+              "A scheduled run also refuses an added, removed or renamed object, and a changed\n"
+              "protected one, until a manual upgrade has established the new release.", file=sys.stderr)
         return 1
     print("\nEvery rendered object has a reviewed record.", file=out)
     return 0

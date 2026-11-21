@@ -99,6 +99,7 @@ class AccessMatrixTests(unittest.TestCase):
         self.assertIn("  - opensearch / opensearch-dashboards: rbac.authorization.k8s.io/roles opensearch/extra (PROTECTED kind", out)
         self.assertIn("python3 scripts/demo/access_matrix.py --propose", err)
         self.assertIn(m.PROCEDURE, err)
+        self.assertIn("until a manual upgrade has established the new release", err)
         self.assertNotIn("Draft records", out)
         self.assertTrue((a.ROOT / "docs/releases.md").read_text().count("\n## Merging a change to guarded files\n"))
 
@@ -136,7 +137,7 @@ class AccessMatrixTests(unittest.TestCase):
         removed = renders["opensearch"][0].pop()
         status, out, err = self.run_main(renders)
         self.assertEqual((0, ""), (status, err))
-        self.assertIn("1 reviewed record(s) match no rendered object.", out)
+        self.assertIn("1 reviewed record(s) match no rendered object. A scheduled run refuses the removal", out)
         self.assertIn("opensearch/" + removed["metadata"]["name"] + "\n", out)
 
     def test_changed_hook_events_fail_and_test_hooks_are_ignored(self):
@@ -154,6 +155,20 @@ class AccessMatrixTests(unittest.TestCase):
         self.assertIn(hooked["metadata"]["name"] + ": rendered '" + reviewed + ",post-delete'", out)
         del hooked["metadata"]["annotations"]
         self.assertEqual(1, self.run_main(renders)[0])
+
+    def test_a_reviewed_hook_that_becomes_a_test_hook_fails(self):
+        for events in ("test", "test-success", "test,test-success"):
+            with self.subTest(events=events):
+                renders = renders_from_matrix()
+                hooked = next(obj for obj in renders["oci-monitoring"][0] if a.HELM_HOOK in obj["metadata"].get("annotations", {}))
+                hooked["metadata"]["annotations"][a.HELM_HOOK] = events
+                status, out, _ = self.run_main(renders)
+                self.assertEqual(1, status)
+                self.assertIn("1 object(s) have Helm hook events that differ from their record:", out)
+                self.assertIn(hooked["metadata"]["name"] + ": rendered '" + events + "'", out)
+                self.assertNotIn("match no rendered object", out)
+        # The executor itself skips the object once it is test-only, so only this check sees the change.
+        a.inventory("oci-monitoring", [dict(hooked, metadata=dict(hooked["metadata"], name="unreviewed"))], [])
 
     def test_output_never_includes_manifest_content(self):
         renders = renders_from_matrix()

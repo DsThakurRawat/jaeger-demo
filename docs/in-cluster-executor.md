@@ -69,8 +69,14 @@ person reviews each draft, in particular kinds marked as protected, and edits th
 tool never writes it. The matrix is executor-guarded, so that edit needs a matching image release
 ([procedure](releases.md#merging-a-change-to-guarded-files)). The same comparison runs in the
 `Monitoring hooks and Helm history` check. It compares names, kinds and scope only: a client render
-has no live discovery and no Helm lookup results, and it does not show whether the executor's
-protected-object rules accept the change.
+has no live discovery and no Helm lookup results.
+
+Updating the matrix does not by itself let a scheduled run apply the change. Preparation also requires
+the rendered identities to equal those of the live release ("Daily upgrades require an approved
+existing object inventory") and protected objects to be unchanged ("Privileged manifest differs from
+the operator-established baseline"). A chart update that adds, removes or renames an object, or that
+changes a protected one, therefore needs a separately reviewed manual upgrade to establish the new
+release before preparation resumes, even with the matrix updated and the matching image installed.
 
 ### Installation approval
 
