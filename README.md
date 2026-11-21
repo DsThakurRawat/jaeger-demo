@@ -43,12 +43,8 @@ Routes are defined in [examples/oci/ingress.yaml](examples/oci/ingress.yaml),
 | OTel storage and dashboards | `opensearch` | `opensearch`, `opensearch-dashboards` | [examples/otel-demo](examples/otel-demo) |
 | OTel sample application | `otel-demo` | `otel-demo` | [examples/otel-demo](examples/otel-demo) |
 
-The diagram below maps each public route to its namespace and Helm release, then
-follows the traces. Thin arrows from the ingress are public routes, thick arrows
-carry traces, and dotted arrows are metrics, TLS or the root redirect. Routes come
-from the Ingress manifests listed above. Trace endpoints come from the Jaeger
-values, `config.yaml`, `jaeger-config.yaml`, `otel-demo-values.yaml` and the two
-load generators.
+The first diagram maps each public route through the ingress to its namespace and
+Helm release. Routes and TLS issuers come from the Ingress manifests listed above.
 
 ```mermaid
 flowchart LR
@@ -56,29 +52,26 @@ flowchart LR
     redirect["https#58;//www#46;jaegertracing#46;io/demo/"]
 
     subgraph cluster["OKE cluster (externally owned)"]
-        ingress["Ingress controller, class nginx<br/>(externally owned)"]
         certs["cert-manager and letsencrypt-prod issuers<br/>(externally owned)"]
+        ingress["Ingress controller, class nginx<br/>(externally owned)"]
 
         subgraph ns_default["namespace default"]
-            oci_gen["Load generator<br/>(supplemental manifest)"]
+            oci_jaeger["Jaeger query<br/>release jaeger"]
             oci_hotrod["HotROD<br/>release jaeger"]
-            oci_jaeger["Jaeger, traces in memory<br/>release jaeger"]
-            prometheus["Prometheus and Grafana<br/>release prometheus"]
+            grafana["Grafana<br/>release prometheus"]
         end
 
         subgraph ns_jaeger["namespace jaeger"]
-            otel_gen["Load generator<br/>(supplemental manifest)"]
+            otel_jaeger["Jaeger query<br/>release jaeger"]
             otel_hotrod["HotROD<br/>release jaeger"]
-            otel_jaeger["Jaeger<br/>release jaeger"]
         end
 
         subgraph ns_opensearch["namespace opensearch"]
-            opensearch[("OpenSearch<br/>release opensearch")]
             dashboards["OpenSearch Dashboards<br/>release opensearch-dashboards"]
         end
 
         subgraph ns_otel_demo["namespace otel-demo"]
-            shop["OpenTelemetry Demo, frontend-proxy<br/>release otel-demo"]
+            shop["frontend-proxy<br/>release otel-demo"]
         end
     end
 
@@ -86,23 +79,51 @@ flowchart LR
     certs -. "TLS certificates" .-> ingress
     ingress -- "demo.jaegertracing.io/jaeger" --> oci_jaeger
     ingress -- "demo.jaegertracing.io/hotrod" --> oci_hotrod
-    ingress -- "demo.jaegertracing.io/grafana" --> prometheus
+    ingress -- "demo.jaegertracing.io/grafana" --> grafana
     ingress -. "demo.jaegertracing.io/ permanent redirect" .-> redirect
     ingress -- "jaeger.demo.jaegertracing.io" --> otel_jaeger
     ingress -- "hotrod.demo.jaegertracing.io" --> otel_hotrod
     ingress -- "opensearch.demo.jaegertracing.io" --> dashboards
     ingress -- "shop.demo.jaegertracing.io" --> shop
+```
 
-    oci_gen -- "HTTP /hotrod/dispatch" --> oci_hotrod
-    oci_hotrod == "OTLP HTTP :4318" ==> oci_jaeger
-    prometheus -. "scrapes span metrics :8889" .-> oci_jaeger
-    oci_jaeger -. "SPM queries :9090" .-> prometheus
+The second diagram follows the traces. Thick arrows carry traces and dotted
+arrows carry metrics. Nodes are labelled `namespace/release`. Endpoints come from
+both `jaeger-values.yaml` files, `config.yaml`, `monitoring-values.yaml`,
+`jaeger-config.yaml`, `otel-demo-values.yaml`, `opensearch-dashboard-values.yaml`
+and the two load generators, which are supplemental manifests outside the Helm
+releases.
 
-    otel_gen -- "HTTP /dispatch" --> otel_hotrod
-    otel_hotrod == "OTLP HTTP :4318" ==> otel_jaeger
-    shop == "OTLP gRPC :4317 from the demo collector" ==> otel_jaeger
-    otel_jaeger == "jaeger-main and jaeger-archive indices" ==> opensearch
-    dashboards -- "queries" --> opensearch
+```mermaid
+flowchart TB
+    subgraph oci["OCI stack"]
+        direction LR
+        oci_gen["Load generator<br/>default"]
+        oci_hotrod["HotROD<br/>default/jaeger"]
+        oci_jaeger["Jaeger, traces in memory<br/>default/jaeger"]
+        prometheus["Prometheus<br/>default/prometheus"]
+        oci_gen -- "HTTP /hotrod/dispatch" --> oci_hotrod
+        oci_hotrod == "OTLP HTTP :4318" ==> oci_jaeger
+        prometheus -. "scrapes span metrics :8889" .-> oci_jaeger
+        oci_jaeger -. "SPM queries :9090" .-> prometheus
+    end
+
+    subgraph otel["OTel stack"]
+        direction LR
+        otel_gen["Load generator<br/>jaeger"]
+        otel_hotrod["HotROD<br/>jaeger/jaeger"]
+        shop["OpenTelemetry Demo collector<br/>otel-demo/otel-demo"]
+        otel_jaeger["Jaeger<br/>jaeger/jaeger"]
+        opensearch[("OpenSearch<br/>opensearch/opensearch")]
+        dashboards["OpenSearch Dashboards<br/>opensearch/opensearch-dashboards"]
+        otel_gen -- "HTTP /dispatch" --> otel_hotrod
+        otel_hotrod == "OTLP HTTP :4318" ==> otel_jaeger
+        shop == "OTLP gRPC :4317" ==> otel_jaeger
+        otel_jaeger == "jaeger-main and jaeger-archive indices" ==> opensearch
+        dashboards -- "queries" --> opensearch
+    end
+
+    oci ~~~ otel
 ```
 
 The deployment workflow uses [scripts/demo/deploy.py](scripts/demo/deploy.py) to
