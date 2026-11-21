@@ -45,7 +45,7 @@ class SimulatedCluster:
         self.charts = {ns + "/" + name: key.encode() for key, (ns, name, _) in a.RELEASES.items()}
         def bind(name, fn):
             self.stack.enter_context(patch.object(a, name, side_effect=fn))
-        bind("check_context", lambda: {"clusterUID": "fake", "kubernetes": "v1.36.1"})
+        bind("check_context", lambda: {"clusterUID": "fake", "kubernetes": "v1.37.0"})
         bind("checkpoint", lambda: ("state-uid", self.checks.copy()))
         bind("bindings", lambda: self.pvc.copy())
         bind("history", self.history)
@@ -430,7 +430,7 @@ class AdapterTests(unittest.TestCase):
 
         def read(*args, body=None):
             if args == ("get", "--raw=/version"):
-                return b'{"gitVersion":"v1.36.1"}'
+                return b'{"gitVersion":"v1.37.0"}'
             self.assertEqual(args, ("get", "-f", "-", "-o", "json"))
             self.assertEqual(json.loads(body), obj("Namespace", "kube-system"))
             return a.encode(response)
@@ -441,7 +441,7 @@ class AdapterTests(unittest.TestCase):
                     a.check_context()
             with patch.dict(os.environ, {"SCHEDULED_CLUSTER_UID": "right"}):
                 for response in (namespace, {"apiVersion": "v1", "kind": "List", "items": [namespace]}):
-                    self.assertEqual(a.check_context(), {"clusterUID": "right", "kubernetes": "v1.36.1"})
+                    self.assertEqual(a.check_context(), {"clusterUID": "right", "kubernetes": "v1.37.0"})
                 for changes in ({"name": "different"}, {"deletionTimestamp": "2026-11-19T13:00:00Z"}):
                     with patch.dict(namespace["metadata"], changes), self.assertRaisesRegex(a.AdapterError, "active named object"):
                         a.check_context()

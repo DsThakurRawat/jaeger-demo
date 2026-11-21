@@ -115,7 +115,7 @@ def exercise(charts, jaeger_checkout):
                 # Grafana Secret lookup without contacting a cluster.
                 a.override(inputs, ("grafana", "adminPassword"), "synthetic-local-fixture")
             def render(data):
-                raw = a.command(["helm", "template", name, pkg, "-n", ns, "--kube-version=1.36.1",
+                raw = a.command(["helm", "template", name, pkg, "-n", ns, "--kube-version=1.37.0",
                                  "--is-upgrade", "--values", "-"], body=a.encode(data), env=env)
                 return a.docs(raw)
             candidate = render(inputs)

@@ -35,6 +35,18 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.by_kind["PersistentVolumeClaim"]["spec"]["storageClassName"], "oci-bv")
         self.assertFalse({"RoleBinding", "ClusterRoleBinding", "Secret", "Service"} & self.by_kind.keys())
 
+    def test_every_pod_on_the_shared_volume_keeps_recursive_selinux_relabeling(self):
+        # Kubernetes 1.37 mounts volumes with the pod's SELinux label by default. The bundle-init Job,
+        # the preparer and the executor all mount the bundles claim, so each must keep recursive relabeling.
+        templates = {kind: self.by_kind[kind]["spec"]["template"]["spec"] for kind in ("Job", "Deployment")}
+        templates["CronJob"] = self.by_kind["CronJob"]["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        for kind, spec in templates.items():
+            with self.subTest(kind=kind):
+                self.assertIn(workloads.CLAIM, [v.get("persistentVolumeClaim", {}).get("claimName") for v in spec["volumes"]])
+                self.assertEqual(spec["securityContext"]["seLinuxChangePolicy"], "Recursive")
+        shared = [o for o in self.objects if o["kind"] in {"Job", "CronJob", "Deployment", "StatefulSet", "DaemonSet"}]
+        self.assertEqual(len(shared), 3, "A new workload must be added to this check")
+
     def test_egress_matches_runtime_services_without_node_metadata_http(self):
         policy = self.by_kind["NetworkPolicy"]["spec"]
         self.assertEqual(set(policy["policyTypes"]), {"Ingress", "Egress"})

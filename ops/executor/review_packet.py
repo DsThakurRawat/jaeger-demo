@@ -103,7 +103,7 @@ ORDER = {
     )
 }
 PREREQUISITES = [
-    "Confirm the kube-system UID and Kubernetes v1.36.1 from a trusted operator context. Verify the published Linux amd64 executable image digest and provenance.",
+    "Confirm the kube-system UID and Kubernetes v1.37.0 from a trusted operator context. Verify the published Linux amd64 executable image digest and provenance.",
     "Verify the four distinct authenticated actor usernames and the different bootstrap operator. Inspect existing, aggregated and inherited rights. The recovery operator separately needs named get/patch on the existing default/jaeger-demo-deployment-revisions checkpoint.",
     "Keep manual writers idle. Confirm the checkpoint UID, version, existing five component fingerprints, protocol annotation v1, and an empty holder. Never replace an existing request, parameter, history or checkpoint with a seed.",
     "Before write bindings, verify policy and parameter readback on each serving API endpoint. Run access.py --phase verified-binding under the authorized bootstrap user and compare the emitted binding. As each binding is staged with runtime actors idle, check effective rights and policy-specific denials under its authentic subject.",

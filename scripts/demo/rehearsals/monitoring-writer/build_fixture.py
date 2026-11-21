@@ -89,7 +89,7 @@ def build(args):
             "--namespace",
             "default",
             "--kube-version",
-            "1.36.1",
+            "1.37.0",
             "--dry-run=client",
             "--is-upgrade",
             "-f",

@@ -300,7 +300,7 @@ def check_context():
          ("HELM_KUBECONTEXT", "HELM_KUBEAPISERVER", "HELM_KUBEASUSER", "HELM_KUBEASGROUPS", "HELM_KUBETOKEN")),
          "Ambiguous Helm cluster overrides")
     server = json.loads(kube("get", "--raw=/version"))["gitVersion"]
-    need(server == "v1.36.1", "Kubernetes version differs from the rehearsed version")
+    need(server == "v1.37.0", "Kubernetes version differs from the rehearsed version")
     uid = get_object("v1:Namespace:-:kube-system")["metadata"]["uid"]
     need(bool(uid) and uid == os.environ.get("SCHEDULED_CLUSTER_UID"), "This Kubernetes cluster is not the independently configured target")
     return {"kubernetes": server, "clusterUID": uid}
