@@ -31,15 +31,29 @@ def load_inputs():
     return importlib.import_module("scheduled_inputs")
 
 
+class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects to anything but HTTPS, so a downgrade cannot replace both digest and archive."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        require_https(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def require_https(url):
+    if not url.startswith("https://"):
+        raise ValueError("Chart download URL or redirect is not HTTPS: " + url)
+    return url
+
+
 def fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "jaeger-demo-update-chart-archives"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    request = urllib.request.Request(require_https(url), headers={"User-Agent": "jaeger-demo-update-chart-archives"})
+    with urllib.request.build_opener(HttpsOnlyRedirects).open(request, timeout=TIMEOUT) as response:
         return response.read()
 
 
 def load_index(repository, getter):
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-    return yaml.load(getter(repository.rstrip("/") + "/index.yaml"), Loader=loader)
+    return yaml.load(getter(require_https(repository.rstrip("/") + "/index.yaml")), Loader=loader)
 
 
 def index_entry(index, chart, version):
@@ -51,10 +65,7 @@ def index_entry(index, chart, version):
 
 def archive_url(repository, entry, filename):
     urls = entry.get("urls") or [filename]
-    url = urllib.parse.urljoin(repository.rstrip("/") + "/", urls[0])
-    if not url.startswith("https://"):
-        raise ValueError("Chart archive URL is not HTTPS: " + url)
-    return url
+    return require_https(urllib.parse.urljoin(repository.rstrip("/") + "/", urls[0]))
 
 
 def resolve(root, charts, pin, getter):

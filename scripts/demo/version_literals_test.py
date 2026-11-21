@@ -43,6 +43,7 @@ LITERALS = (
     ("examples/oci/monitoring-values.yaml", r'depName=registry\.k8s\.io/kubectl\s+tag: "(v\d+\.\d+\.\d+)@sha256', "kube", 1),
     ("ops/executor/monitoring_hooks.py", rf'== b"({VER})"', "helm", 1),
     ("ops/executor/monitoring_hooks.py", rf'--kube-version=({VER})"', "kube", 1),
+    ("ops/executor/review_packet.py", rf"Kubernetes ({VER}) from a trusted operator", "kube", 1),
     ("ops/executor/Containerfile", rf"get\.helm\.sh/helm-({VER})-linux", "helm", 1),
     ("ops/executor/Containerfile", rf"dl\.k8s\.io/release/({VER})/bin", "kube", 1),
 )

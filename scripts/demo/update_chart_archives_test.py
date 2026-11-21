@@ -152,6 +152,18 @@ class ChartArchiveHelperTests(unittest.TestCase):
         self.assertEqual(helper.archive_url("https://example.test/charts", {"urls": ["x-1.tgz"]}, "x-1.tgz"),
                          "https://example.test/charts/x-1.tgz")
 
+    def test_redirects_and_initial_urls_must_be_https(self):
+        handler = helper.HttpsOnlyRedirects()
+        request = helper.urllib.request.Request("https://example.test/index.yaml")
+        with self.assertRaisesRegex(ValueError, "not HTTPS"):
+            handler.redirect_request(request, io.BytesIO(), 302, "Found", {}, "http://example.test/index.yaml")
+        followed = handler.redirect_request(request, io.BytesIO(), 302, "Found", {}, "https://cdn.example.test/index.yaml")
+        self.assertEqual(followed.full_url, "https://cdn.example.test/index.yaml")
+        with self.assertRaisesRegex(ValueError, "not HTTPS"):
+            helper.fetch("http://example.test/chart.tgz")
+        with self.assertRaisesRegex(ValueError, "not HTTPS"):
+            helper.load_index("http://example.test", lambda url: b"")
+
     def test_committed_lock_has_the_shape_the_helper_writes(self):
         lock = json.loads((deploy.ROOT / inputs.LOCK).read_text())
         text = json.dumps({"charts": dict(sorted(lock["charts"].items())), "jaegerDependencies": lock["jaegerDependencies"]},
