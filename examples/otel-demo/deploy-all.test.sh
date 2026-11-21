@@ -440,6 +440,11 @@ testPinnedChartRendersReviewedApplicationShape() {
   count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-telemetry-docs'?\$" || true)
   assertEquals "the telemetry documentation should be deployed" 1 "$count"
 
+  # Node images on OKE 1.37 refuse short image names such as postgres:18.4.
+  count=$(printf '%s\n' "$rendered" | sed -n -E "s/^ +image: ['\"]?([^'\" ]+).*/\1/p" |
+    awk -F/ 'NF == 1 || $1 !~ /[.:]/ && $1 != "localhost"' | wc -l | tr -d ' ')
+  assertEquals "every image should name its registry" 0 "$count"
+  assertContains "$rendered" "image: 'docker.io/library/postgres:18.4@sha256:"
   count=$(printf '%s\n' "$rendered" | grep -E 'image: .*busybox' | grep -c -v '@sha256:' || true)
   assertEquals "every busybox init container should be pinned by digest" 0 "$count"
 
