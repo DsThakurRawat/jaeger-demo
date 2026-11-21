@@ -118,6 +118,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Management, which made the unauthenticated cluster writable.
   ([#32](https://github.com/jaegertracing/jaeger-demo/pull/32),
   fixes [#31](https://github.com/jaegertracing/jaeger-demo/issues/31))
+- OTel demo values run the load generator headless and drop the `flagd-ui`
+  sidecar, which closes the unauthenticated `/loadgen/` and `/feature` controls
+  on the public shop route.
+  ([#60](https://github.com/jaegertracing/jaeger-demo/pull/60),
+  refs [#57](https://github.com/jaegertracing/jaeger-demo/issues/57))
 - OpenSearch recovery and volume-expansion workflows install the constrained OCI
   CLI and verify it before taking the deployment lock.
   ([#24](https://github.com/jaegertracing/jaeger-demo/pull/24),
