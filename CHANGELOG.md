@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` now tracks the daily schedule's first-run evidence and open
+  gates, and lists what to inspect (preparer, request record and checkpoint lock
+  holder) before the next scheduled slot or a manual write.
+  ([#78](https://github.com/jaegertracing/jaeger-demo/pull/78),
+  refs [#11](https://github.com/jaegertracing/jaeger-demo/issues/11))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
