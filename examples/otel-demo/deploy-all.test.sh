@@ -640,6 +640,9 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
     printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*${setting//./\\.}: true"
     assertTrue "Dashboards should render $setting: true" $?
   done
+  # A visitor's second workspace must not take over the landing page.
+  printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*defaultWorkspace: observability"
+  assertTrue "Dashboards should pin the default workspace" $?
   assertNotContains "$rendered" "data_source."
   # The workspace sidecar must not change the Dashboards container itself.
   assertNotContains "$rendered" "postStart:"

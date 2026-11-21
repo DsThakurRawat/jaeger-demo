@@ -29,9 +29,12 @@ config:
     # make this pod connect to in-cluster addresses.
     workspace.enabled: true
     explore.enabled: true
+    # Once a visitor creates a second workspace, / goes to the default
+    # workspace, or to the home page when none is set.
     uiSettings:
       overrides:
         "home:useNewHomePage": true
+        defaultWorkspace: observability
 
 # A sidecar keeps the Observability workspace that visitors land in, with an
 # index pattern for the spans Jaeger writes, so Explore can query them at once.

@@ -71,7 +71,9 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
     (every 15 seconds while waiting) that the Observability workspace and its
     `jaeger-main-jaeger-span-*` index pattern exist and recreates them, because
     any visitor can delete them and a fresh install has no span index until
-    Jaeger runs. It does not affect the Dashboards container's readiness. Read
+    Jaeger runs. It does not affect the Dashboards container's readiness. The
+    `defaultWorkspace` setting is fixed to Observability, so `/` lands there
+    even after a visitor creates another workspace. Read
     its state with
     `kubectl -n opensearch logs deploy/opensearch-dashboards -c workspace-bootstrap`.
     The multiple data source feature stays disabled: it would let visitors
