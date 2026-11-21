@@ -71,13 +71,18 @@ jobs:
       group: jaeger-otel-demo-opensearch-recovery
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # Budget for a full-stack run with the 'required' recovery policy, taking every
-    # wait at its limit: 90m backup-test (the ci-opensearch-recovery.yml limit),
-    # 70m OpenSearch and Dashboards Helm waits (10m + 60m), 45m for the other four
-    # Helm releases (10m + 15m + 10m + 10m), 15m trace generator restarts, and about
-    # 50m of smoke-check and trace-check retries. That is 270m; the rest is setup.
+    # This limit is a cap, not the sum of every wait at its ceiling. With the
+    # 'required' recovery policy, deploy.py runs opensearch-recovery.sh backup-test
+    # inside this job: four sequential waits of up to 60m each
+    # (OPENSEARCH_RECOVERY_TIMEOUT_SECONDS). The 90m limit of
+    # ci-opensearch-recovery.yml does not apply here. The other waits are 70m for
+    # the OpenSearch and Dashboards Helm releases (10m + 60m), 55m for the other
+    # four Helm releases (10m + 15m + 10m + 20m), 15m trace generator restarts, and
+    # about 50m of smoke-check and trace-check retries.
     # Rollout checks that directly follow a Helm --wait return at once.
-    timeout-minutes: 300
+    # The reconcile step is limited to 300m, which leaves 30m for setup, failure
+    # diagnostics, restore-pod cleanup and the notification.
+    timeout-minutes: 330
     env:
       EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
       OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -153,42 +158,51 @@ jobs:
         DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
       run: python3 scripts/demo/scheduled_request.py manual-acquire
 
+    # Stop inside the job limit so diagnostics, restore-pod cleanup and the
+    # notification still run. This timer starts after setup, so the reserve is the
+    # job limit minus this value minus the setup time.
     - name: Reconcile demo components
       id: reconcile
+      timeout-minutes: 300
       env:
         JAEGER_DEMO_LOCK_HELD: ${{ steps.writer-lock.outputs.held }}
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
       if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'
+      # Bounded like the cleanup step, so a hung API cannot use up the reserve.
+      timeout-minutes: 5
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp || true
+          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp --request-timeout=30s || true
         kubectl -n opensearch get pvc \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage || true
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage --request-timeout=30s || true
         kubectl -n opensearch get pods \
           -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
+          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --request-timeout=30s || true
 
     # opensearch-recovery.sh names the pod after the same run ID and attempt. Its own
     # EXIT trap is not reliable when the job is cancelled or times out.
     - name: Remove disposable restore pod
       if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true' && (steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || steps.reconcile.outcome == 'cancelled')
+      # A hung API request must not use up the cancellation window before the notification.
+      timeout-minutes: 2
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
         kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
-          --ignore-not-found=true --wait=false ||
+          --request-timeout=30s --ignore-not-found=true --wait=false ||
           echo "::warning::Could not confirm removal of restore pod jaeger-os-verify-$OPENSEARCH_RECOVERY_ID; delete it manually if the recovery test started"
 
     - name: Release the shared deployment lock
       if: success() && steps.writer-lock.outputs.held == 'true'
       run: python3 scripts/demo/scheduled_request.py manual-release
 
+    # A cancelled or timed-out job is not a failure() and would otherwise end silently.
     - name: Send detailed Slack notification on failure
-      if: failure()
+      if: failure() || cancelled()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
       env: &demo-failure-alert
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -201,6 +215,7 @@ jobs:
           *Repository:* ${{ github.repository }}
           *Workflow:* ${{ github.workflow }}
           *Run ID:* ${{ github.run_id }}
+          *Status:* ${{ job.status }}
           *Trigger:* ${{ github.event_name }}
           *Actor:* ${{ github.actor }}
 
@@ -257,7 +272,8 @@ jobs:
       env: *daily-request-credential
       run: python3 scripts/demo/scheduled_request.py request
 
+    # A cancelled or timed-out job is not a failure() and would otherwise end silently.
     - name: Send detailed Slack notification on failure
-      if: failure()
+      if: failure() || cancelled()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
       env: *demo-failure-alert
