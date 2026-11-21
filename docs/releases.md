@@ -233,3 +233,19 @@ healthy no-op result, and at least 24 hours of observation. Core removal waits f
 that acceptance and the separate post-adoption refactors to merge.
 
 The in-cluster runtime has its own image release, inactive installation manifest and activation procedure. The release receipt records the image digest separately from the daily configuration SHA and component versions. [Executor image release and installation](in-cluster-executor.md#release-and-installation)
+
+## Merging a change to guarded files
+
+The executor refuses its 12:20 UTC preparation when a file in
+`scheduled_inputs.GUARDED` on `main` differs from the copy in its installed image.
+Pull request CI lists such files in the job summary and in a notice. A chart pin
+bump that only edits the pin lines is not listed. Complete these steps before the
+next 12:20 UTC preparation, or pause the schedule first:
+
+1. Merge the pull request.
+2. Run **Publish the demo executor image** from the merge commit.
+3. Obtain installation approval and install the new image.
+
+The image publication and installation steps are in
+[Release and installation](in-cluster-executor.md#release-and-installation). To pause the
+schedule, follow [Activation approval](in-cluster-executor.md#activation-approval).
