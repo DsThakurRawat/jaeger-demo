@@ -65,6 +65,9 @@ extraContainers: |
       - /bin/sh
       - -c
       - |
+        # The shell runs the trap between commands, so a request in flight
+        # delays shutdown by at most its 10-second limit, well inside the
+        # pod's 30-second grace period.
         trap 'exit 0' TERM INT
         base=http://localhost:5601
         workspace='{"attributes":{"id":"observability","name":"Observability","description":"Search the OpenTelemetry demo spans that Jaeger stores in OpenSearch.","features":["use-case-observability"]},"settings":{}}'
