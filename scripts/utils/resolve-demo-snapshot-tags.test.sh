@@ -46,7 +46,7 @@ emit() {
 }
 
 case "\$url" in
-  */tags/${PUBLISHED}/)
+  */tags/latest/|*/tags/${PUBLISHED}/)
     emit "200" '{"digest":"sha256:published"}'
     ;;
   */tags/${PREFERRED}/)
@@ -58,7 +58,14 @@ case "\$url" in
   */tags/${NEWEST}/)
     emit "200" '{"digest":"sha256:newest"}'
     ;;
+  */tags/?page_size=*ordering=last_updated\&page=2)
+    emit "200" '{"results":[{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}],"next":null}'
+    ;;
   */tags/?page_size=*ordering=last_updated*)
+    if [[ "\${PAGE_TWO:-}" == "true" ]]; then
+      emit "200" '{"count":102,"next":"page2","results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"}]}'
+      exit 0
+    fi
     emit "200" '{"results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"},{"name":"'${OLDER}'","last_updated":"2023-01-01T00:00:00Z"},{"name":"'${NEWEST}'","last_updated":"2026-07-10T00:00:00Z"}]}'
     ;;
   */tags/?page_size=*)
@@ -128,15 +135,38 @@ testUsesPreferredTagWhenPublished() {
 }
 
 testScheduledFallsBackToNewestPublishedSha() {
-  out=$(run_script \
-    GITHUB_EVENT_NAME=schedule \
-    JAEGER_DEMO_JAEGER_IMAGE_TAG="$PREFERRED" \
-    JAEGER_DEMO_HOTROD_IMAGE_TAG="$PREFERRED" 2>&1)
+  out=$(run_script GITHUB_EVENT_NAME=schedule 2>&1)
   rc=$?
   assertEquals "exit 0" 0 $rc
   assertContains "$out" "Jaeger tag=$NEWEST"
   assertContains "$out" "HotROD tag=$NEWEST"
   assertContains "$out" "Main HEAD ${MAIN_SHA} has no published Jaeger snapshot"
+}
+
+testScheduledFallbackFindsShaBeyondFirstHubPage() {
+  out=$(run_script GITHUB_EVENT_NAME=schedule PAGE_TWO=true 2>&1)
+  rc=$?
+  assertEquals "scheduled selection searches the next page when needed" 0 "$rc"
+  assertContains "$out" "Jaeger tag=$NEWEST"
+}
+
+testMissingExplicitScheduledOverrideCannotFallBack() {
+  out=$(run_script GITHUB_EVENT_NAME=schedule JAEGER_DEMO_JAEGER_IMAGE_TAG="$PREFERRED" 2>&1)
+  rc=$?
+  assertEquals "scheduled explicit override must exist" 1 "$rc"
+  assertContains "$out" "Snapshot image tag not found"
+
+  out=$(run_script GITHUB_EVENT_NAME=schedule JAEGER_DEMO_IMAGE_TAG="$PREFERRED" 2>&1)
+  rc=$?
+  assertEquals "scheduled shared override must exist" 1 "$rc"
+}
+
+testIndependentScheduledFallbackKeepsPublishedOverride() {
+  out=$(run_script GITHUB_EVENT_NAME=schedule JAEGER_DEMO_JAEGER_IMAGE_TAG="$PUBLISHED" 2>&1)
+  rc=$?
+  assertEquals "published Jaeger override and HotROD fallback" 0 "$rc"
+  assertContains "$out" "Jaeger tag=$PUBLISHED"
+  assertContains "$out" "HotROD tag=$NEWEST"
 }
 
 testLatestInputResolvesToNewestPublishedSha() {
