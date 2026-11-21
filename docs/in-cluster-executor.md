@@ -5,6 +5,49 @@
 
 The trusted preparer publishes the day's private, signed bundle. The executor independently authenticates that bundle and claims the same durable writer lock used by manual operations. The GitHub job supplies one signal and observes the result. The manifests, service accounts, keys and cluster permissions require operator installation before activation. [Daily request protocol](daily-update-request.md) · [Receiver entry point](../scripts/demo/scheduled_receiver.py)
 
+## Daily sequence
+
+Each step below is described in this page, the [daily request protocol](daily-update-request.md) and the [release guide](releases.md). None of it runs until operators install the workloads and a maintainer approves activation: the preparer CronJob first, then the `DEMO_SCHEDULE_ENABLED` repository variable. Manual jobs in the `demo-apply` environment take the same writer lock instead of signalling.
+
+```mermaid
+sequenceDiagram
+    participant P as jaeger-demo-preparer<br/>CronJob, 12:20 UTC
+    participant B as Bundle custody
+    participant C as ConfigMap<br/>daily-hosted-update
+    participant G as GitHub job request-daily<br/>13:00 UTC, demo-scheduled
+    participant E as jaeger-demo-executor<br/>receiver
+    participant L as Writer lock<br/>default/jaeger-demo-deployment-revisions
+    participant H as Six Helm releases
+    participant S as Slack #jaeger-operations
+
+    Note over P,H: Gated: operator installation, then activation approval
+    P->>B: Freeze the plan, write the encrypted bundle, sign the dated index
+    P->>C: Stage admission approvals, publish the ready request and receipt
+    G->>C: Check date, commit, engine scripts-v1 and expiry, then signal once
+    loop Every 10 seconds
+        E->>C: Poll the control record
+    end
+    E->>B: Verify the signed receipt, decrypt the bundle
+    E->>L: Claim the lock (UID and resourceVersion test)
+    E->>H: Compare Helm histories and live state before the first write
+    E->>H: Upgrade selected components in order: default/prometheus, default/jaeger,<br/>opensearch, opensearch-dashboards, jaeger/jaeger, otel-demo
+    Note over E,H: Each component passes its post-rollout health check before its checkpoint advances.<br/>A failure stops later components, so OCI health gates OTel.
+    alt All checks pass
+        E->>C: running to verified
+        E->>L: Release the lock
+        E->>C: Report succeeded
+    else Any check fails
+        E->>C: Record the failure
+        Note over E,L: The lock stays held for the recovery operator
+    end
+    Note over E,H: Durable outcome records go to the outcomes mount in both cases
+    G->>C: Observe the terminal result
+    opt Failed, cancelled or timed out
+        G->>S: Post the failure alert
+    end
+    Note over G,S: demo-run-observer.yml posts to the same channel when a run ended before any job started
+```
+
 ## Processes and credentials
 
 Run `python3 /opt/jaeger-demo/scripts/demo/scheduled_receiver.py prepare` as the `jaeger-demo-preparer` service account and `serve` as `jaeger-demo-executor`, both in `jaeger-demo-operations`. Each process queries the Kubernetes API for its authenticated username before acting. It writes a temporary kubeconfig pointing at the in-cluster TLS endpoint, projected CA and rotating token file. This kubeconfig also supplies the identity for the fixed application commands.

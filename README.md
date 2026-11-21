@@ -43,10 +43,128 @@ Routes are defined in [examples/oci/ingress.yaml](examples/oci/ingress.yaml),
 | OTel storage and dashboards | `opensearch` | `opensearch`, `opensearch-dashboards` | [examples/otel-demo](examples/otel-demo) |
 | OTel sample application | `otel-demo` | `otel-demo` | [examples/otel-demo](examples/otel-demo) |
 
+The diagram below maps each public route to its namespace and Helm release, then
+follows the traces. Thin arrows from the ingress are public routes, thick arrows
+carry traces, and dotted arrows are metrics, TLS or the root redirect. Routes come
+from the Ingress manifests listed above. Trace endpoints come from the Jaeger
+values, `config.yaml`, `jaeger-config.yaml`, `otel-demo-values.yaml` and the two
+load generators.
+
+```mermaid
+flowchart LR
+    visitors(("Visitors"))
+    redirect["https#58;//www#46;jaegertracing#46;io/demo/"]
+
+    subgraph cluster["OKE cluster (externally owned)"]
+        ingress["Ingress controller, class nginx<br/>(externally owned)"]
+        certs["cert-manager and letsencrypt-prod issuers<br/>(externally owned)"]
+
+        subgraph ns_default["namespace default"]
+            oci_gen["Load generator<br/>(supplemental manifest)"]
+            oci_hotrod["HotROD<br/>release jaeger"]
+            oci_jaeger["Jaeger, traces in memory<br/>release jaeger"]
+            prometheus["Prometheus and Grafana<br/>release prometheus"]
+        end
+
+        subgraph ns_jaeger["namespace jaeger"]
+            otel_gen["Load generator<br/>(supplemental manifest)"]
+            otel_hotrod["HotROD<br/>release jaeger"]
+            otel_jaeger["Jaeger<br/>release jaeger"]
+        end
+
+        subgraph ns_opensearch["namespace opensearch"]
+            opensearch[("OpenSearch<br/>release opensearch")]
+            dashboards["OpenSearch Dashboards<br/>release opensearch-dashboards"]
+        end
+
+        subgraph ns_otel_demo["namespace otel-demo"]
+            shop["OpenTelemetry Demo, frontend-proxy<br/>release otel-demo"]
+        end
+    end
+
+    visitors -- "HTTPS" --> ingress
+    certs -. "TLS certificates" .-> ingress
+    ingress -- "demo.jaegertracing.io/jaeger" --> oci_jaeger
+    ingress -- "demo.jaegertracing.io/hotrod" --> oci_hotrod
+    ingress -- "demo.jaegertracing.io/grafana" --> prometheus
+    ingress -. "demo.jaegertracing.io/ permanent redirect" .-> redirect
+    ingress -- "jaeger.demo.jaegertracing.io" --> otel_jaeger
+    ingress -- "hotrod.demo.jaegertracing.io" --> otel_hotrod
+    ingress -- "opensearch.demo.jaegertracing.io" --> dashboards
+    ingress -- "shop.demo.jaegertracing.io" --> shop
+
+    oci_gen -- "HTTP /hotrod/dispatch" --> oci_hotrod
+    oci_hotrod == "OTLP HTTP :4318" ==> oci_jaeger
+    prometheus -. "scrapes span metrics :8889" .-> oci_jaeger
+    oci_jaeger -. "SPM queries :9090" .-> prometheus
+
+    otel_gen -- "HTTP /dispatch" --> otel_hotrod
+    otel_hotrod == "OTLP HTTP :4318" ==> otel_jaeger
+    shop == "OTLP gRPC :4317 from the demo collector" ==> otel_jaeger
+    otel_jaeger == "jaeger-main and jaeger-archive indices" ==> opensearch
+    dashboards -- "queries" --> opensearch
+```
+
 The deployment workflow uses [scripts/demo/deploy.py](scripts/demo/deploy.py) to
 select changed components and invoke the stack scripts. The snapshot resolver
 selects Jaeger and HotROD images independently from upstream core commits. This
 repository's commit identifies configuration, never a product image.
+
+Two paths write to the cluster, and both hold the same writer lock. Maintainers
+dispatch the manual path. The daily path is gated: it needs operator installation
+of the preparer and executor, then separate activation approval, before the
+`DEMO_SCHEDULE_ENABLED` switch lets the 13:00 UTC job signal. The
+[executor sequence](docs/in-cluster-executor.md#daily-sequence) shows each step and
+its failure handling.
+
+```mermaid
+flowchart TB
+    subgraph manual["Manual path: ci-deploy-demo.yml, job deploy"]
+        dispatch["workflow_dispatch on main"] --> approve["Environment demo-apply<br/>reviewer approval"]
+        approve --> manual_lock["Acquire the writer lock<br/>once its protocol is installed"]
+        manual_lock --> reconcile["deploy.py runs the stack scripts<br/>for the selected components"]
+    end
+
+    subgraph daily["Daily path, 13:00 UTC (gated on installation and activation)"]
+        request["ci-deploy-demo.yml, job request-daily<br/>environment demo-scheduled<br/>runs when DEMO_SCHEDULE_ENABLED is true"]
+        control["ConfigMap<br/>jaeger-demo-operations/daily-hosted-update"]
+        preparer["jaeger-demo-preparer<br/>CronJob, 12:20 UTC"]
+        custody[("Bundle custody")]
+        executor["jaeger-demo-executor<br/>verifies the bundle, claims the writer lock"]
+        oci["OCI first: default/prometheus, default/jaeger"]
+        otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo"]
+        outcomes[("Durable outcome records")]
+
+        preparer -- "signed, encrypted dated bundle" --> custody
+        preparer -- "ready request and receipt" --> control
+        request -- "signal" --> control
+        control -- "polled every 10 s" --> executor
+        custody -- "verified and decrypted" --> executor
+        executor -- "selected components" --> oci
+        oci -- "health checks pass" --> otel
+        executor --> outcomes
+        executor -- "terminal state" --> control
+        control -- "observed result" --> request
+    end
+
+    lock[("Writer lock on<br/>default/jaeger-demo-deployment-revisions")]
+    slack["Slack #jaeger-operations"]
+    observer["demo-run-observer.yml<br/>runs that ended before any job started"]
+    helmfile["Helmfile candidate, engine helmfile-v1<br/>not in production"]
+
+    manual_lock -.-> lock
+    executor -.-> lock
+    reconcile -- "failed, cancelled or timed out" --> slack
+    request -- "failed, cancelled or timed out" --> slack
+    observer --> slack
+
+    style daily stroke-dasharray: 5 5
+    style helmfile stroke-dasharray: 5 5
+```
+
+Dashed outlines mark the gated daily path and the Helmfile candidate. The Helmfile
+candidate is validated locally and in PR CI; production continues to run the
+extracted scripts until operator acceptance ([migration plan](docs/MIGRATION.md)).
 
 Existing namespaces, release names, routes, Service addresses and PVCs are
 preserved. Certificate issuers and the shared cluster, ingress controller and
@@ -56,19 +174,18 @@ and AI activation are outside this migration.
 
 ## Development
 
-Local tests require Bash, Python 3, Git, jq, Helm, ShellCheck, actionlint and
-shunit2. They use mocks and render public Helm charts without production
-credentials. Chart rendering requires network access.
+Local checks need Bash, Git, jq, Helm, ShellCheck, actionlint, shunit2, ruff and
+Python 3 with PyYAML and cryptography. Use Python 3.11 or later: the
+`pycparser` pin in
+[oci-cli-constraints.txt](scripts/demo/oci-cli-constraints.txt), which
+`cryptography` pulls in through `cffi`, requires it. The tests use mocks and
+render public Helm charts without production credentials. Chart rendering
+requires network access.
 
-```bash
-# Point at a shunit2 v2.1.8 checkout, or follow CONTRIBUTING.md to create one.
-export SHUNIT2=/path/to/shunit2
-make lint
-make test
-```
-
-[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, credential-free Renovate discovery,
-DCO, issues and required checks. [AGENTS.md](AGENTS.md) covers agent work.
+[CONTRIBUTING.md](CONTRIBUTING.md#local-checks) has the install commands, the
+shunit2 checkout, `make lint`, `make test` and `make check`, plus credential-free
+Renovate discovery, DCO, issues and required checks. [AGENTS.md](AGENTS.md) covers
+agent work.
 
 ## Operations and releases
 
