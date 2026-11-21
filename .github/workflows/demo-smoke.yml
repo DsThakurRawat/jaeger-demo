@@ -14,8 +14,8 @@ permissions:
 jobs:
   smoke:
     name: Public demo health
-    # Scheduled runs wait for the opt-in switch: the webhook secret must exist at
-    # repository level first, because this job has no environment. Manual
+    # Scheduled runs wait for the opt-in switch. Keep it off until the check
+    # retries transient misses and alerts only on a state change. Manual
     # dispatch is always available.
     if: github.repository == 'jaegertracing/jaeger-demo' && (github.event_name != 'schedule' || vars.DEMO_SMOKE_ENABLED == 'true')
     runs-on: ubuntu-latest
@@ -30,9 +30,9 @@ jobs:
       if: ${{ !cancelled() }}
       run: python3 scripts/demo/stack_health.py --stack otel
 
-    # SLACK_WEBHOOK_URL is the only secret used. It must be a repository or
-    # organization secret: this job has no environment, so an
-    # environment-scoped secret is empty here.
+    # SLACK_WEBHOOK_URL is the only secret used. It is a repository-level
+    # secret only, with no deploy environment copy, and this job has no
+    # environment.
     - name: Send Slack notification on failure
       if: failure() || cancelled()
       uses: rtCamp/action-slack-notify@33ca3be66c6f378fe1610fd1d5258632dbed5e58 # v2.4.0
