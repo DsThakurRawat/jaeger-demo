@@ -402,7 +402,67 @@ testPinnedChartRendersCollectorStartupProbe() {
 
   resources=$(printf '%s\n' "$rendered" |
     sed -n '/^[[:space:]]*resources:$/,/^[[:space:]]*volumeMounts:$/p')
-  assertContains "$resources" "memory: 200Mi"
+  # Chart default; 0.42 raised it from 200Mi.
+  assertContains "$resources" "memory: 400Mi"
+}
+
+testPinnedChartRendersReviewedApplicationShape() {
+  local chart_version
+  local rendered
+  local render_rc
+  local count
+  local pipeline
+  local attribute
+
+  chart_version=$(bash -c \
+    'source "$1"; printf "%s" "$OTEL_DEMO_CHART_VERSION"' \
+    _ "$SCRIPT")
+
+  rendered=$(helm template otel-demo opentelemetry-demo \
+    --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+    --version "$chart_version" \
+    --namespace otel-demo \
+    --values "$(dirname "$SCRIPT")/otel-demo-values.yaml")
+  render_rc=$?
+
+  assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
+  [[ "$render_rc" -eq 0 ]] || return
+
+  # The agent's recorded responses do not fit the daily executor's approval partitions.
+  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(agent|mcp|chatbot)'?\$" || true)
+  assertEquals "the assistant stack should stay disabled" 0 "$count"
+  assertNotContains "$rendered" "name: agent-fixtures"
+  # The shop's public proxy would expose the OpAMP server's unauthenticated interface.
+  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-opamp-server'?\$" || true)
+  assertEquals "the OpAMP server should stay disabled" 0 "$count"
+  count=$(printf '%s\n' "$rendered" | grep -c -E 'value: "?wss?://opamp-server' || true)
+  assertEquals "no service should be configured to reach an OpAMP server" 0 "$count"
+  count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-telemetry-docs'?\$" || true)
+  assertEquals "the telemetry documentation should be deployed" 1 "$count"
+
+  count=$(printf '%s\n' "$rendered" | grep -E 'image: .*busybox' | grep -c -v '@sha256:' || true)
+  assertEquals "every busybox init container should be pinned by digest" 0 "$count"
+
+  # product-catalog emits no traces without the chart's SDK configuration file.
+  assertContains "$rendered" "value: /otel-config.yml"
+  assertContains "$rendered" "astronomy_user:astronomy_password@astronomy-db/astronomy_db"
+  assertNotContains "$rendered" "@postgresql/"
+
+  # Jaeger is public. The chart's emitRawPii flag puts the customer's email, card
+  # number and CVV on checkout and payment spans, and the collector override
+  # replaces the chart pipeline that would remove them.
+  pipeline=$(printf '%s\n' "$rendered" | awk '
+    /^ +pipelines:$/ { inside = 1; next }
+    inside && /^ +processors:$/ { list = 1; next }
+    list && /^ +- / { sub(/^ +- /, ""); printf "%s ", $0; next }
+    list { exit }
+  ')
+  assertEquals "the trace pipeline should drop raw personal data before batching" \
+    "memory_limiter k8s_attributes resource transform/drop_raw_pii batch " "$pipeline"
+  for attribute in user.email demo.payment.card_number demo.payment.card_cvv; do
+    count=$(printf '%s\n' "$rendered" | grep -c -F "delete_key(attributes, \"$attribute\")" || true)
+    assertEquals "the collector should delete $attribute from spans" 1 "$count"
+  done
 }
 
 testPinnedChartRendersCheckoutMemoryHeadroom() {
@@ -446,6 +506,89 @@ testPinnedChartRendersCheckoutMemoryHeadroom() {
 
   resources=$(printf '%s\n' "$checkout" | grep -A2 '^[[:space:]]*resources:$')
   assertContains "$resources" "memory: 64Mi"
+}
+
+testPinnedChartRendersHeadlessLoadGeneratorWithoutFlagdUi() {
+  local chart_version
+  local rendered
+  local render_rc
+  local load_generator
+  local headless_count
+  local headless
+  local autostart
+  local users
+  local spawn_rate
+  local flagd_deploy
+  local flagd_service
+
+  chart_version=$(bash -c \
+    'source "$1"; printf "%s" "$OTEL_DEMO_CHART_VERSION"' \
+    _ "$SCRIPT")
+
+  rendered=$(helm template otel-demo opentelemetry-demo \
+    --repo https://open-telemetry.github.io/opentelemetry-helm-charts \
+    --version "$chart_version" \
+    --namespace otel-demo \
+    --values "$(dirname "$SCRIPT")/otel-demo-values.yaml" \
+    --show-only templates/component.yaml)
+  render_rc=$?
+
+  assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
+  [[ "$render_rc" -eq 0 ]] || return
+
+  # Issue #57: the public /loadgen/ and /feature routes must have no backend.
+  # Headless Locust opens no web UI and the flagd-ui sidecar is not rendered.
+  load_generator=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (dep && named) printf "%s", doc; doc = ""; dep = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Deployment$/ { dep = 1 }
+    /^  name: load-generator$/ { named = 1 }
+    END { if (dep && named) printf "%s", doc }
+  ')
+  assertContains "$load_generator" "kind: Deployment"
+
+  headless_count=$(printf '%s\n' "$load_generator" | grep -c -- '- name: LOCUST_HEADLESS$' || true)
+  assertEquals "load generator should render exactly one LOCUST_HEADLESS" 1 "$headless_count"
+
+  headless=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_HEADLESS$' | tail -1)
+  assertContains "$headless" '"true"'
+
+  # Load must still autostart from the reviewed users and spawn rate.
+  autostart=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_AUTOSTART$' | tail -1)
+  assertContains "$autostart" '"true"'
+
+  users=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_USERS$' | tail -1)
+  assertContains "$users" '"5"'
+
+  spawn_rate=$(printf '%s\n' "$load_generator" | grep -A1 -- '- name: LOCUST_SPAWN_RATE$' | tail -1)
+  assertContains "$spawn_rate" '"2"'
+
+  assertNotContains "$rendered" "flagd-ui"
+
+  # flagd itself keeps serving the reviewed flag file: the init container that
+  # copies it onto the shared writable volume stays, only the UI sidecar goes.
+  flagd_deploy=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (dep && named) printf "%s", doc; doc = ""; dep = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Deployment$/ { dep = 1 }
+    /^  name: flagd$/ { named = 1 }
+    END { if (dep && named) printf "%s", doc }
+  ')
+  assertContains "$flagd_deploy" "kind: Deployment"
+  assertContains "$flagd_deploy" "name: init-config"
+  assertContains "$flagd_deploy" "name: config-rw"
+
+  flagd_service=$(printf '%s\n' "$rendered" | awk '
+    /^---$/ { if (svc && named) printf "%s", doc; doc = ""; svc = 0; named = 0; next }
+    { doc = doc $0 "\n" }
+    /^kind: Service$/ { svc = 1 }
+    /^  name: flagd$/ { named = 1 }
+    END { if (svc && named) printf "%s", doc }
+  ')
+  assertContains "$flagd_service" "kind: Service"
+  assertContains "$flagd_service" "port: 8013"
+  assertContains "$flagd_service" "port: 8016"
+  assertNotContains "$flagd_service" "4000"
 }
 
 testPinsCompatibleOpenSearchCharts() {
