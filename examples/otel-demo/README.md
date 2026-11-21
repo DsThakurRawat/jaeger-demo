@@ -227,7 +227,7 @@ CronJob, which runs `jaeger-es-index-cleaner` daily and deletes
 `jaeger-main-jaeger-{span,service,dependencies,sampling}-<date>` indices older
 than 30 days. The `jaeger-archive-*` indices are not touched. The cleaner's
 `index-prefix` must be `jaeger-main`, the same `index_prefix` in
-`jaeger-config.yaml`. The pinned 2.21.0 cleaner appends a dash and then
+`jaeger-config.yaml`. The pinned 2.23.0 cleaner appends a dash and then
 matches `<prefix>jaeger-{span,service,dependencies,sampling}-<date>`.
 `jaeger-values.test.sh` checks that the two stay in sync.
 
