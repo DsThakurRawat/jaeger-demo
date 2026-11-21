@@ -85,7 +85,9 @@ def monitoring_lookup(root, config, kubectl, kube, apply, package):
     import secrets
     package = package.read_bytes()
     archive = json.loads((a.ROOT / "docs/all-five-chart-access.json").read_bytes())["chartArchiveSHA256"]
-    assert a.sha(package) == archive["kube-prometheus-stack-82.10.4.tgz"]
+    # The reviewed matrix names the one monitoring archive that the pinned chart version resolves to.
+    reviewed, = (name for name in archive if name.startswith("kube-prometheus-stack-"))
+    assert a.sha(package) == archive[reviewed]
     path = root / "monitoring-lookup.tgz"
     path.write_bytes(package)
     crds = a.docs(a.command(["helm", "show", "crds", path]))
