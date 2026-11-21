@@ -4,8 +4,9 @@
 
 """Prepare metadata-only ownership patches for the four namespace-local releases.
 
-The default plan adopts the allowlisted objects. With --de-adopt it reverses a recorded
-adoption plan. Both only read named objects and print JSON Patch documents for review.
+The default plan adopts the allowlisted objects. With --de-adopt it reverses the record of
+applied adoption patches that apply-ownership-patches.sh wrote. Both only read named objects
+and print JSON Patch documents for review.
 """
 
 import argparse
@@ -145,8 +146,8 @@ if __name__ == "__main__":
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--context", required=True)
     parser.add_argument("--namespace", choices=yaml.safe_load(ALLOWLIST.read_text()))
-    parser.add_argument("--de-adopt", type=Path, metavar="RECORDED_PLAN",
-                        help="Print patches that remove the metadata added by this recorded adoption plan")
+    parser.add_argument("--de-adopt", type=Path, metavar="RECORD",
+                        help="Print patches that remove the metadata added by the adoption patches in this record")
     args = parser.parse_args()
     if args.de_adopt:
         result = release_plan(args.kubeconfig, args.context, args.de_adopt, args.namespace)

@@ -211,20 +211,56 @@ class CompanionTest(unittest.TestCase):
                     ownership.release_plan("fixture", "fixture", record, "kube-node-lease")
             self.assertEqual([], seen)
 
-    def run_apply_script(self, plan, kubectl_exit=0):
+    def run_apply_script(self, plan, kubectl_exit=0, record=None, fail_on=""):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             calls = root / "calls"
             (root / "bin").mkdir()
             fake = root / "bin" / "kubectl"
-            fake.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CALLS"\nexit "$KUBECTL_EXIT"\n')
+            # FAIL_ON names an object whose patch fails, like a stale resourceVersion test.
+            fake.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$CALLS"\n'
+                            'case " $* " in *" $FAIL_ON "*) exit 1 ;; esac\nexit "$KUBECTL_EXIT"\n')
             fake.chmod(0o755)
             (root / "plan.json").write_text(json.dumps(plan))
-            result = subprocess.run(["bash", str(ROOT / "scripts/demo/apply-ownership-patches.sh"), str(root / "plan.json"),
-                                     "kubeconfig.yaml", "fixture"], capture_output=True, text=True,
+            command = ["bash", str(ROOT / "scripts/demo/apply-ownership-patches.sh"), str(root / "plan.json"),
+                       "kubeconfig.yaml", "fixture"] + ([str(record)] if record else [])
+            result = subprocess.run(command, capture_output=True, text=True,
                                     env=dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
-                                             CALLS=str(calls), KUBECTL_EXIT=str(kubectl_exit)))
+                                             CALLS=str(calls), KUBECTL_EXIT=str(kubectl_exit), FAIL_ON=fail_on or "no-such-object"))
             return result, calls.read_text().splitlines() if calls.exists() else []
+
+    def test_apply_script_records_each_adopted_object_once_across_a_retry(self):
+        def item(name, version):
+            return {"namespace": "default", "kind": "Service", "name": name, "patch": [
+                {"op": "test", "path": "/metadata/uid", "value": "uid-" + name},
+                {"op": "test", "path": "/metadata/resourceVersion", "value": version},
+                {"op": "add", "path": "/metadata/labels", "value": {"app.kubernetes.io/managed-by": "Helm"}}]}
+        first, second, third = item("prometheus", "7"), item("jaeger-collector-prometheus", "7"), item("another", "7")
+        with tempfile.TemporaryDirectory() as temp:
+            record = Path(temp) / "adopted.json"
+            # The second object changed after planning. Its patch fails and nothing after it runs.
+            result, calls = self.run_apply_script([first, second, third], record=record, fail_on="jaeger-collector-prometheus")
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual(2, len(calls))
+            self.assertEqual([first], json.loads(record.read_text()))
+            # A fresh plan has an empty patch for the adopted object and new guards for the others.
+            retry = [dict(first, patch=[]), item("jaeger-collector-prometheus", "9"), item("another", "8")]
+            result, calls = self.run_apply_script(retry, record=record)
+            self.assertEqual((0, 2), (result.returncode, len(calls)))
+            self.assertEqual([first, retry[1], retry[2]], json.loads(record.read_text()))
+            # Replaying a plan for a recorded object would hide what its first entry added.
+            for replay in ([first], [item("another", "9")]):
+                result, calls = self.run_apply_script(replay, record=record)
+                self.assertEqual((1, []), (result.returncode, calls))
+                self.assertIn("already holds", result.stderr)
+            self.assertEqual(3, len(json.loads(record.read_text())))
+            record.write_text('{"not": "a list"}')
+            result, calls = self.run_apply_script([item("fresh", "1")], record=record)
+            self.assertEqual((1, []), (result.returncode, calls))
+            # Without a record argument nothing is written, as for a de-adoption plan.
+            result, calls = self.run_apply_script([first])
+            self.assertEqual((0, 1), (result.returncode, len(calls)))
+            self.assertEqual(["adopted.json"], sorted(p.name for p in Path(temp).iterdir()))
 
     def test_apply_script_patches_only_guarded_metadata_and_stops_on_failure(self):
         guards = [{"op": "test", "path": "/metadata/uid", "value": "id"}, {"op": "test", "path": "/metadata/resourceVersion", "value": "7"}]

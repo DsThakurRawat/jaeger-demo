@@ -112,13 +112,36 @@ def exercise(cfg, context):
     before = states()
     original = full_states()
     assert all(resource["patch"] for resource in desired)
-    # Apply the reviewed plan with the documented script. The same plan is the record for de-adoption.
+    # Apply the reviewed plan with the documented script. It writes the record for de-adoption.
     frozen_work = tempfile.TemporaryDirectory()
     work = Path(frozen_work.name)
-    recorded = work / "ownership.json"
-    recorded.write_text(json.dumps(desired))
+    planned, recorded = work / "ownership.json", work / "adopted.json"
+    planned.write_text(json.dumps(desired))
     apply_script = str(ROOT / "scripts" / "demo" / "apply-ownership-patches.sh")
-    subprocess.run(["bash", apply_script, str(recorded), str(cfg), context], check=True, stdout=subprocess.DEVNULL)
+
+    def identities(items):
+        return [(i["namespace"], i["kind"], i["name"]) for i in items]
+
+    # One object changes after planning. Its patch must fail without a write and stop the run.
+    stale = ("opensearch", "Ingress", "opensearch-demo-ingress")
+    position = identities(desired).index(stale)
+    assert 0 < position < len(desired) - 1
+    touch = ["-n", stale[0], "annotate", "ingress/" + stale[2]]
+    kube(touch + ["rehearsal.example/stale=1"])
+    kube(touch + ["rehearsal.example/stale-"])
+    partial = subprocess.run(["bash", apply_script, str(planned), str(cfg), context, str(recorded)],
+                             capture_output=True, text=True)
+    assert partial.returncode != 0, "A stale patch must stop the run"
+    assert json.loads(recorded.read_text()) == desired[:position], "The record must hold exactly the applied patches"
+    # Retry with a fresh plan and the same record. Adopted objects need no patch and keep their entries.
+    retry = companion_ownership.plan(str(cfg), context)
+    assert [bool(i["patch"]) for i in retry] == [False] * position + [True] * (len(desired) - position)
+    (work / "ownership-retry.json").write_text(json.dumps(retry))
+    subprocess.run(["bash", apply_script, str(work / "ownership-retry.json"), str(cfg), context, str(recorded)],
+                   check=True, stdout=subprocess.DEVNULL)
+    record = json.loads(recorded.read_text())
+    assert identities(record) == identities(desired) and all(i["patch"] for i in record)
+    assert record[:position] == desired[:position] and record[position:] == retry[position:]
     assert not any(i["patch"] for i in companion_ownership.plan(str(cfg), context))
     assert before == states()
 
@@ -284,7 +307,8 @@ def exercise(cfg, context):
                       "readOnlyPlan": True, "foreignOwnerRejected": True, "removedServiceKept": True,
                       "frozenFirstContactNamespaces": len(first_contact), "frozenRefusalsWithoutChange": refusals,
                       "frozenNoOpCreatedRevisions": 0, "failedFirstInstallRecovered": True,
-                      "recordRemovalKeptObjects": True, "deAdoptedNamespaces": len(first_contact),
+                      "recordRemovalKeptObjects": True, "partialAdoptionRetriedWithOneRecord": True,
+                      "deAdoptedNamespaces": len(first_contact),
                       "deAdoptionRestoredMetadata": True}))
 
 

@@ -403,23 +403,35 @@ python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
   --context "$PLAN_CONTEXT" > "$work/ownership.json"
 ```
 
-Review the plan. Store `ownership.json` with the private deployment record. It is
-the only input that de-adoption accepts. Then apply it with the write identity,
-which needs `patch` on the twelve named objects and nothing else for this step:
+Review the plan. Then apply it with the write identity, which needs `patch` on
+the twelve named objects and nothing else for this step. `$RECORD` is a private
+directory kept with the deployment record:
 
 ```bash
 bash scripts/demo/apply-ownership-patches.sh "$work/ownership.json" \
-  "$APPLY_KUBECONFIG" "$APPLY_CONTEXT"
+  "$APPLY_KUBECONFIG" "$APPLY_CONTEXT" "$RECORD/adopted.json"
 python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
   --context "$PLAN_CONTEXT" | jq -e 'all(.[]; .patch == [])'
 ```
 
+The script appends each patch that succeeds to `adopted.json`. That file records
+exactly what was added to every object and is the only input that de-adoption
+accepts. Never edit it, replace it or write it by hand.
+
 The script refuses a plan that contains anything other than guarded label and
 annotation changes on the four allowlisted kinds, and stops at the first failed
-patch. A patch fails without a write when its object changed after planning. Plan
-again, review the new plan and replace the stored record. The second command must
-exit 0: an adopted object needs no further patch. Pass `--namespace default` to
-both planner commands to limit them to the OCI stack, or one OTel namespace at a time.
+patch. A patch fails without a write when its object changed after planning. To
+retry, plan again into a new file, review it and apply it with the same
+`adopted.json`. A fresh plan has an empty patch for each object that is already
+adopted, so its entry in the record stays as first written. The script refuses a
+plan that would patch an object the record already holds. If the script is
+interrupted, compare the planner output with the record before continuing: an
+object with an empty patch that the record does not list, and that was not owned
+before the first plan, was patched without being recorded.
+
+The second command must exit 0: an adopted object needs no further patch. Pass
+`--namespace default` to both planner commands to limit them to the OCI stack, or
+one OTel namespace at a time.
 
 ### De-adopt companion releases
 
@@ -427,7 +439,7 @@ Use this to roll back companion ownership, and to recover from a first companion
 install that left failed revision 1. Stop automation first, as in
 [If the handover fails](#if-the-handover-fails), and hold the deployment lock.
 Repeat the steps for each namespace `$ns` to de-adopt. `$RECORD` is the directory
-that holds the stored `ownership.json`.
+that holds `adopted.json`, written while the ownership patches were applied.
 
 1. Remove only the stored release records. The listing prints names and statuses,
    not Secret contents. The objects of the release are not touched.
@@ -441,14 +453,14 @@ that holds the stored `ownership.json`.
    ```
 
 2. Plan the metadata removal read-only and review it. It removes exactly the fields
-   that the stored adoption plan added. It refuses an object with another UID, an
+   that the record says were added. It refuses an object with another UID, an
    ownership value that changed since adoption, and a record that names anything
    outside the allowlist.
 
    ```bash
    python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
      --context "$PLAN_CONTEXT" --namespace "$ns" \
-     --de-adopt "$RECORD/ownership.json" > "$work/de-adoption-$ns.json"
+     --de-adopt "$RECORD/adopted.json" > "$work/de-adoption-$ns.json"
    ```
 
 3. Apply it and verify. The planner must then print only empty patches, and Helm
@@ -459,7 +471,7 @@ that holds the stored `ownership.json`.
      "$APPLY_KUBECONFIG" "$APPLY_CONTEXT"
    python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
      --context "$PLAN_CONTEXT" --namespace "$ns" \
-     --de-adopt "$RECORD/ownership.json" | jq -e 'all(.[]; .patch == [])'
+     --de-adopt "$RECORD/adopted.json" | jq -e 'all(.[]; .patch == [])'
    helm --kubeconfig "$PLAN_KUBECONFIG" --kube-context "$PLAN_CONTEXT" \
      --namespace "$ns" status demo-resources
    ```
@@ -490,7 +502,8 @@ install plan.
 
 The [kind rehearsal](helmfile-companions.md#rehearse-in-a-fresh-local-cluster) runs
 the planner in both directions, the apply script, the record removal and the source
-comparison. It checks that the adoption patches change no UID, spec or payload,
+comparison. It makes one patch fail after others succeeded and retries with a fresh
+plan and the same record. It checks that the adoption patches change no UID, spec or payload,
 that removing the release records changes no object, and that after de-adoption
 every label and annotation equals its value before adoption, the planner proposes
 the original adoption again and each source manifest shows no difference. OKE
