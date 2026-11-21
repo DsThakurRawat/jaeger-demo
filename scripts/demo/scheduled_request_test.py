@@ -320,6 +320,42 @@ class ScheduledRequestTests(unittest.TestCase):
                 now=lambda: self.now,
             )
 
+    def test_a_record_from_another_slot_names_the_missing_preparation(self):
+        # On 2026-11-21 the preparer never ran and the requester found the previous day's record.
+        today = self.slot + timedelta(days=1)
+        with self.assertRaises(req.RequestError) as caught:
+            req.request_and_wait(self.store, today, self.sha, now=lambda: today)
+        self.assertEqual(
+            "No preparation was published for the 2026-11-19T13:00:00Z slot: "
+            "the request record still holds 2026-11-18T13:00:00Z",
+            str(caught.exception),
+        )
+        # The same holds for a completed record, which is what a later day actually finds.
+        done = copy.deepcopy(self.store)
+        done.rows[req.REQUEST]["data"].update(state="succeeded", requestedAt="2026-11-18T13:12:57Z")
+        with self.assertRaisesRegex(req.RequestError, "^No preparation was published for the 2026-11-19T13:00:00Z slot"):
+            req.request_and_wait(done, today, self.sha, now=lambda: today)
+        # Nothing but a well-formed timestamp is repeated from the record.
+        for recorded in ("not a timestamp", "2026-11-17T13:00:00Z\nforged", ""):
+            store = copy.deepcopy(self.store)
+            store.rows[req.REQUEST]["data"]["slot"] = recorded
+            with self.subTest(recorded=recorded), self.assertRaises(req.RequestError) as caught:
+                req.request_and_wait(store, self.slot, self.sha, now=lambda: self.now)
+            self.assertEqual(
+                "No preparation was published for the 2026-11-18T13:00:00Z slot: "
+                "the request record names no valid slot",
+                str(caught.exception),
+            )
+        # A bootstrapped record that no preparer has written yet.
+        empty = copy.deepcopy(self.store)
+        empty.rows[req.REQUEST]["data"] = {"schema": req.SCHEMA, "state": "empty"}
+        with self.assertRaisesRegex(req.RequestError, "^No preparation has been published: the request record is still empty$"):
+            req.request_and_wait(empty, self.slot, self.sha, now=lambda: self.now)
+        # A caller that does not pass a daily slot keeps the interval error, and the matching slot still validates.
+        with self.assertRaisesRegex(req.RequestError, "schedule interval"):
+            req.validate(self.store.read(req.REQUEST), self.slot + timedelta(minutes=1), "scripts-v1", self.sha)
+        self.assertEqual(self.validate()["state"], "ready")
+
     def test_missing_receiver_timeout_and_prepared_next_slot(self):
         def missing(_):
             self.now += req.ACK_TIMEOUT

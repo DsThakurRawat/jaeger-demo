@@ -71,6 +71,19 @@ def description(slot, expires, engine, receipt):
     }
 
 
+def unprepared(slot, recorded):
+    """Name the cause when the request record does not belong to the expected slot.
+
+    The preparer replaces the record once per slot. A record from another slot therefore
+    means that no preparation was published for this one, whatever stopped it. Only a
+    well-formed timestamp from the record is repeated in the message.
+    """
+    message = "No preparation was published for the " + format_utc(slot) + " slot"
+    if isinstance(recorded, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", recorded):
+        return message + ": the request record still holds " + recorded
+    return message + ": the request record names no valid slot"
+
+
 def validate(obj, slot, engine, sha):
     if not obj:
         raise RequestError("No protected receiver request exists for the daily update")
@@ -84,6 +97,8 @@ def validate(obj, slot, engine, sha):
     ):
         raise RequestError("Unexpected Kubernetes request identity")
     data = obj.get("data", {})
+    if data == {"schema": SCHEMA, "state": "empty"}:
+        raise RequestError("No preparation has been published: the request record is still empty")
     if (
         set(data)
         != {
@@ -99,6 +114,8 @@ def validate(obj, slot, engine, sha):
         or data["state"] not in STATES
     ):
         raise RequestError("Malformed protected receiver request")
+    if slot == daily_slot(slot) and data["slot"] != format_utc(slot):
+        raise RequestError(unprepared(slot, data["slot"]))
     expected = description(
         slot,
         timestamp(data["expiresAt"]),
