@@ -287,34 +287,6 @@
         "helm/helm"
       ],
       "allowedVersions": "<5.0.0"
-    },
-    {
-      "description": "Keep script and Helmfile monitoring pins together during adoption",
-      "matchManagers": [
-        "custom.regex",
-        "helmfile"
-      ],
-      "matchDatasources": [
-        "helm"
-      ],
-      "matchPackageNames": [
-        "kube-prometheus-stack"
-      ],
-      "groupName": "Hosted demo monitoring chart"
-    },
-    {
-      "description": "Keep script and Helmfile application pins together during adoption",
-      "matchManagers": [
-        "custom.regex",
-        "helmfile"
-      ],
-      "matchDatasources": [
-        "helm"
-      ],
-      "matchPackageNames": [
-        "opentelemetry-demo"
-      ],
-      "groupName": "Hosted OpenTelemetry demo chart"
     }
   ]
 }
