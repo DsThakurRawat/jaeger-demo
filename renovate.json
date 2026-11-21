@@ -135,7 +135,7 @@
       "automerge": false
     },
     {
-      "description": "Keep the OTel demo OpenSearch charts on supported 3.x releases and update them together",
+      "description": "Keep the OTel demo OpenSearch charts on supported 3.x releases and update both charts together in the script and Helmfile locations",
       "matchManagers": [
         "custom.regex",
         "helmfile"
@@ -149,7 +149,7 @@
       ],
       "groupName": "OTel demo OpenSearch Helm charts",
       "groupSlug": "otel-demo-opensearch-helm",
-      "minimumGroupSize": 2,
+      "minimumGroupSize": 4,
       "allowedVersions": "/^3\\./",
       "automerge": false
     },
