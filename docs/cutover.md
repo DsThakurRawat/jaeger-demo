@@ -323,9 +323,10 @@ Manual runs continue to use `demo-apply`.
 
 The credential-free [public smoke check](../scripts/demo/README.md#scheduled-smoke-check)
 has its own switch, `DEMO_SMOKE_ENABLED`. `SLACK_WEBHOOK_URL` is already a
-repository secret. Do not enable the switch until the check retries transient
-misses and deduplicates alerts
-([#43](https://github.com/jaegertracing/jaeger-demo/issues/43)).
+repository secret. The check retries each stack up to three times and posts to
+Slack only when the scheduled result changes, one message when it starts
+failing and one when it recovers. Enable the switch after one passing manual
+dispatch of `demo-smoke.yml` that shows no history lookup warning.
 
 While the old maintenance workflows are disabled and the new grant is limited to
 Jaeger, the independent operator owns maintenance and incident recovery through the
