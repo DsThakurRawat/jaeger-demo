@@ -127,5 +127,7 @@ class InputTests(unittest.TestCase):
 
     def test_checkout_pins_have_exact_matching_locks(self):
         lock = json.loads((inputs.ROOT / inputs.LOCK).read_text())
-        self.assertEqual({f"{chart}-{inputs.pin(inputs.ROOT, variable)}.tgz" for _, variable, chart, _ in inputs.CHARTS}, set(lock["charts"]))
+        self.assertEqual({f"{chart}-{inputs.pin(inputs.ROOT, variable)}.tgz" for _, variable, chart, _ in inputs.CHARTS}, set(lock["charts"]),
+                         "ops/executor/chart-archives.json does not match the chart pins in the deploy-all.sh scripts. "
+                         "Run: python3 scripts/utils/update-chart-archives.py")
         self.assertTrue(all(input_name.startswith(("scripts/", "examples/", "ops/", "docs/")) for input_name in inputs.GUARDED))

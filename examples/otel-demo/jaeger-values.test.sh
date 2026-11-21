@@ -38,7 +38,7 @@ testCleanerImageTagIsPinnedToPublishedRelease() {
   assertTrue "tag '$tag' should contain a sha256 digest" "[[ '$digest' =~ ^sha256:[a-f0-9]{64}$ ]]"
 }
 
-# Pinned es-index-cleaner 2.21.0 appends "-" to every nonempty prefix and
+# Pinned es-index-cleaner 2.23.0 appends "-" to a nonempty prefix without one and
 # matches "<prefix>jaeger-(span|service|...)-<date>", so the value here must
 # equal the index_prefix Jaeger writes with.
 testCleanerPrefixMatchesJaegerIndexPrefix() {
