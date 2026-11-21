@@ -5,11 +5,15 @@
 #
 # Resolve and verify Jaeger demo snapshot image tags from Docker Hub.
 #
-# Scheduled runs prefer MAIN_SHA when published; otherwise they deploy the
-# newest published commit SHA tag (never the mutable :latest tag).
+# Scheduled runs without an explicit tag prefer MAIN_SHA when published;
+# otherwise they deploy the newest published commit SHA tag (never the mutable
+# :latest tag). The search reads at most MAX_TAG_PAGES pages of the tag list.
 #
-# Manual workflow_dispatch runs use the requested tag (default MAIN_SHA), resolve
-# latest to a concrete SHA tag, and fail if the requested tag is missing.
+# An explicit tag must exist on Docker Hub for every event, including a
+# schedule. An explicit latest is verified, then resolved to a concrete SHA tag.
+#
+# Manual workflow_dispatch runs use the requested tag (default MAIN_SHA) and
+# fail if that tag is missing.
 #
 # Jaeger and HotROD tags are resolved independently; each image is
 # published to its own repository and may fall back to a different SHA.
@@ -25,6 +29,11 @@ set -euo pipefail
 : "${JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY:=jaegertracing/example-hotrod-snapshot}"
 : "${MAIN_SHA:=}"
 : "${GITHUB_EVENT_NAME:=workflow_dispatch}"
+
+# Both snapshot repositories publish a SHA tag for almost every tag, so the
+# newest one is normally on the first page. The limit bounds a malformed or
+# unexpected listing.
+readonly MAX_TAG_PAGES=10
 
 if [[ -z "$MAIN_SHA" ]]; then
   echo "MAIN_SHA must be set to the resolved jaegertracing/jaeger commit" >&2
@@ -78,6 +87,11 @@ newest_published_sha() {
     fi
     # Keep requests on the intended repository when following ordered pages.
     page=$((page + 1))
+    if (( page > MAX_TAG_PAGES )); then
+      rm -f "$tags_file"
+      echo "No snapshot SHA tag in the first ${MAX_TAG_PAGES} pages of ${repo} tags" >&2
+      return 1
+    fi
     if ! jq -e --argjson page "$page" '.count > (($page - 1) * 100)' "$tags_file" >/dev/null; then
       rm -f "$tags_file"
       echo "Invalid pagination for ${repo} SHA tags" >&2

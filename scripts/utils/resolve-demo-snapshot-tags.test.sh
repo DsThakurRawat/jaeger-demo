@@ -45,8 +45,25 @@ emit() {
   fi
 }
 
+no_sha_page='"next":"more","results":[{"name":"latest","last_updated":"2026-07-11T00:00:00Z"}]'
+if [[ "\$url" == */tags/\?page_size=*ordering=last_updated* && -n "\${HUB_PAGES:-}" ]]; then
+  # Every page lists only a non-SHA tag and announces a further page.
+  printf '%s\n' "\$url" >> "\${HUB_REQUESTS:-/dev/null}"
+  case "\$HUB_PAGES" in
+    # 30 pages, so a missing limit fails this test instead of stalling it.
+    many) emit "200" '{"count":3000,'"\$no_sha_page"'}' ;;
+    short-count) emit "200" '{"count":100,'"\$no_sha_page"'}' ;;
+    no-count) emit "200" '{'"\$no_sha_page"'}' ;;
+    *) emit "500" '{}' ;;
+  esac
+  exit 0
+fi
+
 case "\$url" in
-  */tags/latest/|*/tags/${PUBLISHED}/)
+  */tags/latest/)
+    emit "\${LATEST_STATUS:-200}" '{"digest":"sha256:published"}'
+    ;;
+  */tags/${PUBLISHED}/)
     emit "200" '{"digest":"sha256:published"}'
     ;;
   */tags/${PREFERRED}/)
@@ -178,6 +195,47 @@ testLatestInputResolvesToNewestPublishedSha() {
   assertEquals "exit 0" 0 $rc
   assertContains "$out" "Jaeger tag=$NEWEST"
   assertContains "$out" "HotROD tag=$NEWEST"
+}
+
+testExplicitLatestMustExistBeforeItIsResolved() {
+  for event in workflow_dispatch schedule; do
+    out=$(run_script GITHUB_EVENT_NAME="$event" JAEGER_DEMO_IMAGE_TAG=latest LATEST_STATUS=404 2>&1)
+    rc=$?
+    assertEquals "$event: a missing latest tag is rejected" 1 "$rc"
+    assertContains "$out" "Snapshot image tag not found on Docker Hub: ${REPO}:latest (Jaeger)"
+    assertNotContains "$out" "Jaeger tag="
+  done
+
+  out=$(run_script GITHUB_EVENT_NAME=workflow_dispatch JAEGER_DEMO_HOTROD_IMAGE_TAG=latest \
+    MAIN_SHA="$PUBLISHED" LATEST_STATUS=503 2>&1)
+  rc=$?
+  assertEquals "an unverifiable latest tag is rejected" 1 "$rc"
+  assertContains "$out" "Failed to verify Docker Hub tag for ${REPO}:latest (HotROD); Docker Hub API returned HTTP 503."
+  assertNotContains "$out" "HotROD tag="
+}
+
+testScheduledFallbackStopsAtThePageLimit() {
+  requests="$TMPDIR_TEST/hub-requests"
+  : > "$requests"
+  out=$(run_script GITHUB_EVENT_NAME=schedule HUB_PAGES=many HUB_REQUESTS="$requests" 2>&1)
+  rc=$?
+  assertEquals "a long listing without SHA tags fails" 1 "$rc"
+  assertContains "$out" "No snapshot SHA tag in the first 10 pages of ${REPO} tags"
+  assertNotContains "$out" "Jaeger tag="
+  assertEquals "exactly the limit of list requests" 10 "$(wc -l < "$requests" | tr -d ' ')"
+  assertEquals "the last request is the tenth page" 1 "$(tail -n 1 "$requests" | grep -c '&page=10$')"
+}
+
+testScheduledFallbackRejectsInconsistentPagination() {
+  for listing in short-count no-count; do
+    requests="$TMPDIR_TEST/hub-requests"
+    : > "$requests"
+    out=$(run_script GITHUB_EVENT_NAME=schedule HUB_PAGES="$listing" HUB_REQUESTS="$requests" 2>&1)
+    rc=$?
+    assertEquals "$listing: a further page beyond the reported count fails" 1 "$rc"
+    assertContains "$out" "Invalid pagination for ${REPO} SHA tags"
+    assertEquals "$listing: no second page is requested" 1 "$(wc -l < "$requests" | tr -d ' ')"
+  done
 }
 
 testManualDispatchFailsWhenTagMissing() {
