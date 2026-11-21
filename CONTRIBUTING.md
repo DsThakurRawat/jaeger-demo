@@ -43,6 +43,30 @@ centralization and Helmfile render/schema checks belong to the next
 implementation stage. Production Helm's effective version must be frozen after
 establishing the last release writer's major before handover.
 
+## Dependency pins with a second location
+
+Renovate updates the first location of a pin only. Each second location below fails
+a test with the command or files to change, so a bump PR cannot pass CI and fail at
+preparation.
+
+- **Chart versions.** After a chart pin changes in either `deploy-all.sh`, run
+  `python3 scripts/utils/update-chart-archives.py` and commit the resulting
+  `ops/executor/chart-archives.json`. It downloads each of the four pinned archives,
+  requires its SHA-256 to equal the digest in the publisher's `index.yaml`, and
+  rewrites the `charts` map only. `--check` changes nothing and exits non-zero with
+  the differences. Executor handling of these files is described in
+  [in-cluster-executor.md](docs/in-cluster-executor.md).
+- **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
+  the versions in `scripts/demo/scheduled_adapter.py` and lists every other literal
+  that disagrees. Change all listed files in one commit.
+- **OCI CLI.** `scripts/demo/oci-cli-constraints.txt` records what the deployment
+  runner installed, including packages already present, not only new ones (see its
+  header). To regenerate it, take the full `pip freeze` output of the runner that
+  performed the deployment after `oci-cli` was installed, keep the license header and
+  provenance comment with the new run URL, and replace the pins. Update the literal
+  assertions in `scripts/demo/verify_oci_cli_test.py` (`oci-cli`, `oci` and
+  `python-dateutil`) in the same commit.
+
 ## Renovate discovery
 
 The `Renovate discovery` CI check validates configuration and verifies actual
