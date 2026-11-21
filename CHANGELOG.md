@@ -79,6 +79,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The executor's Helm preview tool links the Go module versions Helm 4.3.2
+  builds with, including `golang.org/x/net` v0.62.0 and `golang.org/x/text`
+  v0.43.0. **Executor image.**
+  ([#66](https://github.com/jaegertracing/jaeger-demo/pull/66),
+  fixes [#65](https://github.com/jaegertracing/jaeger-demo/issues/65))
 - The README and `CONTRIBUTING.md` require Python 3.11 or later for local checks,
   set by the constrained `pycparser`. The README Development section now lists
   PyYAML, cryptography and ruff and links to `CONTRIBUTING.md` for the commands.
