@@ -16,9 +16,27 @@ The extraction PR must use a history-preserving merge; see
 [extraction.md](docs/extraction.md). Do not rewrite imported authored commits to
 make them look newly contributed.
 
+## Changelog
+
+Add an entry to [CHANGELOG.md](CHANGELOG.md) in the same PR for any change an
+operator or contributor would notice: deployed configuration, image or chart pins,
+workflows, alerts, scripts, commands and runbooks. Typo fixes, test-only refactors
+and changes that only restate existing behavior need no entry.
+
+- Put the entry under the UTC date the PR merges, creating the heading at the top
+  if needed. If the final branch update before merge lands on a later date, move
+  the entry to that date's heading.
+- Use the Keep a Changelog category (Added, Changed, Fixed, Removed, Security) and
+  write one or two sentences about the effect, not the implementation.
+- End with the PR link and `fixes` or `refs` the issue, matching the PR body.
+- Append **Executor image.** when `scripts/demo/guarded_changes.py` lists a changed
+  file, so the required executor release is visible.
+- A merge is not a deployment. Record production evidence in the release record
+  and [docs/MIGRATION.md](docs/MIGRATION.md), not in the changelog.
+
 ## Local checks
 
-Install Bash, Python 3 with PyYAML and cryptography, Git, jq, Helm, ShellCheck, actionlint and ruff
+Install Bash, Python 3.11 or later with PyYAML and cryptography, Git, jq, Helm, ShellCheck, actionlint and ruff
 (`python3 -m pip install -r scripts/utils/lint-requirements.txt`). Keep production
 kubeconfig and cloud credentials out of the test environment. Obtain shunit2:
 
@@ -35,6 +53,9 @@ The tests mock deployment commands and render pinned public charts. Public netwo
 access is required for the chart repositories, but no production credentials are
 used. Install the constrained Python libraries in a virtual environment with
 `python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML cryptography`.
+The constrained `pycparser`, which `cryptography` pulls in through `cffi`, sets the
+Python 3.11 minimum. If regenerated constraints change it, update this section and
+the README Development section.
 The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 
