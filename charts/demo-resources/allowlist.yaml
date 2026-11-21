@@ -1,0 +1,17 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+default:
+  ConfigMap: [trace-script]
+  Deployment: [trace-generator]
+  Ingress: [jaeger-demo-ingress, jaeger-root-redirect]
+  Service: [prometheus, jaeger-collector-prometheus]
+jaeger:
+  ConfigMap: [trace-script]
+  Deployment: [trace-generator]
+  Ingress: [jaeger-demo-ingress]
+  Service: [jaeger-query-clusterip]
+opensearch:
+  Ingress: [opensearch-demo-ingress]
+otel-demo:
+  Ingress: [otel-demo-ingress]

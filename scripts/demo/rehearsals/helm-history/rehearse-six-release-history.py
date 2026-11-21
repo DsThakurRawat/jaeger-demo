@@ -65,6 +65,7 @@ def terminate(proc):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--verify-live-observation", action="store_true", help="Exercise the Helmfile read-only observer")
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--storage-charts", type=Path,
@@ -554,6 +555,10 @@ def main():
                 "delete foreign record with canonical name",
                 ["delete", "secret", d["metadata"]["name"], "-n", "default"],
             )
+            if args.verify_live_observation:
+                sys.path.insert(0, str(HERE.parents[1]))
+                from live_observation_fixture import exercise
+                report["liveObservation"] = exercise(root, cfg, kubectl, kube, release_cmd, chart, apply)
             report["unrestrictedSecretReadsInReleaseNamespaces"] = True
             report["historyLimitUsed"] = 3
             if args.monitoring_hook_access:

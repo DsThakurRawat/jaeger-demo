@@ -1,0 +1,8 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v2
+name: demo-resources
+description: Supplemental resources for one hosted Jaeger demo namespace
+version: 0.1.0
+type: application
