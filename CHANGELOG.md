@@ -45,6 +45,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
+- Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
+  (refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
 ### Changed
 
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 2 to 7

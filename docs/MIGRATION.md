@@ -17,6 +17,8 @@ Core retains product source, image publishing, ordinary examples and integration
 - Generated traces are disposable. Destructive storage resets require explicit approval.
 - Generated code and submodules untouched
 
+The source-only [ingress-controller dependency inventory](ingress-controller-dependencies.md) tracks #41. Controller owner/version and replacement timing still require operator/maintainer confirmation; it authorizes no migration.
+
 ## Execution contract
 
 - Implementation stages start only after predecessor exits are met. The core HotROD fixture runs in parallel with extraction. Helmfile conversion waits for script handover and the fixture to merge; post-adoption refactors merge before core removal.
