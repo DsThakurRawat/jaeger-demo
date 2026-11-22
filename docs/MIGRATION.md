@@ -17,6 +17,8 @@ Core retains product source, image publishing, ordinary examples and integration
 - Generated traces are disposable. Destructive storage resets require explicit approval.
 - Generated code and submodules untouched
 
+The [agent-fixtures capacity evidence and design options](agent-fixtures-approval-options.md) track #55. No approval exception, protocol redesign or agent activation is selected; production impact remains unmeasured in that investigation.
+
 ## Execution contract
 
 - Implementation stages start only after predecessor exits are met. The core HotROD fixture runs in parallel with extraction. Helmfile conversion waits for script handover and the fixture to merge; post-adoption refactors merge before core removal.
