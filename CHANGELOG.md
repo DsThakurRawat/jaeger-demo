@@ -21,6 +21,13 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-22
+
+### Added
+
+- Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
+  (refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
 ## 2026-11-21
 
 ### Added
