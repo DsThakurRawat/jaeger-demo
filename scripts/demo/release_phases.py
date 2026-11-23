@@ -13,7 +13,10 @@ def stack_of(release):
 
 
 def helm_statuses(listing):
-    """Map parsed `helm list --all --all-namespaces -o json` output to {namespace/name: status}."""
+    """Map parsed `helm list --all-namespaces --max 0 -o json` output to {namespace/name: status}.
+
+    Helm 4 lists releases in every status by default. Without --max 0 it stops after 256.
+    """
     statuses = {}
     for entry in listing:
         key = entry["namespace"] + "/" + entry["name"]

@@ -155,7 +155,8 @@ def exercise(cfg, context):
 
     def statuses():
         # The same input the deploy workflow reads: every release's latest status, from Helm's storage.
-        listing = json.loads(subprocess.check_output(helm + ["list", "--all", "--all-namespaces", "-o", "json"]))
+        # Helm 4 lists every status by default and has no --all flag; --max 0 disables the 256-release page.
+        listing = json.loads(subprocess.check_output(helm + ["list", "--all-namespaces", "--max", "0", "-o", "json"]))
         return release_phases.helm_statuses(listing)
 
     def force_test_status(ns, status, name=name):

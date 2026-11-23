@@ -79,7 +79,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#108](https://github.com/jaegertracing/jaeger-demo/pull/108),
   fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
 - `scripts/demo/release_phases.py` takes the selected releases and their current
-  Helm statuses, as `helm list --all` reports them, instead of a sealed bundle plan
+  Helm statuses, as `helm list` reports them, instead of a sealed bundle plan
   and its approval-time baseline. It still refuses pending and unknown states
   before any write, retries a failed release with `sync`, applies OCI before OTel
   and checks OCI health on every run. `scripts/demo/live_observation.py` now prints
