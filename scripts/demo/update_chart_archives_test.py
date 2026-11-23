@@ -14,7 +14,7 @@ import unittest
 import yaml
 
 import deploy
-import scheduled_inputs as inputs
+import chart_archives as inputs
 
 SPEC = importlib.util.spec_from_file_location("update_chart_archives", deploy.ROOT / "scripts/utils/update-chart-archives.py")
 helper = importlib.util.module_from_spec(SPEC)
@@ -41,7 +41,7 @@ class Fixture:
                             % versions["PROMETHEUS_STACK_CHART_VERSION"])):
             (self.root / base).mkdir(parents=True)
             (self.root / base / "deploy-all.sh").write_text(text)
-        (self.root / "ops/executor").mkdir(parents=True)
+        (self.root / "scripts/demo").mkdir(parents=True)
         self.entries = {}
         for _, variable, chart, repository in inputs.CHARTS:
             self.publish(repository, chart, versions[variable])

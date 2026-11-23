@@ -4,8 +4,8 @@
 
 """Fetch and verify public chart archives against the reviewed SHA-256 lock.
 
-The deployment scripts and the in-cluster executor install charts only from
-archives whose bytes equal the digests in ops/executor/chart-archives.json.
+The deployment scripts install charts only from
+archives whose bytes equal the digests in scripts/demo/chart-archives.lock.json.
 
   chart_archives.py pull <chart> <version> <destination-dir>
       Pull <chart> at exactly <version> from its publisher repository into a new
@@ -31,7 +31,7 @@ CHARTS = (
     ("otel-demo/otel-demo", "OTEL_DEMO_CHART_VERSION", "opentelemetry-demo", "https://open-telemetry.github.io/opentelemetry-helm-charts"),
     ("default/prometheus", "PROMETHEUS_STACK_CHART_VERSION", "kube-prometheus-stack", "https://prometheus-community.github.io/helm-charts"),
 )
-LOCK = "ops/executor/chart-archives.json"
+LOCK = "scripts/demo/chart-archives.lock.json"
 
 
 def require(ok, message):

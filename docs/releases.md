@@ -162,7 +162,7 @@ it installs no release and creates no namespace. Each selected release must have
 Helm status `deployed`. A `failed` non-Jaeger release is repaired in place; a
 failed Jaeger release, and any release in a `pending-*` state, is refused until
 an operator repairs it. Charts install only from archives whose SHA-256 matches
-`ops/executor/chart-archives.json`, checked before any cluster change. A change
+`scripts/demo/chart-archives.lock.json`, checked before any cluster change. A change
 that adds, removes or renames an object is applied like any other once the
 deployer role covers it. See
 [When a change alters a release's objects](#when-a-change-alters-a-releases-objects).

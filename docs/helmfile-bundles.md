@@ -41,7 +41,7 @@ and `component`. Each release entry has an `id` of `namespace/name`, ordered
 The application dependency graph and chart pins come from the reviewed Git tree.
 For each of the four repository charts, the checker requires the chart name from
 `helmfile.yaml` and the archive SHA-256 that the same commit records for that name
-and version in [`ops/executor/chart-archives.json`](../ops/executor/chart-archives.json).
+and version in [`scripts/demo/chart-archives.lock.json`](../scripts/demo/chart-archives.lock.json).
 A Helmfile chart version without a reviewed checksum in that file cannot be
 bundled. Update both in the same reviewed change.
 For a locally packaged Jaeger chart, use its upstream repository URL followed by

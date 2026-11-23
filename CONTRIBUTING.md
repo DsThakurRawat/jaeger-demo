@@ -83,7 +83,7 @@ deployment.
 
 - **Chart versions.** After a chart pin changes in either `deploy-all.sh`, run
   `python3 scripts/utils/update-chart-archives.py` and commit the resulting
-  `ops/executor/chart-archives.json`. It downloads each of the four pinned archives,
+  `scripts/demo/chart-archives.lock.json`. It downloads each of the four pinned archives,
   requires its SHA-256 to equal the digest in the publisher's `index.yaml`, and
   rewrites the `charts` map only. `--check` changes nothing and exits non-zero with
   the differences; the `Demo tests` CI job runs it. The deploy scripts enforce
