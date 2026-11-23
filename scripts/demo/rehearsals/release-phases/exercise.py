@@ -20,6 +20,122 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import release_phases
 
+# Helmfile resolves ref+ strings in its own values. The direct path passes values to Helm, which keeps them.
+LITERAL = "ref+unused-provider://literal"
+
+
+def direct_transactions(cfg, context, root, force_status):
+    """Reconcile one existing release with native Helmfile and the direct deployment flags.
+
+    The flags match the deploy workflow's contract: upgrade an existing release in place and
+    never install it. Helmfile prepends --install to every Helm upgrade, so --install=false in
+    the sync arguments restores that boundary. Values go to Helm, not Helmfile.
+    """
+    ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
+    name = ns = "jaeger-direct-fixture"
+    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context, "-n", ns]
+    history = 3
+    subprocess.run(ctl + ["create", "namespace", ns], check=True, stdout=subprocess.DEVNULL)
+    chart = root / "direct-chart"
+    (chart / "templates").mkdir(parents=True)
+    # A vendored dependency with an unreachable repository: --skip-deps must not fetch it.
+    (chart / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: direct-fixture\nversion: 1.0.0\ndependencies:\n"
+        "  - {name: child, version: 1.0.0, repository: 'https://127.0.0.1:1/unreachable'}\n")
+    (chart / "charts" / "child").mkdir(parents=True)
+    (chart / "charts" / "child" / "Chart.yaml").write_text("apiVersion: v2\nname: child\nversion: 1.0.0\n")
+    # Chart defaults differ from every approved value, so a diff without the values file is not empty.
+    (chart / "values.yaml").write_text("{value: default, sensitive: default, literal: default}\n")
+    (chart / "templates" / "config.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: jaeger-direct-fixture}\n"
+        "data: {value: {{ .Values.value | quote }}, literal: {{ .Values.literal | quote }}}\n")
+    (chart / "templates" / "secret.yaml").write_text(
+        "apiVersion: v1\nkind: Secret\nmetadata: {name: jaeger-direct-fixture}\n"
+        "data: {message: {{ .Values.sensitive | b64enc | quote }}}\n")
+    subprocess.run(["helm", "package", str(chart), "--destination", str(root)], check=True, stdout=subprocess.DEVNULL)
+    archive = root / "direct-fixture-1.0.0.tgz"
+    state = {"helmDefaults": {"historyMax": history, "createNamespace": False, "timeout": 45},
+             "releases": [{"name": name, "namespace": ns, "chart": "./" + archive.name}]}
+    (root / "direct.yaml").write_text(yaml.safe_dump(state))
+    values = root / "direct-values.yaml"
+
+    def approve(value, sensitive):
+        values.write_text(yaml.safe_dump({"value": value, "sensitive": sensitive, "literal": LITERAL}))
+
+    def helmfile(method):
+        sync = ["--install=false", "--values=./" + values.name, "--wait=legacy", "--rollback-on-failure=true",
+                "--skip-crds=false", "--create-namespace=false"]
+        command = ["helmfile", "--file", "direct.yaml", "--kubeconfig", str(cfg), "--kube-context", context,
+                   "--skip-deps", method, "--concurrency", "1", "--reset-values", "--sync-args=" + " ".join(sync)]
+        if method == "apply":
+            command += ["--diff-args=--allow-unreleased=false --values=./" + values.name,
+                        "--suppress-secrets", "--suppress-diff"]
+        return subprocess.run(command, cwd=root, capture_output=True, text=True)
+
+    def reconcile(method):
+        result = helmfile(method)
+        assert result.returncode == 0, f"Helmfile {method} failed: {result.stderr[-2000:]}"
+
+    def refuse(method):
+        result = helmfile(method)
+        assert result.returncode, f"Helmfile {method} installed a missing release"
+
+    def status():
+        out = json.loads(subprocess.check_output(helm + ["status", name, "-o", "json"]))
+        return out["version"], out["info"]["status"]
+
+    def records():
+        # Helm's storage index holds every retained revision, whatever its status.
+        out = json.loads(subprocess.check_output(ctl + ["-n", ns, "get", "secrets", "-l", "owner=helm,name=" + name,
+                                                        "-o", "json"]))
+        return len(out["items"])
+
+    def objects():
+        found = {}
+        for kind in ("configmap", "secret"):
+            got = subprocess.run(ctl + ["-n", ns, "get", kind, name, "-o", "json", "--ignore-not-found"],
+                                 capture_output=True, text=True, check=True).stdout
+            found[kind] = json.loads(got)["data"] if got else None
+        return found
+
+    def content():
+        found = objects()
+        return found["configmap"], base64.b64decode(found["secret"]["message"]).decode()
+
+    approve("before", "first")
+    subprocess.run(helm + ["install", name, str(archive), "--values", str(values)], check=True, stdout=subprocess.DEVNULL)
+    assert status() == (1, "deployed")
+    approve("after", "first")
+    reconcile("apply")
+    assert status() == (2, "deployed") and content() == ({"value": "after", "literal": LITERAL}, "first")
+    reconcile("apply")
+    assert status() == (2, "deployed") and records() == 2, "A no-op apply added a revision"
+    # --suppress-secrets hides Secret data in the diff output. It must not hide the change itself.
+    approve("after", "second")
+    reconcile("apply")
+    assert status() == (3, "deployed") and content()[1] == "second", "Apply missed a Secret-only change"
+    force_status(ns, "failed", name)
+    reconcile("sync")
+    assert status() == (4, "deployed") and records() == history, "Sync skipped a failed release or kept too much history"
+    # Helmfile 1.8.4 and later: apply also upgrades a release that is not deployed, even with an empty diff.
+    force_status(ns, "failed", name)
+    diff = subprocess.run(["helm", "diff", "upgrade", name, str(archive), "-n", ns, "--values", str(values),
+                           "--kubeconfig", str(cfg), "--kube-context", context, "--detailed-exitcode"],
+                          stdout=subprocess.DEVNULL)
+    assert diff.returncode == 0, "The failed release must have an empty diff"
+    reconcile("apply")
+    assert status() == (5, "deployed"), "Apply skipped a failed release with an empty diff"
+    assert records() == history, "historyMax was not applied"
+    assert content() == ({"value": "after", "literal": LITERAL}, "second")
+    subprocess.run(helm + ["uninstall", name], check=True, stdout=subprocess.DEVNULL)
+    assert records() == 0 and objects() == {"configmap": None, "secret": None}
+    for method in ("apply", "sync"):
+        refuse(method)
+        assert records() == 0 and objects() == {"configmap": None, "secret": None}, f"{method} wrote a missing release"
+    return {"changedApplyVerified": True, "noOpRevisionUnchanged": True, "approvedSecretOnlyChangeApplied": True,
+            "failedEmptyDiffSynced": True, "failedEmptyDiffApplied": True, "historyLimitRespected": True,
+            "missingReleaseRefused": True, "refValuesPassedToHelm": True}
+
 
 def exercise(cfg, context):
     ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
@@ -53,10 +169,10 @@ def exercise(cfg, context):
     def baseline():
         return observe(release_phases.observation_scope(rows, "fixture", {}))
 
-    def force_test_status(ns, status):
+    def force_test_status(ns, status, name=name):
         # Construct states left by interrupted transactions, including Helm's
         # storage index and its encoded status. Only the named fixture is used.
-        revision = latest(ns)["version"]
+        revision = json.loads(subprocess.check_output(helm + ["-n", ns, "status", name, "-o", "json"]))["version"]
         secret = f"sh.helm.release.v1.{name}.v{revision}"
         args = ctl + ["-n", ns]
         old = json.loads(subprocess.check_output(args + ["get", "secret", secret, "-o", "json"]))
@@ -126,8 +242,9 @@ def exercise(cfg, context):
         else:
             raise AssertionError("Pending OTel state accepted")
         assert not ran and revisions() == [2, 1]
+        direct = direct_transactions(cfg, context, root, force_test_status)
         print(json.dumps({"failedEmptyDiffRecovered": True, "noOpNewRevisions": 0,
-                          "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True}))
+                          "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True, **direct}))
 
 
 if __name__ == "__main__":
