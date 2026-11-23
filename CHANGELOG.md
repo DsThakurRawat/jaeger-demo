@@ -24,6 +24,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- Workspaces and Explore (the new Discover, with PPL) on the public OpenSearch
+  Dashboards. Visitors land in an Observability workspace with the Jaeger span
+  index pattern selected. A sidecar recreates both within a minute because any
+  visitor can delete them. The multiple data source feature stays disabled.
+  ([#89](https://github.com/jaegertracing/jaeger-demo/pull/89),
+  fixes [#88](https://github.com/jaegertracing/jaeger-demo/issues/88))
 - Reviewed Kubernetes roles for the scheduled and manual deployment identities in
   `ops/rbac/deployer.yaml`, covering all six releases, with
   `scripts/demo/deployer_access.py` to print their bindings and to compare an
