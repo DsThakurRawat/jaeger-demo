@@ -31,7 +31,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   identity's live access with the role. Tests fail when a chart or script needs
   access the role lacks or when a rule has nothing behind it. An administrator
   applies the role; see `docs/deployer-access.md`.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95),
+  ([#97](https://github.com/jaegertracing/jaeger-demo/pull/97),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95),
   [#87](https://github.com/jaegertracing/jaeger-demo/issues/87))
 
 ## 2026-11-21
