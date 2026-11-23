@@ -70,6 +70,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   documents are marked as a retired design.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The `adoption` CI job's release-phases rehearsal now runs native Helmfile with
+  the direct deployment flags and proves a no-op apply, a Secret-only change, an
+  empty-diff failed release under `apply`, the history limit and refusal to install
+  a missing release. The companion-adoption rehearsal's first install is now a
+  plain `helm install` without `--take-ownership`, and neither rehearsal imports
+  `adoption_bundle` or `helmfile_transaction`.
+  (fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
 
 ### Removed
 

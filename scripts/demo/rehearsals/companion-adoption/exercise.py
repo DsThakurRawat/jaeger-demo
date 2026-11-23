@@ -6,7 +6,6 @@
 
 import argparse
 import base64
-import copy
 import gzip
 import json
 import os
@@ -21,9 +20,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import companion_ownership
-from adoption_bundle import BundleError
 from companion_values import ROOT, source_values
-from helmfile_transaction import reconcile
 
 
 def exercise(cfg, context):
@@ -113,8 +110,8 @@ def exercise(cfg, context):
     original = full_states()
     assert all(resource["patch"] for resource in desired)
     # Apply the reviewed plan with the documented script. It writes the record for de-adoption.
-    frozen_work = tempfile.TemporaryDirectory()
-    work = Path(frozen_work.name)
+    scratch = tempfile.TemporaryDirectory()
+    work = Path(scratch.name)
     planned, recorded = work / "ownership.json", work / "adopted.json"
     planned.write_text(json.dumps(desired))
     apply_script = str(ROOT / "scripts" / "demo" / "apply-ownership-patches.sh")
@@ -145,8 +142,14 @@ def exercise(cfg, context):
     assert not any(i["patch"] for i in companion_ownership.plan(str(cfg), context))
     assert before == states()
 
-    # Frozen companion transaction, as production runs it from an approved bundle.
+    # The first companion install, as the deploy workflow runs it after the reviewed ownership patches:
+    # a plain helm install, not atomic and without --take-ownership. Helm's upgrade --install cannot
+    # require an absent release, whereas install fails on any stored record of that name and refuses
+    # an existing object that lacks this release's ownership metadata.
     name = companion_ownership.RELEASE
+    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context]
+    state_values = work / "state.json"
+    state_values.write_text(json.dumps(values))
     refusals = 0
 
     def unchanged(expected, step):
@@ -167,55 +170,59 @@ def exercise(cfg, context):
         records = json.loads(kube(["-n", ns, "get", "secrets", "-l", "owner=helm,name=" + name, "-o", "json"]))["items"]
         return sorted((int(r["metadata"]["labels"]["version"]), r["metadata"]["labels"]["status"]) for r in records)
 
-    def row(ns, operation):
-        return {"id": ns + "/" + name, "helm": {"operation": operation, "atomic": False, "wait": "legacy",
-                "timeoutSeconds": 300, "historyMax": 10, "skipCRDs": False, "createNamespace": False}}
-
     subprocess.run(["helm", "package", str(ROOT / "charts" / "demo-resources"), "--destination", str(work)],
                    check=True, stdout=subprocess.DEVNULL)
     archive, = work.glob("demo-resources-*.tgz")
 
-    def frozen(ns, objects):
+    def install(ns):
         inputs = work / (ns + ".json")
-        inputs.write_text(json.dumps({"objects": objects}))
-        render = subprocess.check_output(["helm", "template", name, str(archive), "--namespace", ns,
-                                          "--values", str(inputs)], env=dict(os.environ, KUBECONFIG=os.devnull))
-        return {"chart.tgz": archive.read_bytes(), "values.yaml": inputs.read_bytes(), "postrender.yaml": render}
+        inputs.write_text(json.dumps({"objects": values["companions"][ns]["objects"]}))
+        return subprocess.run(helm + ["install", name, str(archive), "--namespace", ns, "--values", str(inputs),
+                                      "--wait=legacy", "--timeout", "300s", "--rollback-on-failure=false",
+                                      "--create-namespace=false"], capture_output=True, text=True)
 
-    def refused(ns, operation, files, expected):
+    def apply(ns):
+        # Native Helmfile on one existing companion release. For an absent release the diff fails
+        # first (--allow-unreleased=false), and --install=false keeps Helmfile's upgrade --install
+        # from installing one.
+        return subprocess.run(["helmfile", "--kubeconfig", str(cfg), "--kube-context", context,
+                               "-f", str(ROOT / "helmfile-resources.yaml.gotmpl"), "--state-values-file", str(state_values),
+                               "-l", "namespace=" + ns, "--skip-deps", "apply", "--concurrency", "1", "--reset-values",
+                               "--sync-args=--install=false --rollback-on-failure=false --create-namespace=false",
+                               "--diff-args=--allow-unreleased=false", "--suppress-secrets"],
+                              capture_output=True, text=True)
+
+    def succeeded(result, step):
+        assert result.returncode == 0, f"{step} failed: {result.stderr[-2000:]}"
+
+    def refused(ns, step, action, expected):
         snapshot = full_states()
-        try:
-            reconcile(row(ns, operation), "apply", files, kubeconfig=cfg, context=context)
-        except BundleError:
-            assert stored(ns) == expected, f"Refused {operation} changed the stored release in {ns}"
-            unchanged(snapshot, f"Refused {operation} in {ns}")
-            return 1
-        raise AssertionError(f"Unexpected frozen {operation} in {ns}")
+        result = action(ns)
+        assert result.returncode, f"{step} in {ns} was not refused"
+        assert stored(ns) == expected, f"{step} changed the stored release in {ns}"
+        unchanged(snapshot, f"{step} in {ns}")
+        return 1
 
-    def frozen_install(ns):
-        """Refuse every unsafe variant without a write, then install and prove a no-op. Requires an absent release."""
+    def first_install(ns):
+        """Refuse each unsafe variant without a write, then install and prove a no-op. Requires an absent release."""
         objects = values["companions"][ns]["objects"]
-        approved = frozen(ns, objects)
         assert stored(ns) == []
-        # No install fallback for an absent release, and no write for unapproved values.
-        count = refused(ns, "upgrade", approved, [])
-        changed = copy.deepcopy(objects)
-        changed[0]["metadata"].setdefault("labels", {})["unapproved"] = "true"
-        count += refused(ns, "install", dict(approved, **{"values.yaml": json.dumps({"objects": changed}).encode()}), [])
-        # The callback never takes ownership of an object that lacks this release's metadata.
+        # The upgrade path never installs an absent release.
+        count = refused(ns, "Apply of the absent release", apply, [])
+        # Without --take-ownership, Helm never adopts an object that lacks this release's ownership metadata.
         first = ["-n", ns, "annotate", objects[0]["kind"] + "/" + objects[0]["metadata"]["name"]]
         kube(first + ["meta.helm.sh/release-name-"])
-        count += refused(ns, "install", approved, [])
+        count += refused(ns, "Install over an object without release metadata", install, [])
         kube(first + ["meta.helm.sh/release-name=" + name])
         snapshot = full_states()
-        reconcile(row(ns, "install"), "apply", approved, kubeconfig=cfg, context=context)
-        assert stored(ns) == [(1, "deployed")], f"Frozen install did not store one deployed revision in {ns}"
-        unchanged(snapshot, f"Frozen install in {ns}")
-        # A stored release cannot be installed again. The frozen upgrade path is then a no-op.
-        count += refused(ns, "install", approved, [(1, "deployed")])
-        reconcile(row(ns, "upgrade"), "apply", approved, kubeconfig=cfg, context=context)
-        assert stored(ns) == [(1, "deployed")], f"Frozen no-op added a revision in {ns}"
-        unchanged(snapshot, f"Frozen no-op in {ns}")
+        succeeded(install(ns), f"First install in {ns}")
+        assert stored(ns) == [(1, "deployed")], f"First install did not store one deployed revision in {ns}"
+        unchanged(snapshot, f"First install in {ns}")
+        # A stored release cannot be installed again. Helmfile apply is then a no-op.
+        count += refused(ns, "Second install", install, [(1, "deployed")])
+        succeeded(apply(ns), f"Apply after the first install in {ns}")
+        assert stored(ns) == [(1, "deployed")], f"No-op apply added a revision in {ns}"
+        unchanged(snapshot, f"No-op apply in {ns}")
         return count
 
     # First contact. As in production, Helm has never applied these objects: kubectl created them
@@ -223,7 +230,7 @@ def exercise(cfg, context):
     # so only the kind node can wait for the generator Deployment in the jaeger namespace.
     first_contact = ["otel-demo"] + (["jaeger"] if context == "kind-jaeger-demo-adoption-fixture" else [])
     for ns in first_contact:
-        refusals += frozen_install(ns)
+        refusals += first_install(ns)
     assert before == states()
 
     # The direct apply below checks the chart and the state file from the working tree. For the
@@ -274,14 +281,13 @@ def exercise(cfg, context):
     record["data"]["release"] = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(payload).encode()))).decode()
     record["metadata"]["labels"]["status"] = "failed"
     kube(["-n", ns, "replace", "-f", "-"], json.dumps(record))
-    approved = frozen(ns, values["companions"][ns]["objects"])
-    refusals += refused(ns, "install", approved, [(1, "failed")])
+    refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")])
     snapshot = full_states()
     selector = "owner=helm,name=" + name
     kube(["-n", ns, "delete", "secret", "-l", selector])
     assert stored(ns) == []
     unchanged(snapshot, f"Removing the stored release record in {ns}")
-    refusals += frozen_install(ns)
+    refusals += first_install(ns)
 
     # Companion rollback with the commands in docs/cutover.md: remove only the stored release
     # records, then only the recorded ownership metadata. The objects return to their state
@@ -301,12 +307,12 @@ def exercise(cfg, context):
             diff = subprocess.run(kubectl + ["-n", ns, "diff", "-f", "-"], input=json.dumps(obj), text=True, capture_output=True)
             assert diff.returncode == 0, f"De-adopted {ns}/{obj['kind']}/{obj['metadata']['name']} differs from its source"
     unchanged({key: fields for key, fields in original.items() if key[0] in first_contact}, "Adoption followed by de-adoption")
-    frozen_work.cleanup()
+    scratch.cleanup()
     print(json.dumps({"objectsPreserved": len(before), "releases": len(revisions),
                       "secondApplyCreatedRevisions": 0, "deploymentRestartAnnotationsPreserved": True,
                       "readOnlyPlan": True, "foreignOwnerRejected": True, "removedServiceKept": True,
-                      "frozenFirstContactNamespaces": len(first_contact), "frozenRefusalsWithoutChange": refusals,
-                      "frozenNoOpCreatedRevisions": 0, "failedFirstInstallRecovered": True,
+                      "firstInstallNamespaces": len(first_contact), "refusalsWithoutChange": refusals,
+                      "firstInstallNoOpCreatedRevisions": 0, "failedFirstInstallRecovered": True,
                       "recordRemovalKeptObjects": True, "partialAdoptionRetriedWithOneRecord": True,
                       "deAdoptedNamespaces": len(first_contact),
                       "deAdoptionRestoredMetadata": True}))
