@@ -21,6 +21,18 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-23
+
+### Security
+
+- Both `deploy-all.sh` scripts install OpenSearch, Dashboards, the OpenTelemetry
+  Demo and kube-prometheus-stack only from archives whose SHA-256 equals
+  `ops/executor/chart-archives.json`, and stop before any cluster change when an
+  archive or a Jaeger chart dependency differs or a version has no locked digest.
+  The `Demo tests` CI job now checks that lock against the publishers' indexes.
+  **Executor image.**
+  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
 ## 2026-11-21
 
 ### Added

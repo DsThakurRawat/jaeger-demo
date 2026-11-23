@@ -264,6 +264,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('GITHUB_STEP_SUMMARY', step['run'])
         self.assertNotIn('exit 1', step['run'])
 
+    def test_demo_tests_job_checks_the_chart_archive_lock_against_the_publishers(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        job, = [job for job in jobs.values() if job.get('name') == 'Demo tests']
+        steps = [step for step in job['steps'] if step.get('run') == 'python3 scripts/utils/update-chart-archives.py --check']
+        self.assertEqual(1, len(steps))
+        self.assertNotIn('if', steps[0])
+        self.assertNotIn('continue-on-error', steps[0])
+
     def test_renovate_job_uses_the_discovery_make_target(self):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
         self.assertEqual(['make renovate-discovery'], [step['run'] for step in job['steps'] if 'run' in step])

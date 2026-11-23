@@ -75,6 +75,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice::This change requires a new executor image before the next daily slot: $(echo "$files" | paste -sd, -). See $procedure"
         fi
+    - name: Verify the chart archive lock against the publishers
+      run: python3 scripts/utils/update-chart-archives.py --check
     - name: Test scripts and chart rendering
       env:
         SHUNIT2: .tools/shunit2

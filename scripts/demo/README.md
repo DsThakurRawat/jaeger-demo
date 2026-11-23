@@ -45,6 +45,10 @@ recovery inputs are preserved. The historical `otel_deploy_scope` input also
 accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope
 pairs fail. Direct script callers can select a scope through
 `JAEGER_DEMO_DEPLOY_SCOPE`; the legacy OTel environment variable remains accepted.
+Before the first cluster change, both scripts verify every chart they install
+against [`ops/executor/chart-archives.json`](../../ops/executor/chart-archives.json)
+with `chart_archives.py`. A chart version without a locked digest, including a
+`PROMETHEUS_STACK_CHART_VERSION` override, fails.
 
 Chart upgrades are separate reviewed changes; do not bundle them with the initial
 repository ownership handover. Keep component updates separate. Major database

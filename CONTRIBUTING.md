@@ -88,7 +88,13 @@ preparation.
   `ops/executor/chart-archives.json`. It downloads each of the four pinned archives,
   requires its SHA-256 to equal the digest in the publisher's `index.yaml`, and
   rewrites the `charts` map only. `--check` changes nothing and exits non-zero with
-  the differences. Executor handling of these files is described in
+  the differences; the `Demo tests` CI job runs it. Both deploy scripts and the
+  executor enforce this lock: `scripts/demo/chart_archives.py` pulls each chart at
+  its pinned version from the publisher and installs it only when the archive's
+  SHA-256 matches, and `scripts/demo/jaeger-chart.sh` checks the Jaeger chart's
+  built dependencies against `jaegerDependencies`. The update script never changes
+  `jaegerDependencies`; maintain those entries by hand when the Jaeger chart
+  commit changes its `Chart.lock`. Executor handling of these files is described in
   [in-cluster-executor.md](docs/in-cluster-executor.md).
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
   the versions in `scripts/demo/scheduled_adapter.py` and lists every other literal

@@ -15,7 +15,7 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 
 ## Prerequisites
 - Kubernetes cluster reachable via `kubectl`
-- Install `bash`, `git`, `curl`, `kubectl`, `helm`, `python3` and `jq`. The deployment script uses Python for recovery policy selection, and the manual recovery and structured diagnostics use jq.
+- Install `bash`, `git`, `curl`, `kubectl`, `helm`, `python3` and `jq`. The deployment script uses Python for recovery policy selection and to verify each chart archive against `ops/executor/chart-archives.json` before the first cluster change, and the manual recovery and structured diagnostics use jq.
 - Network access to Helm repositories
 
 ## Quick start
