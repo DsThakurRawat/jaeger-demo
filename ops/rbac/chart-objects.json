@@ -6,7 +6,7 @@
     "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
     "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",
     "opentelemetry-demo-0.42.7.tgz": "8641be206f5282f3c489a4fd8481d343039d1c21298e37feb6d324e6997a3f89",
-    "kube-prometheus-stack-82.10.4.tgz": "e0c601a95d333616fd30961ec9374893fba2b6852ce7df87f97f9efdd2cb9b41"
+    "kube-prometheus-stack-93.6.1.tgz": "6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4"
   },
   "rederived": [
     {
@@ -14,6 +14,14 @@
       "chartArchive": "opentelemetry-demo-0.42.7.tgz",
       "valuesSHA256": {
         "examples/otel-demo/otel-demo-values.yaml": "2f83df70c6bc76752c85ba48dd5dab32334c99f21c2bb52ab053f5989be72a82"
+      },
+      "method": "python3 scripts/demo/chart_objects.py --check"
+    },
+    {
+      "release": "default/prometheus",
+      "chartArchive": "kube-prometheus-stack-93.6.1.tgz",
+      "valuesSHA256": {
+        "examples/oci/monitoring-values.yaml": "0794a285ee3066996e9a49c68cfae6701f1afe803340ca50bbfcc7790188b050"
       },
       "method": "python3 scripts/demo/chart_objects.py --check"
     }
@@ -1323,6 +1331,19 @@
     {
       "component": "oci-monitoring",
       "release": "prometheus",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "configmaps",
+      "name": "prometheus-kube-prometheus-k8s-resources-nodes-overview",
+      "verbs": [
+        "get",
+        "patch"
+      ],
+      "source": "pinned Helm upgrade render"
+    },
+    {
+      "component": "oci-monitoring",
+      "release": "prometheus",
       "scope": "cluster",
       "apiGroup": "rbac.authorization.k8s.io",
       "resource": "clusterroles",
@@ -1418,32 +1439,6 @@
       "apiGroup": "rbac.authorization.k8s.io",
       "resource": "clusterrolebindings",
       "name": "prometheus-kube-prometheus-prometheus",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "oci-monitoring",
-      "release": "prometheus",
-      "scope": "default",
-      "apiGroup": "rbac.authorization.k8s.io",
-      "resource": "roles",
-      "name": "prometheus-grafana",
-      "verbs": [
-        "get",
-        "patch"
-      ],
-      "source": "pinned Helm upgrade render"
-    },
-    {
-      "component": "oci-monitoring",
-      "release": "prometheus",
-      "scope": "default",
-      "apiGroup": "rbac.authorization.k8s.io",
-      "resource": "rolebindings",
-      "name": "prometheus-grafana",
       "verbs": [
         "get",
         "patch"

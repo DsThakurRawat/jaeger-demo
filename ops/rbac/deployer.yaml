@@ -105,7 +105,7 @@ rules:
     verbs: [get, list, watch, create, patch, delete]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles]
-    resourceNames: [prometheus-grafana, prometheus-kube-prometheus-admission]
+    resourceNames: [prometheus-kube-prometheus-admission]
     verbs: [bind, escalate]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [roles]

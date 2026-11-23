@@ -47,6 +47,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1. The chart no
+  longer renders the `prometheus-grafana` Role, so `ops/rbac/deployer.yaml` drops
+  its `bind` and `escalate` grant; Helm's delete of the old Role needs only the
+  existing `delete` rule. To apply it under review rather than unattended, see
+  [When a change alters a release's objects](docs/releases.md#when-a-change-alters-a-releases-objects).
+  ([#59](https://github.com/jaegertracing/jaeger-demo/pull/59),
+  fixes [#58](https://github.com/jaegertracing/jaeger-demo/issues/58))
 - The daily 13:00 UTC update and a manual dispatch are now the same `deploy` job,
   which runs `scripts/demo/deploy.py`. A scheduled run uses `demo-scheduled` and
   no reviewer; a manual run still waits for a `demo-apply` reviewer. The job no

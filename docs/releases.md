@@ -153,7 +153,7 @@ first manual install creates the ConfigMap.
 | OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
 | OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. After a rollout, also run the [control-interface check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
-| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
+| OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. The next scheduled run applies a merged chart or values change unattended; to upgrade under review instead, set `DEMO_SCHEDULE_ENABLED` to `false` before merging and follow [When a change alters a release's objects](#when-a-change-alters-a-releases-objects). |
 
 A scheduled run selects both Jaeger components and every component whose
 fingerprint differs from its key in the ConfigMap, including a missing key. It
@@ -311,7 +311,8 @@ first, then:
 
 1. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
    (the workflow always runs `upgrade`). The OTel sample application is
-   `demo_stack=otel` and `otel_deploy_scope=otel-demo`.
+   `demo_stack=otel` and `otel_deploy_scope=otel-demo`. OCI monitoring is
+   `demo_stack=oci` and `otel_deploy_scope=monitoring`.
 2. Verify the component as in step 5 of the
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
