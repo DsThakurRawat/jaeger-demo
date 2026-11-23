@@ -35,8 +35,8 @@ jobs:
       with:
         persist-credentials: false
 
-    # stack_health.py has no retry, and a change to it needs an executor image
-    # release, so the step reruns it. The step fails only when all attempts fail.
+    # stack_health.py has no retry, and the deployment tooling shares it, so the
+    # step reruns it. The step fails only when all attempts fail.
     - name: Check the OCI demo
       run: |
         for attempt in 1 2 3; do

@@ -16,8 +16,9 @@ it does not create a second Jaeger product version or image-publishing pipeline.
 
 The extraction retains the existing shell scripts and Python reconciler.
 Manual deployments use a reviewed GitHub environment. The
-[script schedule](cutover.md#review-scheduled-scope) has its own environment
-and activation switch. The future Helmfile runner, generated immutable
+[script schedule](cutover.md#review-scheduled-scope) runs the same `deploy` job
+and reconciler in its own environment, `demo-scheduled`, behind the
+`DEMO_SCHEDULE_ENABLED` switch. The future Helmfile runner, generated immutable
 bundle, read-only `plan` operation and automatic image-compatibility gate are not
 implemented by extraction. Track them in
 [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
@@ -82,7 +83,7 @@ the CLI executable's version, including when the action's installed marker skips
 installation. A rejected tool check cannot start reconciliation or restore-pod
 cleanup. Credential-free CI installs and verifies these pins. The OpenSearch recovery and
 volume-expansion workflows apply the same constraint and check after checkout and
-before they acquire the deployment lock.
+before they verify the deployment identity's access.
 Kubectl follows the live cluster's Kubernetes version; record its exact version
 and checksum along with the runner image used for handover. Supply
 `expected_config_sha` during the reviewed script handover. The workflow
@@ -135,13 +136,16 @@ payloads.
 
 ## Daily component updates
 
-The protected planner resolves upstream Jaeger and HotROD snapshot tags independently
-and freezes the exact images in the daily bundle. The GitHub job signals the [protected executor](daily-update-request.md) and waits for its verified result. Both Jaeger releases refresh daily. Renovate proposes chart, image and
+The scheduled run is the `deploy` job of `ci-deploy-demo.yml` on `main`, in the
+`demo-scheduled` environment. It resolves upstream Jaeger and HotROD snapshot tags
+independently and runs `scripts/demo/deploy.py`, as a manual run does. Both Jaeger
+releases refresh daily. Renovate proposes chart, image and
 dependency changes for maintainer review, with a seven-day release-age policy
 and manual merges. The next daily reconciliation uses the reviewed configuration
 on main. Unchanged storage, monitoring and sample-application inputs retain their
-current releases. Each successful component records its fingerprint in
-`default/jaeger-demo-deployment-revisions`.
+current releases. Each successful component records its fingerprint by
+merge-patching only its own key in `default/jaeger-demo-deployment-revisions`; a
+first manual install creates the ConfigMap.
 
 | Component | Helm releases | Daily action and checks |
 | --- | --- | --- |
@@ -151,11 +155,16 @@ current releases. Each successful component records its fingerprint in
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
 | OCI monitoring | `default/prometheus` | On input changes, upgrade the reviewed monitoring chart and values, and wait for Grafana rollout. Check the public Grafana health endpoint as part of operator verification. |
 
-A scheduled run applies an input change only when the release keeps its set of
-objects and its protected objects, such as RBAC, Secrets and Helm hooks. When a
-reviewed change adds, removes or renames an object, or alters a protected one,
-the 12:20 UTC preparation fails and no component is updated until an operator
-has upgraded that release manually. See
+A scheduled run selects both Jaeger components and every component whose
+fingerprint differs from its key in the ConfigMap, including a missing key. It
+requires that ConfigMap and the existing releases, and upgrades in place only:
+it installs no release and creates no namespace. Each selected release must have
+Helm status `deployed`. A `failed` non-Jaeger release is repaired in place; a
+failed Jaeger release, and any release in a `pending-*` state, is refused until
+an operator repairs it. Charts install only from archives whose SHA-256 matches
+`ops/executor/chart-archives.json`, checked before any cluster change. A change
+that adds, removes or renames an object is applied like any other once the
+deployer role covers it. See
 [When a change alters a release's objects](#when-a-change-alters-a-releases-objects).
 
 Generated trace history is disposable. Daily OpenSearch upgrades preserve the
@@ -166,50 +175,36 @@ approved repair, new traffic can repopulate the demo. Use the
 separately authorized operation requires a tested backup.
 
 A chart version and its application version can differ: a chart-only release
-repackages the same OpenSearch or Dashboards version. The daily executor takes
-each application version from its reviewed chart archive. A manual deployment
-requires each release to be `deployed` at its chart pin and reads the
+repackages the same OpenSearch or Dashboards version. Manual and scheduled runs
+require each release to be `deployed` at its chart pin and read the
 application version with `helm get metadata`, which uses the Helm release
 Secret reads the upgrade already needs.
 
-Once the schedule is enabled, a merged change to the OpenSearch chart alone is
-applied in place by the next daily run, without a backup. A Dashboards chart
-version change is not. That chart writes its version into labels on the
-Dashboards ServiceAccount and RoleBinding, and the executor requires those
-protected objects to equal the live release. Preparation then fails with
-"Privileged manifest differs from the operator-established baseline", and the
-daily update stops for every component until a manual upgrade has established
-the new release. The two charts are bumped together, so plan every OpenSearch
-version upgrade as a manual one: merge after the daily run, dispatch the manual
-`otel` / `opensearch` upgrade with `opensearch_recovery=required`, which also
-starts the engine upgrade from a tested recovery point, and let it finish
-before the next preparation. The preparation window opens at 11:00 UTC for
-the 13:00 UTC slot; the CronJob runs at 12:20 UTC, but a one-off preparer Job
-can run earlier. Preparation freezes the checkpoint and Helm history for the
-slot, and a later retry reuses that frozen plan. An upgrade that completes after
-preparation makes the executor reject the changed state and leaves the writer
-lock for operator recovery. If the upgrade cannot finish before preparation,
-first pause both the GitHub signal and the preparer, and let running preparers
-and writers drain. Resuming the same day reuses the frozen plan, so keep the
-signal off until the next day's slot is prepared after the upgrade.
-[Activation and pause order](in-cluster-executor.md#activation-approval)
+Once the schedule is enabled, a merged change to the OpenSearch and Dashboards
+charts is applied in place by the next scheduled run, on the existing PVC and
+without a backup. The run compares the data PVC and its bound volume before and
+after the upgrade. To start an engine upgrade from a tested recovery point
+instead, merge after the 13:00 UTC run or pause the schedule, dispatch the manual
+`otel` / `opensearch` upgrade with `opensearch_recovery=required`, and let it
+finish. Its successful result records the OpenSearch fingerprint, so the next
+scheduled run does not select OpenSearch again.
 
 An OpenSearch failure holds both dependent OTel components. Independent OCI
 updates may succeed in the same run. A failed component keeps its preceding
 fingerprint. Inspect each component outcome and its live Helm history before a
 retry, especially when OpenSearch upgraded before Dashboards failed.
 
-During commissioning, verify the prepared slot and receipt with the GitHub
-signal disabled. After activation, use the first actual scheduled run to accept
-the deployment. Record its run URL and receipt, reconcile the six releases
-and five component fingerprints, and verify fresh traces, public health, TLS
-and storage bindings. The scheduled failure notification includes the run ID in
-`#jaeger-operations`. [Commissioning and first-run criteria](daily-production-install-review.md)
+Before activation, review the selection read-only with the schedule disabled.
+After activation, use the first actual scheduled run to accept the deployment.
+Record its run URL, reconcile the six releases and five component fingerprints,
+and verify fresh traces, public health, TLS and storage bindings. The scheduled
+failure notification includes the run ID in `#jaeger-operations`.
+[Activation and first-run criteria](cutover.md#review-scheduled-scope)
 
 ## Failure handling
 
-A manual deployment or daily request job that fails, is cancelled or times out
-posts to `#jaeger-operations` with its status. The manual job is limited to
+A manual or scheduled run of the `deploy` job that fails, is cancelled or times
+out posts to `#jaeger-operations` with its status. The job is limited to
 330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
 failure diagnostics, restore-pod cleanup and the notification. The diagnostics
 and cleanup steps have their own 5- and 2-minute limits so that a hung request
@@ -221,29 +216,33 @@ The [run observer](../.github/workflows/demo-run-observer.yml) posts to the same
 channel for a deploy or smoke-check run that was cancelled, failed, timed out or
 failed at startup while none of its jobs reached a runner. It stays silent when
 a job did start, because that job reports itself. The observer runs from the
-workflow file on `main` and does not report its own failures.
+workflow file on `main` and does not report its own failures. It does not watch
+the recovery and volume-expansion workflows.
 
-When the daily request job fails with "No preparation was published for the ... slot", the preparer did not
-publish that day's plan, and the message repeats the slot the record still holds. Read the preparer before
-anything else, because the scheduler's events expire after about an hour:
+The deployment, OpenSearch recovery and volume-expansion workflows share the
+concurrency group `jaeger-otel-demo-opensearch-recovery` with
+`cancel-in-progress: false`, so one of them runs at a time and a running writer is
+never cancelled. GitHub keeps one waiting run per group: a newer waiting run
+cancels an older waiting one. Do not dispatch a manual writer close to 13:00 UTC,
+and do not leave a dispatched run waiting for approval across 13:00 UTC; either
+can cost the scheduled run or the manual one.
 
-```bash
-kubectl -n jaeger-demo-operations get jobs --sort-by=.metadata.creationTimestamp
-kubectl -n jaeger-demo-operations get job <preparer job> -o jsonpath='{.status.conditions[*].reason}{"\n"}'
-kubectl -n jaeger-demo-operations get events --sort-by=.lastTimestamp
-```
+What a failed run leaves behind:
 
-`DeadlineExceeded` after the full 40 minutes means the pod never started or hung. The preparer must run on the
-executor's node, so check that node's pod count against its limit (`kubectl describe node`) and that the shared
-volume is attached there. A refusal, for example over a guarded file that differs from the installed image, ends
-within a minute with `BackoffLimitExceeded`, and the failed pod's log gives the error type. Fix the cause, then run a
-one-off preparer Job inside the 11:00 to 15:00 UTC window, or wait for the next slot.
+- A failed component's fingerprint is not recorded, so the next run selects and
+  retries it. Components that succeeded in the same run keep their new keys.
+- An OpenSearch failure blocks the dependent OTel components in that run.
+- A scheduled run refuses a release in a `pending-*` state, and a failed Jaeger
+  release, until an operator repairs it.
+- A run that stops at **Verify the deployment identity's access** changed
+  nothing. The credential lacks part of `ops/rbac/deployer.yaml`; an
+  administrator applies the role and reruns `check`
+  ([deployer access](deployer-access.md)).
+- A re-run of a scheduled run deploys only at the current `main` commit. After a
+  later merge, wait for the next scheduled run or dispatch manually.
 
-A rerun of an earlier scheduled run keeps its original date. Once the preparer has advanced the record, the
-rerun fails with "The request record has advanced to the ... slot": that day's preparation was not missing, and
-its result is in the original run and the durable receipt ([request protocol](daily-update-request.md)).
-
-A failure leaves the schedule switch enabled. The operator must reconcile a failed request and any held lock before the next slot. Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
+A failure leaves the schedule switch enabled, so the next scheduled run retries.
+Set the repository variable `DEMO_SCHEDULE_ENABLED` to `false` to
 pause future scheduled jobs while inspecting a failure. Check queued and running
 writers separately and let an active Helm transaction finish before rolling back.
 Preserve the failed run's diagnostics and compare actual release state with the
@@ -275,53 +274,56 @@ requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
 
-The in-cluster runtime has its own image release, inactive installation manifest and activation procedure. The release receipt records the image digest separately from the daily configuration SHA and component versions. [Executor image release and installation](in-cluster-executor.md#release-and-installation)
+No workflow deploys through the in-cluster executor. Its code and documents stay
+in the repository until a later change removes them; the cluster-side removal of
+its objects is described in [executor retirement](executor-retirement.md).
 
-## Merging a change to guarded files
+<a id="merging-a-change-to-guarded-files"></a>
 
-The executor refuses its 12:20 UTC preparation when a file in
-`scheduled_inputs.GUARDED` on `main` differs from the copy in its installed image.
-Pull request CI lists such files in the job summary and in a notice. A chart pin
-bump that only edits the pin lines is not listed. Complete these steps before the
-next 12:20 UTC preparation, or pause the schedule first:
+## Merging a change
 
-1. Merge the pull request.
-2. Run **Publish the demo executor image** from the merge commit.
-3. Obtain installation approval and install the new image.
+A merged change takes effect at the next scheduled run, which deploys the
+configuration on `main` when it starts. No image has to be published or installed
+first. When a change must not go out unattended, set `DEMO_SCHEDULE_ENABLED` to
+`false` before merging, deploy it with a manual dispatch, verify it, and then
+enable the schedule again.
 
-The image publication and installation steps are in
-[Release and installation](in-cluster-executor.md#release-and-installation). To pause the
-schedule, follow [Activation approval](in-cluster-executor.md#activation-approval).
+A chart or script that needs Kubernetes access beyond `ops/rbac/deployer.yaml`
+fails `scripts/demo/deployer_access_test.py` in the pull request, so the role
+changes in the same pull request. A merge does not change the cluster: an
+administrator must apply the changed role and rerun `check` before the next run
+([Changing the role](deployer-access.md#changing-the-role)). Until then
+**Verify the deployment identity's access** stops each run before any change.
+Merge such a change after the 13:00 UTC run, or pause the schedule, until the
+role is applied.
 
 ### When a change alters a release's objects
 
-The executor compares each candidate release with the live one. It refuses the
-preparation with `Daily upgrades require an approved existing object inventory`
-when the object identities differ, and with `Privileged manifest differs from the
-operator-established baseline` when a protected object, a hook or a monitoring
-workload differs. The daily plan covers all components, so none of them is
-updated while one release is refused. Before merging,
-`python3 scripts/demo/access_matrix.py` names the objects a chart adds and the
-reviewed records it no longer renders.
+A chart change that adds, removes or renames an object, or alters a hook or an
+RBAC object, no longer needs a manual upgrade before the schedule accepts it. The
+next scheduled run upgrades the release in place like any other change. Before
+merging, `python3 scripts/demo/access_matrix.py` names the objects a chart adds
+and the reviewed records it no longer renders, and the role must cover them.
 
-Such a change needs the three steps above and a manual upgrade, all before the
-next 12:20 UTC preparation or with the schedule paused:
+To apply such a change under review rather than unattended, pause the schedule
+first, then:
 
-4. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
+1. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
    with `deploy_mode=upgrade`. The OTel sample application is `demo_stack=otel`
    and `otel_deploy_scope=otel-demo`.
-5. Verify the component as in step 5 of the
+2. Verify the component as in step 5 of the
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
    loads, that <https://jaeger.demo.jaegertracing.io> shows a fresh `checkout`
    trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
-6. Confirm that the next scheduled run prepares and succeeds. The change is not
-   accepted until it does.
+3. Enable the schedule again and confirm that the next scheduled run succeeds.
+   The change is not accepted until it does.
 
-Step 4 needs an identity with access to the affected release.
+Both paths need an identity with access to the affected release.
 [#87](https://github.com/jaegertracing/jaeger-demo/issues/87) records that the
 `demo-apply` grants from the script handover covered the two Jaeger releases only,
 and that a monitoring upgrade through the workflow failed part-way.
 [Deployer access](deployer-access.md) defines the reviewed role for all six
-releases. Dispatch step 4 for those components only after an administrator has
-applied that role and its `check` command reports no difference.
+releases. Dispatch step 1 for those components, or let a scheduled run apply
+the change, only after an administrator has applied that role and its `check`
+command reports no difference.

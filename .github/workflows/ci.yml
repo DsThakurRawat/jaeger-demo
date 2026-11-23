@@ -55,26 +55,6 @@ jobs:
       run: |
         python -m pip install -r scripts/utils/lint-requirements.txt
         ruff check .
-    - name: Flag executor-guarded changes
-      if: github.event_name == 'pull_request'
-      env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      run: |
-        git fetch --no-tags --depth=1 origin "$BASE_SHA"
-        files=$(python3 scripts/demo/guarded_changes.py "$BASE_SHA" HEAD)
-        if [ -n "$files" ]; then
-          procedure=https://github.com/${{ github.repository }}/blob/main/docs/releases.md#merging-a-change-to-guarded-files
-          {
-            echo "### Executor image release needed"
-            echo
-            echo "This change requires a new executor image before the next daily slot. Files:"
-            echo
-            printf '%s\n' "$files" | while IFS= read -r file; do echo "- \`$file\`"; done
-            echo
-            echo "Procedure: $procedure"
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::This change requires a new executor image before the next daily slot: $(echo "$files" | paste -sd, -). See $procedure"
-        fi
     - name: Verify the chart archive lock against the publishers
       run: python3 scripts/utils/update-chart-archives.py --check
     - name: Test scripts and chart rendering

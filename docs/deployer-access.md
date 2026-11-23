@@ -9,10 +9,12 @@ definition, not a record of what the cluster holds: an administrator applies it
 and binds the identities, and records that in the release record. Until then the
 identities keep the access described in
 [all-five-schedule-access.md](all-five-schedule-access.md) and
-[#87](https://github.com/jaegertracing/jaeger-demo/issues/87). The scheduled job
-does not use this role until the direct deployment path in
-[#95](https://github.com/jaegertracing/jaeger-demo/issues/95) replaces the
-request to the in-cluster executor.
+[#87](https://github.com/jaegertracing/jaeger-demo/issues/87). Every run of the
+deploy, recovery and volume expansion workflows starts by checking its own
+credential against this role and stops before any change if part of it is
+missing, so apply the role before the first run after
+[#95](https://github.com/jaegertracing/jaeger-demo/issues/95) merges.
+[Executor retirement](executor-retirement.md) gives the order.
 
 | Role | Bound to | Purpose |
 | --- | --- | --- |
@@ -127,10 +129,11 @@ Bind the reviewer-gated identity first:
 python3 scripts/demo/deployer_access.py bindings --manual-user "$MANUAL_USER_OCID" | kubectl apply -f -
 ```
 
-Bind the scheduled identity only when the schedule runs the deployment directly
-([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). Until then no
-workflow uses that access, and an unused grant on a credential that needs no
-reviewer is only risk. The same command with both users adds it:
+Bind the scheduled identity only after the manual upgrades are accepted and just
+before the schedule is enabled
+([executor retirement](executor-retirement.md#8-bind-the-scheduled-identity)).
+Until then nothing uses that access, and an unused grant on a credential that
+needs no reviewer is only risk. The same command with both users adds it:
 
 ```bash
 python3 scripts/demo/deployer_access.py bindings --manual-user "$MANUAL_USER_OCID" --scheduled-user "$SCHEDULED_USER_OCID" | kubectl apply -f -
@@ -170,7 +173,8 @@ a group is not evaluated unless each group is passed with `--group`, so a clean
 result does not rule out a group grant. `check --identity <name> --self` closes
 that gap for the required access: run with the identity's own credential, it
 reviews what that credential can really do, and asks nothing about the denied
-list.
+list. The deploy, recovery and volume expansion workflows run it as their first
+cluster step.
 
 Record the reviewed commit, the command outputs and the time in the release
 record. The first manual upgrade of each component through **Deploy Jaeger Demo to

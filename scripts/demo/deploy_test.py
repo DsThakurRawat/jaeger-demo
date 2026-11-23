@@ -124,18 +124,41 @@ class DeploymentTests(unittest.TestCase):
     @patch("deploy.resolve_snapshots")
     @patch("deploy.deploy_component")
     @patch("deploy.run")
-    def test_locked_manual_update_preserves_checkpoint_annotations(self, run, component, snapshots):
-        state = {"metadata": {"annotations": {"jaegertracing.io/deployment-lock-holder": "manual/123/1"}},
-                 "data": self.desired}
+    def test_manual_update_patches_only_its_key_and_preserves_annotations(self, run, component, snapshots):
+        # No lock variable is involved: every event writes one key by merge patch, so
+        # annotations and the other components' keys are never replaced.
+        state = {"metadata": {"annotations": {"example.test/owner": "operator"}},
+                 "data": dict(self.desired, **{"otel-demo": "independent-operator-update"})}
         run.return_value.stdout = json.dumps(state)
         env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_STACK="oci",
-                   JAEGER_OTEL_DEMO_DEPLOY_SCOPE="monitoring", JAEGER_DEMO_LOCK_HELD="true")
+                   JAEGER_OTEL_DEMO_DEPLOY_SCOPE="monitoring")
         self.assertEqual(0, deploy.reconcile(env))
         component.assert_called_once()
         snapshots.assert_not_called()
-        args = run.call_args.args[0]
+        writes = [call.args[0] for call in run.call_args_list if call.args[0][3] != "get"]
+        self.assertEqual(1, len(writes))
+        args = writes[0]
         self.assertEqual(["kubectl", "-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p"], args[:-1])
         self.assertEqual({"data": {"oci-monitoring": self.desired["oci-monitoring"]}}, json.loads(args[-1]))
+        self.assertFalse(any("input" in call.kwargs for call in run.call_args_list))
+        self.assertNotIn("JAEGER_DEMO_LOCK_HELD", (deploy.ROOT / "scripts/demo/deploy.py").read_text())
+
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_first_manual_install_creates_the_record_then_patches_it(self, run, component, snapshots):
+        run.return_value.stdout = ""
+        env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_STACK="oci",
+                   JAEGER_OTEL_DEMO_DEPLOY_SCOPE="all")
+        self.assertEqual(0, deploy.reconcile(env))
+        self.assertEqual(["oci-jaeger", "oci-monitoring"], [call.args[0] for call in component.call_args_list])
+        writes = [call.args[0] for call in run.call_args_list if call.args[0][3] != "get"]
+        self.assertEqual([["kubectl", "-n", "default", "create", "configmap", deploy.STATE,
+                           "--from-literal=oci-jaeger=" + self.desired["oci-jaeger"]]], writes[:1])
+        self.assertEqual(["kubectl", "-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p"],
+                         writes[1][:-1])
+        self.assertEqual({"data": {"oci-monitoring": self.desired["oci-monitoring"]}}, json.loads(writes[1][-1]))
+        self.assertEqual(2, len(writes))
 
     def test_manual_routing_and_clean(self):
         for name, (stack, scope, _) in deploy.COMPONENTS.items():
@@ -299,9 +322,13 @@ class DeploymentTests(unittest.TestCase):
         component.side_effect = [subprocess.CalledProcessError(1, "recovery"), None, None]
         self.assertEqual(1, deploy.reconcile(self.env))
         self.assertEqual(["opensearch", "oci-jaeger", "oci-monitoring"], [call.args[0] for call in component.call_args_list])
-        states = [json.loads(call.kwargs["input"])["data"] for call in run.call_args_list if "input" in call.kwargs]
-        self.assertNotIn("opensearch", states[-1])
-        self.assertEqual({"oci-jaeger", "oci-monitoring"}, set(states[-1]))
+        writes = [call.args[0] for call in run.call_args_list if call.args[0][3] != "get"]
+        # The record did not exist: the first success creates it, the next patches its own key.
+        recorded = [writes[0][-1].removeprefix("--from-literal=").split("=", 1)[0]]
+        recorded += [key for write in writes[1:] for key in json.loads(write[-1])["data"]]
+        self.assertEqual(["create", "patch"], [write[3] for write in writes])
+        self.assertNotIn("opensearch", recorded)
+        self.assertEqual(["oci-jaeger", "oci-monitoring"], recorded)
 
     @patch("deploy.resolve_snapshots")
     @patch("deploy.deploy_component")
@@ -315,7 +342,9 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn("otel-demo: deployed", Path(summary.name).read_text())
         component.assert_called_once_with("otel-demo", self.env)
         resolve.assert_not_called()
-        self.assertEqual(self.desired, json.loads(run.call_args.kwargs["input"])["data"])
+        writes = [call.args[0] for call in run.call_args_list if call.args[0][3] != "get"]
+        self.assertEqual(1, len(writes))
+        self.assertEqual({"data": {"otel-demo": self.desired["otel-demo"]}}, json.loads(writes[0][-1]))
 
     def run_workflow_step(self, step, kubectl_status, **env):
         lines = step.split("\n      run: |\n", 1)[1].splitlines()
@@ -334,11 +363,13 @@ class DeploymentTests(unittest.TestCase):
     def test_deploy_workflow_guards_the_restore_test(self):
         workflows = deploy.ROOT / ".github/workflows"
         workflow = (workflows / "ci-deploy-demo.yml").read_text()
-        job, *steps = workflow.split("\n  request-daily:",1)[0].split("\n    - name: ")
+        self.assertEqual(1, len(re.findall(r"^  [a-z-]+:$", workflow.split("\njobs:\n", 1)[1], re.MULTILINE)))
+        job, *steps = workflow.split("\n    - name: ")
         names = [step.split("\n", 1)[0] for step in steps]
         self.assertEqual(["Reconcile demo components", "Collect OpenSearch recovery diagnostics",
-                          "Remove disposable restore pod", "Release the shared deployment lock",
-                          "Send detailed Slack notification on failure"], names[-5:])
+                          "Remove disposable restore pod",
+                          "Send detailed Slack notification on failure"], names[-4:])
+        self.assertFalse([name for name in names if "lock" in name.lower()])
         self.assertNotIn("continue-on-error", workflow)
         limit = re.search(r"^    timeout-minutes: (\d+)$", job, re.MULTILINE)
         self.assertIsNotNone(limit, "the deploy job has no timeout-minutes")
@@ -346,8 +377,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertLess(int(recovery_limit[1]), int(limit[1]))
         self.assertLess(int(limit[1]), 360)
 
-        diagnostics, cleanup, release_lock, slack = steps[-4:]
-        self.assertIn("steps.writer-lock.outputs.held == 'true'", release_lock)
+        diagnostics, cleanup, slack = steps[-3:]
         self.assertIn("\n      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
         self.assertIn("\n      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && "
                       "steps.reconcile.outputs.recovery_started == 'true' && "
@@ -422,7 +452,7 @@ class DeploymentTests(unittest.TestCase):
         preflight.side_effect = lambda *args: calls.append("preflight")
         component.side_effect = lambda *args: calls.append("deploy")
         def command(*args, **kwargs):
-            if "input" in kwargs:
+            if args[0][3] == "patch":
                 calls.append("state")
             return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": self.desired}))
         run.side_effect = command
@@ -441,7 +471,7 @@ class DeploymentTests(unittest.TestCase):
             deploy.reconcile(self.handover_env())
         component.assert_not_called()
         self.assertEqual(1, run.call_count)
-        self.assertNotIn("input", run.call_args.kwargs)
+        self.assertEqual("get", run.call_args.args[0][3])
 
     @patch("deploy.selected_components", return_value=["oci-jaeger", "oci-monitoring"])
     @patch("deploy.handover.preflight")

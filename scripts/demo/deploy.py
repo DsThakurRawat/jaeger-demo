@@ -3,7 +3,11 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reconcile independently deployed demo components under the workflow's lock."""
+"""Reconcile independently deployed demo components.
+
+The workflows that change the cluster share one concurrency group, so one
+reconciliation runs at a time.
+"""
 
 import hashlib
 import json
@@ -190,7 +194,8 @@ def reconcile(env, root=ROOT):
                   "--ignore-not-found", "-o", "json"], capture_output=True)
     if event == "schedule" and not result.stdout.strip():
         raise ValueError("Scheduled upgrades require the existing deployment revision ConfigMap")
-    previous = json.loads(result.stdout).get("data", {}) if result.stdout.strip() else {}
+    state_exists = bool(result.stdout.strip())
+    previous = json.loads(result.stdout).get("data", {}) if state_exists else {}
     desired = {name: fingerprint(name, root) for name in COMPONENTS}
     selected = selected_components(event, stack, scope, mode, previous, desired)
     if event == "workflow_dispatch" and not selected:
@@ -218,15 +223,16 @@ def reconcile(env, root=ROOT):
                 snapshots_resolved = True
             print(f"::group::Deploy {name}", flush=True)
             deploy_component(name, env)
-            if event == "schedule" or env.get("JAEGER_DEMO_LOCK_HELD") == "true":
+            # Write one key at a time, so a concurrent or earlier writer's other
+            # keys and the object's annotations are never replaced.
+            if state_exists:
                 patch = json.dumps({"data": {name: desired[name]}})
                 run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
             else:
-                updated = dict(previous, **{name: desired[name]})
-                state = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {
-                    "name": STATE, "namespace": "default"}, "data": updated}
-                run(["kubectl", "apply", "-f", "-"], input=json.dumps(state))
-                previous = updated
+                # Only a first manual install reaches this; a scheduled run requires the record above.
+                run(["kubectl", "-n", "default", "create", "configmap", STATE,
+                     "--from-literal=" + name + "=" + desired[name]])
+                state_exists = True
             print(f"{name}: deployed successfully", flush=True)
         except (subprocess.CalledProcessError, ScheduledReleaseError) as error:
             print(f"::error::{name}: {error}", flush=True)

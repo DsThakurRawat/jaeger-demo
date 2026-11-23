@@ -3,6 +3,8 @@
 
 # In-cluster scheduled executor
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 The trusted preparer publishes the day's private, signed bundle. The executor independently authenticates that bundle and claims the same durable writer lock used by manual operations. The GitHub job supplies one signal and observes the result. The manifests, service accounts, keys and cluster permissions require operator installation before activation. [Daily request protocol](daily-update-request.md) · [Receiver entry point](../scripts/demo/scheduled_receiver.py)
 
 ## Daily sequence

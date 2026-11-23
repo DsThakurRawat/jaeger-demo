@@ -32,7 +32,7 @@ every document the change makes stale:
 | When the PR changes | Update |
 | --- | --- |
 | Behavior, commands, workflow inputs, alerts or failure handling | The README or runbook that documents it; [docs/releases.md](docs/releases.md) for release procedure |
-| Public routes, namespaces, releases, components, trace flow, workflows or executor steps | Every Mermaid diagram that shows them |
+| Public routes, namespaces, releases, components, trace flow, workflows or deployment steps | Every Mermaid diagram that shows them |
 | Anything an operator or contributor would notice | [CHANGELOG.md](CHANGELOG.md), following [CONTRIBUTING.md](CONTRIBUTING.md#changelog) |
 | A migration phase's status or evidence | [docs/MIGRATION.md](docs/MIGRATION.md), without marking future work done |
 | Local toolchain, check commands or a pin with a second location | [CONTRIBUTING.md](CONTRIBUTING.md) |

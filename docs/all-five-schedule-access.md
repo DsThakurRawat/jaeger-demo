@@ -3,6 +3,8 @@
 
 # Production access for daily hosted demo updates
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 When enabled, the 13:00 UTC job evaluates five components. Both Jaeger releases refresh their
 images daily. OpenSearch and Dashboards, the OTel application and OCI monitoring
 apply reviewed input changes. Scheduled OpenSearch upgrades use the existing

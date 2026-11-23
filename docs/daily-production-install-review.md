@@ -3,6 +3,8 @@
 
 # Review the daily executor installation
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 Run the packet generator from the reviewed `jaeger-demo` checkout. It renders
 the request controls, native workload and history guards, typed admission
 parameters, access grants, network rules, storage initializer and inactive
