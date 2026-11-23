@@ -161,6 +161,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) deletes that module.
   ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
   fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+- The frozen-bundle Helmfile tooling of the retired plan-and-apply contract:
+  `adoption_bundle.py`, `helmfile_transaction.py`, the `frozen-transaction` and
+  `adoption-bundle` rehearsals, their CI step and `docs/helmfile-bundles.md`. The
+  `adoption` CI job no longer installs `cryptography`.
+  (fixes [#99](https://github.com/jaegertracing/jaeger-demo/issues/99))
 
 ### Security
 

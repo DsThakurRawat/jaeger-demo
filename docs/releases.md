@@ -5,8 +5,6 @@
 
 For the Helmfile candidate, run `make validate` before submitting a configuration change. It compares the six application releases to the script-era inputs and checks both application and supplemental resources against the target Kubernetes and chart schemas. The dependency check pairs script and Helmfile chart updates during the transition. Production continues to run the extracted workflow until operator acceptance. [Application validation](helmfile-applications.md) · [Adoption rehearsal](helmfile-companions.md)
 
-The [private Helmfile bundle contract](helmfile-bundles.md) describes the offline planner and executor handoff of the earlier plan-and-apply design. The [migration plan](MIGRATION.md#execution-contract) replaces that contract, and the document is under revision.
-
 A deployment release is a configuration commit plus the chart and tool versions,
 Jaeger and HotROD image references and digests, and verification evidence.
 `jaegertracing/jaeger` publishes the product images. This repository deploys them;
@@ -67,9 +65,9 @@ Before a production transition, prepare a private operational record containing:
 Freeze configuration and all consequential inputs between verification and
 execution. If they change, regenerate the record and obtain verification for the
 changed consequential inputs. A moving tag or unpinned tool cannot satisfy this
-contract merely because its final value appears in a job log. For Stage 1 this is
-an operational gate. The generated bundle and automatic rejection of drift arrive
-with Helmfile.
+contract merely because its final value appears in a job log. This is an
+operational gate; no tool rejects drift automatically. Helmfile adds a live drift
+report.
 
 Production and credential-free chart tests pin Helm v4.3.2, the version observed
 in the November 17, 2026 core deployment writer. Compare fresh release revisions
