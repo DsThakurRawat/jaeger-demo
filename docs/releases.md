@@ -317,3 +317,11 @@ next 12:20 UTC preparation or with the schedule paused:
    trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
 6. Confirm that the next scheduled run prepares and succeeds. The change is not
    accepted until it does.
+
+Step 4 needs an identity with access to the affected release.
+[#87](https://github.com/jaegertracing/jaeger-demo/issues/87) records that the
+`demo-apply` grants from the script handover covered the two Jaeger releases only,
+and that a monitoring upgrade through the workflow failed part-way.
+[Deployer access](deployer-access.md) defines the reviewed role for all six
+releases. Dispatch step 4 for those components only after an administrator has
+applied that role and its `check` command reports no difference.

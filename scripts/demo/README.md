@@ -17,6 +17,14 @@ Manual deployment runs use the reviewed `demo-apply` environment. The 13:00 UTC
 job on main uses `demo-scheduled` after activation through the
 [handover runbook](../../docs/cutover.md#review-scheduled-scope).
 
+The Kubernetes access both environments' identities need is defined in
+`ops/rbac/deployer.yaml` and explained in
+[deployer access](../../docs/deployer-access.md). `deployer_access.py bindings`
+prints the bindings for an administrator to apply, and `deployer_access.py check`
+compares an identity's live access with the committed role. Its tests fail when a
+chart or script needs access the role lacks, and when a rule has no chart object
+or command behind it.
+
 `deploy.py` fingerprints each component's deployment inputs and records successful
 revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap. Failed
 revisions are not recorded, so the next reconciliation retries them. The daily
