@@ -31,7 +31,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   archive or a Jaeger chart dependency differs or a version has no locked digest.
   The `Demo tests` CI job now checks that lock against the publishers' indexes.
   **Executor image.**
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#96](https://github.com/jaegertracing/jaeger-demo/pull/96),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ## 2026-11-21
 
