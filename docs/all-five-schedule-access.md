@@ -30,6 +30,11 @@ the reviewer-gated `demo-apply` environment.
 
 ## Deployment access awaiting approval
 
+[Deployer access](deployer-access.md) defines one reviewed role for the scheduled
+and manual identities under the direct deployment path proposed in
+[#95](https://github.com/jaegertracing/jaeger-demo/issues/95). It replaces the
+executor grants described below once an administrator applies it.
+
 The GitHub scheduled credential signals one named request through the [protected daily update protocol](daily-update-request.md). The independent executor owns the application write access. Its review covers candidate and rollback objects, all six Helm histories, functional checks and privileged monitoring hooks. Helm Secret GET/LIST in the four release namespaces can expose unrelated AI and TLS credentials to that executor. The Prometheus operator has cluster-wide Secret access. Protect the executor code, bundle custody, infrastructure, effective RBAC and accepted operations independently before the write grant and schedule activation.
 
 Scheduled API permissions exclude snapshot operations, PVC or PV mutation, restore

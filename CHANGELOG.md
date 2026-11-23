@@ -21,6 +21,19 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-23
+
+### Added
+
+- Reviewed Kubernetes roles for the scheduled and manual deployment identities in
+  `ops/rbac/deployer.yaml`, covering all six releases, with
+  `scripts/demo/deployer_access.py` to print their bindings and to compare an
+  identity's live access with the role. Tests fail when a chart or script needs
+  access the role lacks or when a rule has nothing behind it. An administrator
+  applies the role; see `docs/deployer-access.md`.
+  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95),
+  [#87](https://github.com/jaegertracing/jaeger-demo/issues/87))
+
 ## 2026-11-21
 
 ### Added
