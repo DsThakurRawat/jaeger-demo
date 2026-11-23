@@ -406,11 +406,41 @@ class DeploymentTests(unittest.TestCase):
 
     @patch("deploy.resolve_snapshots")
     @patch("deploy.run")
-    def test_clean_is_dispatched_once_per_stack(self, run, resolve):
+    def test_administrator_clean_is_dispatched_once_per_stack(self, run, resolve):
+        # An administrator's shell, not GitHub Actions: GITHUB_ACTIONS is absent.
         env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_STACK="all", JAEGER_DEMO_DEPLOY_MODE="clean")
+        self.assertNotIn("GITHUB_ACTIONS", env)
         self.assertEqual(0, deploy.reconcile(env))
         self.assertEqual(2, run.call_count)
         self.assertTrue(all(call.args[0][-1] == "clean" for call in run.call_args_list))
+
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.run")
+    def test_clean_is_refused_in_github_actions_before_any_command(self, run, resolve):
+        # The workflow identities cannot create or delete namespaces, so a clean run
+        # there would uninstall what they can delete and fail to reinstall.
+        for stack in ("oci", "otel", "all"):
+            with self.subTest(stack=stack):
+                env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTIONS="true",
+                           JAEGER_DEMO_STACK=stack, JAEGER_DEMO_DEPLOY_MODE="clean")
+                with self.assertRaisesRegex(ValueError, "GitHub Actions"):
+                    deploy.reconcile(env)
+        run.assert_not_called()
+        resolve.assert_not_called()
+
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.run")
+    def test_actions_still_run_upgrades_and_only_actions_refuse_clean(self, run, resolve):
+        env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTIONS="true",
+                   JAEGER_DEMO_STACK="oci", JAEGER_DEMO_DEPLOY_MODE="upgrade")
+        run.return_value.stdout = json.dumps({"data": self.desired})
+        self.assertEqual(0, deploy.reconcile(env))
+        # An administrator's shell does not set GITHUB_ACTIONS to true.
+        run.reset_mock()
+        env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_ACTIONS="false",
+                   JAEGER_DEMO_STACK="oci", JAEGER_DEMO_DEPLOY_MODE="clean")
+        self.assertEqual(0, deploy.reconcile(env))
+        self.assertEqual(["clean"], [call.args[0][-1] for call in run.call_args_list])
 
     def test_rejects_invalid_or_automatic_unsafe_routes(self):
         cases = [{"GITHUB_REF": "refs/heads/other"}, {"JAEGER_DEMO_STACK": "invalid"},

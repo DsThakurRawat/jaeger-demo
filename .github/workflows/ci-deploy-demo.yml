@@ -20,14 +20,6 @@ on:
       hotrod_image_tag:
         description: 'HotROD snapshot image tag override. Defaults to image_tag or jaegertracing/jaeger main.'
         required: false
-      deploy_mode:
-        description: 'Deployment mode. Defaults to upgrade; use clean only to reinstall the demo.'
-        required: false
-        default: upgrade
-        type: choice
-        options:
-          - upgrade
-          - clean
       demo_stack:
         description: 'Demo stack to deploy. Defaults to the original OCI demo.'
         required: false
@@ -104,7 +96,9 @@ jobs:
       JAEGER_DEMO_JAEGER_IMAGE_TAG: ${{ github.event.inputs.jaeger_image_tag || github.event.inputs.image_tag }}
       JAEGER_DEMO_HOTROD_IMAGE_TAG: ${{ github.event.inputs.hotrod_image_tag || github.event.inputs.image_tag }}
       JAEGER_DEMO_IMAGE_PULL_POLICY: Always
-      JAEGER_DEMO_DEPLOY_MODE: ${{ github.event.inputs.deploy_mode || 'upgrade' }}
+      # The workflow offers no clean reinstall: its identities cannot create or delete
+      # namespaces, so a clean run would leave the demo down (docs/deployer-access.md).
+      JAEGER_DEMO_DEPLOY_MODE: upgrade
       JAEGER_DEMO_STACK: ${{ github.event.inputs.demo_stack || 'oci' }}
       JAEGER_OTEL_DEMO_DEPLOY_SCOPE: ${{ github.event.inputs.otel_deploy_scope || 'jaeger' }}
       JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ inputs.opensearch_recovery }}

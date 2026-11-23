@@ -30,7 +30,6 @@ The current workflow supports these inputs:
 | `expected_config_sha` | Full reviewed configuration SHA; activates restricted Stage 1 handover guards |
 | `demo_stack` | `oci`, `otel`, or `all` |
 | `otel_deploy_scope` | Component selection; despite its name it also selects OCI `jaeger` or `monitoring` |
-| `deploy_mode` | Use `upgrade` for routine maintenance and handover |
 | `jaeger_image_tag` | Explicit Jaeger snapshot tag |
 | `hotrod_image_tag` | Explicit HotROD snapshot tag |
 | `image_tag` | Shared fallback when an independent tag is omitted |
@@ -309,8 +308,8 @@ To apply such a change under review rather than unattended, pause the schedule
 first, then:
 
 1. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
-   with `deploy_mode=upgrade`. The OTel sample application is `demo_stack=otel`
-   and `otel_deploy_scope=otel-demo`.
+   (the workflow always runs `upgrade`). The OTel sample application is
+   `demo_stack=otel` and `otel_deploy_scope=otel-demo`.
 2. Verify the component as in step 5 of the
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>

@@ -60,9 +60,10 @@ main can explicitly waive this test. The standalone [recovery
 procedure](../../examples/otel-demo/OPENSEARCH_RECOVERY.md) describes the
 storage, access and capacity it uses.
 
-The manual `demo_stack`, `otel_deploy_scope`, image overrides, `deploy_mode`, and
-recovery inputs are preserved. The historical `otel_deploy_scope` input also
-accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope
+The manual `demo_stack`, `otel_deploy_scope`, image overrides and recovery
+inputs are preserved. The `deploy_mode` input is removed: the workflow always
+runs `upgrade`, and `deploy.py` refuses `clean` inside GitHub Actions. The
+historical `otel_deploy_scope` input also accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope
 pairs fail. Direct script callers can select a scope through
 `JAEGER_DEMO_DEPLOY_SCOPE`; the legacy OTel environment variable remains accepted.
 Before the first cluster change, both scripts verify every chart they install
