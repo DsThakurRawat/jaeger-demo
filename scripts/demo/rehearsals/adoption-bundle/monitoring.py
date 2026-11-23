@@ -53,8 +53,8 @@ def exercise(checkout, chart, temp):
     context = {"kubernetesVersion": json.loads(lock)["kubernetesSchema"]["version"], "apiVersions":["v1"]}
     releases = yaml.safe_load((checkout / "helmfile.yaml").read_text())["releases"]
     release, = [r for r in releases if r["namespace"] == "default" and r["name"] == "prometheus"]
-    matrix = json.loads((checkout / "docs/all-five-chart-access.json").read_bytes())
-    # The reviewed matrix lists every templated object of the monitoring release, hooks included.
+    matrix = json.loads((checkout / "ops/rbac/chart-objects.json").read_bytes())
+    # The reviewed object list names every templated object of the monitoring release, hooks included.
     reviewed_objects = sum((r["component"], r["release"]) == ("oci-monitoring", "prometheus") for r in matrix["records"])
     values = yaml.safe_load((checkout / "examples/oci/monitoring-values.yaml").read_bytes())
     values.setdefault("crds", {}).setdefault("upgradeJob", {}).update(enabled=True, forceConflicts=True)

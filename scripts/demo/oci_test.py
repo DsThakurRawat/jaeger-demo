@@ -42,7 +42,6 @@ class OciScopeTests(unittest.TestCase):
             shutil.copy(deploy.ROOT / "scripts/demo/handover.py", root / "scripts/demo")
             shutil.copy(deploy.ROOT / "scripts/demo/chart_archives.py", root / "scripts/demo")
             # The fake Helm writes "chart <file>" and "dependency <file>"; the fixture lock approves exactly those.
-            (root / "ops/executor").mkdir(parents=True)
             (root / chart_archives.LOCK).write_text(json.dumps({
                 "charts": {PROMETHEUS_ARCHIVE: fixture_sha("chart " + PROMETHEUS_ARCHIVE)},
                 "jaegerDependencies": {name: fixture_sha("dependency " + name) for name in DEPENDENCIES},
@@ -395,17 +394,16 @@ elif command == "curl":
         self.assertIn("initialDelaySeconds: 600", liveness)
         self.assertIn("path: /api/health", liveness)
 
-    def test_monitoring_render_stays_inside_the_daily_executor_rules(self):
+    def test_monitoring_render_keeps_its_hooks_secrets_and_hook_role(self):
         values_file = deploy.ROOT / "examples/oci/monitoring-values.yaml"
         objects = [obj for obj in yaml.safe_load_all(self.render_monitoring("--values", str(values_file))) if obj]
         # Some chart objects render "annotations: null".
         hooks = [obj for obj in objects if "helm.sh/hook" in (obj["metadata"].get("annotations") or {})]
-        # The executor reviews exactly twelve hooks, and none of them is a Helm test.
+        # The release keeps its twelve hooks, and none of them is a Helm test.
         self.assertEqual(12, len(hooks))
         self.assertFalse([obj["metadata"]["name"] for obj in hooks
                           if set(obj["metadata"]["annotations"]["helm.sh/hook"].split(",")) & {"test", "test-success"}])
-        # Kubernetes fills in a service-account-token Secret after creation, so its live data
-        # can never equal the render that the executor compares it with.
+        # No long-lived service-account-token Secret: the scrape class uses the projected token.
         self.assertFalse([obj["metadata"]["name"] for obj in objects
                           if obj["kind"] == "Secret" and obj.get("type") == "kubernetes.io/service-account-token"])
         scraped = [obj for obj in objects if obj["kind"] == "ServiceMonitor" and obj["spec"].get("scrapeClass")]

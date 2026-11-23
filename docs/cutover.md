@@ -295,11 +295,11 @@ or runner. Manual runs continue to use `demo-apply`.
    repeats the version and trace checks afterward. Existing synthetic trace
    history can be lost. Any destructive reset needs its own approval.
 2. Review the [deployer access](deployer-access.md) and the
-   [chart inventory](all-five-chart-access.json). Verify that the main-only
+   [chart inventory](../ops/rbac/chart-objects.json). Verify that the main-only
    `demo-scheduled` environment has no reviewer and that an administrator has
    applied `ops/rbac/deployer.yaml` and bound the scheduled identity. Run
-   `deployer_access.py check --identity scheduled` and require
-   `0 difference(s)`. The scheduled identity does not hold the recovery role.
+   `deployer_access.py check --identity scheduled --user <scheduled user OCID>`
+   and require `0 difference(s)`. The scheduled identity does not hold the recovery role.
    Keep the human reviewer on `demo-apply`. Follow
    [Before the first direct run](executor-retirement.md#before-the-first-direct-run)
    in the executor retirement procedure up to enabling the schedule, which is
@@ -373,6 +373,13 @@ enabling that path. Give exactly one repository write access to production at a 
 Do not remove the legacy fingerprint ConfigMap during handover.
 
 ## Later Helmfile adoption
+
+> **Under revision.** This section was written for the plan-and-apply contract.
+> The [migration plan](MIGRATION.md#execution-contract) retires the deployment
+> bundle and the separate read-only plan identity, so the steps below that depend
+> on them do not apply as written. The identity, ownership and no-op requirements
+> still hold. [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) tracks
+> the rewrite.
 
 Helmfile conversion starts only after the script handover succeeds and the parallel
 core HotROD fixture has merged. Before production adoption:

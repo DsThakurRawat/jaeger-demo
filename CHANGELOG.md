@@ -24,6 +24,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- Workspaces and Explore (the new Discover, with PPL) on the public OpenSearch
+  Dashboards. Visitors land in an Observability workspace with the Jaeger span
+  index pattern selected. A sidecar recreates both within a minute because any
+  visitor can delete them. The multiple data source feature stays disabled.
+  ([#89](https://github.com/jaegertracing/jaeger-demo/pull/89),
+  fixes [#88](https://github.com/jaegertracing/jaeger-demo/issues/88))
 - Reviewed Kubernetes roles for the scheduled and manual deployment identities in
   `ops/rbac/deployer.yaml`, covering all six releases, with
   `scripts/demo/deployer_access.py` to print their bindings and to compare an
@@ -71,6 +77,39 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   documents are marked as a retired design.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The chart archive lock moved to `scripts/demo/chart-archives.lock.json` and the
+  chart object inventory to `ops/rbac/chart-objects.json`. The new
+  `scripts/demo/chart_objects.py --check` renders the six pinned releases and fails
+  when a chart renders an object with no record, and `--write` adds the records.
+  It runs in the `Helmfile render and adoption rehearsal` CI job and replaces
+  `access_matrix.py`. The Helm and Kubernetes version test now reads
+  `scripts/demo/helmfile-tools.lock.json`.
+  ([#107](https://github.com/jaegertracing/jaeger-demo/pull/107),
+  fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The `adoption` CI job's release-phases rehearsal now runs native Helmfile with
+  the direct deployment flags and proves a no-op apply, a Secret-only change, an
+  empty-diff failed release under `apply`, the history limit and refusal to install
+  a missing release. The companion-adoption rehearsal's first install is now a
+  plain `helm install` without `--take-ownership`, and neither rehearsal imports
+  `adoption_bundle` or `helmfile_transaction`.
+  ([#108](https://github.com/jaegertracing/jaeger-demo/pull/108),
+  fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
+
+### Fixed
+
+- The access check asks for Helm release records as a kind, not by the names of
+  today's revisions, so a grant that would fail on the next upgrade no longer
+  passes. It also reports why `kubectl` failed and bounds each request.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- A manual OpenSearch upgrade verifies its chart archives before the recovery test
+  creates a snapshot and a restore volume.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `deploy.py` no longer reports a deployed component as failed when the
+  deployment record was created while it ran.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Removed
 
@@ -90,6 +129,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   on changelog entries.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The in-cluster executor from the repository: the preparer and receiver code, the
+  container image build and release workflow, the CI rehearsals and admission and
+  permission generators, and the documents that described them. The deployment no
+  longer uses it. What it installed in the cluster is removed by
+  `docs/executor-retirement.md`, which must be recorded before this merges.
+  ([#107](https://github.com/jaegertracing/jaeger-demo/pull/107),
+  fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Security
 

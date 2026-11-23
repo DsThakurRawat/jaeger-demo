@@ -60,6 +60,7 @@ jobs:
     # leaves a release pending.
     - name: Verify the deployment identity's access
       id: access
+      timeout-minutes: 10
       run: python scripts/demo/deployer_access.py check --self --identity manual
 
     - name: Create and verify OpenSearch recovery point

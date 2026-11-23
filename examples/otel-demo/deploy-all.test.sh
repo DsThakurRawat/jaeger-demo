@@ -589,7 +589,7 @@ testPinnedChartRendersReviewedApplicationShape() {
   assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
   [[ "$render_rc" -eq 0 ]] || return
 
-  # The agent's recorded responses do not fit the daily executor's approval partitions.
+  # The agent's recorded responses render an 828 KB ConfigMap, which the assistant stack leaves out.
   count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(agent|mcp|chatbot)'?\$" || true)
   assertEquals "the assistant stack should stay disabled" 0 "$count"
   assertNotContains "$rendered" "name: agent-fixtures"
@@ -794,6 +794,159 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
   done
   assertNotContains "$rendered" "opensearch.username"
   assertNotContains "$rendered" "opensearch.password"
+  # Explore runs only inside a workspace, and the workspace UI needs the new
+  # navigation. A data source would let any visitor make the pod connect to
+  # in-cluster addresses, so it must stay off.
+  for setting in workspace.enabled explore.enabled '"home:useNewHomePage"'; do
+    printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*${setting//./\\.}: true"
+    assertTrue "Dashboards should render $setting: true" $?
+  done
+  # A visitor's second workspace must not take over the landing page.
+  printf '%s\n' "$rendered" | grep -qxE "[[:space:]]*defaultWorkspace: observability"
+  assertTrue "Dashboards should pin the default workspace" $?
+  assertNotContains "$rendered" "data_source."
+  # The workspace sidecar must not change the Dashboards container itself.
+  assertNotContains "$rendered" "postStart:"
+  assertContains "$rendered" "- name: workspace-bootstrap"
+  assertContains "$rendered" "image: \"docker.io/opensearchproject/opensearch-dashboards:$chart_version\""
+}
+
+# Write a fake curl that answers like Dashboards in $HOOK_SCENARIO and records
+# each call with its time limit, and a fake sleep that counts passes of the
+# sidecar loop and stops it with TERM after $HOOK_PASSES passes.
+make_workspace_sidecar_fakes() {
+  local bin="$SHUNIT_TMPDIR/sidecar-bin"
+  mkdir -p "$bin"
+  cat > "$bin/curl" <<'FAKE'
+#!/bin/bash
+body= method=GET limit=none
+while [ $# -gt 1 ]; do
+  case $1 in
+    -d) body=$2; shift ;;
+    -X) method=$2; shift ;;
+    --max-time) limit=$2; shift ;;
+    -H|-o|-w|--connect-timeout) shift ;;
+  esac
+  shift
+done
+printf '%s %s max=%s\n' "$method" "$1" "$limit" >> "$HOOK_LOG"
+pass=$(cat "$HOOK_LOG.passes" 2>/dev/null || echo 0)
+case $HOOK_SCENARIO in
+  down) exit 7 ;;
+  stall) exit 28 ;;
+esac
+case "$method $1" in
+  "GET http://localhost:5601/api/workspaces/observability")
+    if [ "$HOOK_SCENARIO" = missing ]; then echo '{"success":false,"error":"not found"}'
+    else echo '{"success":true,"result":{"id":"observability"}}'; fi ;;
+  "POST http://localhost:5601/api/workspaces")
+    printf '%s' "$body" > "$HOOK_LOG.workspace"; echo '{"success":true,"result":{"id":"observability"}}' ;;
+  "GET http://localhost:5601/api/index_patterns/_fields_for_wildcard?"*)
+    if [ "$HOOK_SCENARIO" = latespans ] && [ "$pass" -lt 2 ]; then exit 22; fi
+    printf '%s' '{"fields":[{"name":"startTimeMillis","type":"date"},{"name":"q\"uote\\back","type":"string"}]}' ;;
+  "GET http://localhost:5601/w/observability/api/saved_objects/index-pattern/jaeger-spans")
+    [ -e "$HOOK_LOG.spans" ] || exit 22 ;;
+  "POST http://localhost:5601/w/observability/api/saved_objects/index-pattern/jaeger-spans?overwrite=true")
+    printf '%s' "$body" > "$HOOK_LOG.spans" ;;
+  *) exit 22 ;;
+esac
+FAKE
+  cat > "$bin/sleep" <<'FAKE'
+#!/bin/bash
+pass=$(( $(cat "$HOOK_LOG.passes" 2>/dev/null || echo 0) + 1 ))
+echo "$pass" > "$HOOK_LOG.passes"
+echo "sleep $1" >> "$HOOK_LOG"
+# A visitor deletes the index pattern between the second and third passes.
+if [ "$HOOK_SCENARIO" = deleted ] && [ "$pass" = 2 ]; then rm -f "$HOOK_LOG.spans"; fi
+if [ "$pass" -ge "$HOOK_PASSES" ]; then kill -TERM "$PPID"; fi
+FAKE
+  chmod +x "$bin/curl" "$bin/sleep"
+}
+
+workspace_sidecar_script() {
+  python3 -c 'import sys, yaml
+values = yaml.safe_load(open(sys.argv[1]))
+print(yaml.safe_load(values["extraContainers"])[0]["command"][2])' \
+    "$(dirname "$SCRIPT")/opensearch-dashboard-values.yaml"
+}
+
+# Run the sidecar loop for $2 passes in scenario $1. Every request must carry
+# a time limit of at most ten seconds.
+run_workspace_sidecar() {
+  rm -f "$SHUNIT_TMPDIR"/sidecar-log*
+  HOOK_LOG="$SHUNIT_TMPDIR/sidecar-log" HOOK_SCENARIO=$1 HOOK_PASSES=$2 \
+    PATH="$SHUNIT_TMPDIR/sidecar-bin:$PATH" sh -c "$(workspace_sidecar_script)"
+  local status=$?
+  assertEquals "$1: TERM must stop the sidecar cleanly" 0 "$status"
+  assertEquals "$1: every request needs a time limit" "" \
+    "$(grep -E '^(GET|POST) ' "$SHUNIT_TMPDIR/sidecar-log" | grep -vE ' max=([1-9]|10)$')"
+}
+
+count_sidecar_calls() {
+  grep -c -- "$1" "$SHUNIT_TMPDIR/sidecar-log"
+}
+
+testWorkspaceSidecarCreatesMissingWorkspaceAndSpanPattern() {
+  make_workspace_sidecar_fakes
+  output=$(run_workspace_sidecar missing 2)
+  assertEquals "workspace-bootstrap: the Observability workspace and span index pattern exist" "$output"
+  python3 - "$SHUNIT_TMPDIR/sidecar-log.workspace" <<'PY'
+import json, sys
+attributes = json.load(open(sys.argv[1]))["attributes"]
+assert attributes["id"] == "observability", attributes
+assert attributes["features"] == ["use-case-observability"], attributes
+PY
+  assertEquals "workspace body should name the observability use case" 0 $?
+  assertEquals "check again a minute after success" "sleep 60" "$(grep '^sleep' "$SHUNIT_TMPDIR/sidecar-log" | head -1)"
+}
+
+testWorkspaceSidecarRefreshesSpanFieldsOnceThenOnlyChecks() {
+  make_workspace_sidecar_fakes
+  run_workspace_sidecar existing 3 >/dev/null
+  assertEquals "an existing workspace must not be recreated" 0 "$(count_sidecar_calls 'POST http://localhost:5601/api/workspaces ')"
+  assertEquals "overwrite the pattern once per start" 1 "$(count_sidecar_calls 'POST .*index-pattern/jaeger-spans')"
+  # The stored field list must survive JSON string escaping intact.
+  python3 - "$SHUNIT_TMPDIR/sidecar-log.spans" <<'PY'
+import json, sys
+attributes = json.load(open(sys.argv[1]))["attributes"]
+assert attributes["title"] == "jaeger-main-jaeger-span-*", attributes
+assert attributes["timeFieldName"] == "startTimeMillis", attributes
+assert json.loads(attributes["fields"]) == [
+    {"name": "startTimeMillis", "type": "date"},
+    {"name": 'q"uote\\back', "type": "string"},
+], attributes["fields"]
+PY
+  assertEquals "span index pattern should carry the escaped field list" 0 $?
+}
+
+testWorkspaceSidecarRecreatesADeletedSpanPattern() {
+  make_workspace_sidecar_fakes
+  run_workspace_sidecar deleted 3 >/dev/null
+  assertEquals "recreate the pattern after a visitor deletes it" 2 "$(count_sidecar_calls 'POST .*index-pattern/jaeger-spans')"
+  assertTrue "the pattern exists again" "[ -e '$SHUNIT_TMPDIR/sidecar-log.spans' ]"
+}
+
+testWorkspaceSidecarWaitsForTheFirstJaegerSpanIndex() {
+  # On a fresh install Jaeger starts only after Dashboards is ready.
+  make_workspace_sidecar_fakes
+  output=$(run_workspace_sidecar latespans 3)
+  assertEquals "workspace-bootstrap: waiting for Dashboards and a Jaeger span index
+workspace-bootstrap: the Observability workspace and span index pattern exist" "$output"
+  assertEquals "retry every 15 seconds while waiting, then every minute" "sleep 15
+sleep 15
+sleep 60" "$(grep '^sleep' "$SHUNIT_TMPDIR/sidecar-log")"
+  assertTrue "the pattern exists once spans arrive" "[ -e '$SHUNIT_TMPDIR/sidecar-log.spans' ]"
+}
+
+testWorkspaceSidecarKeepsWaitingWhenDashboardsIsDownOrStalls() {
+  make_workspace_sidecar_fakes
+  for scenario in down stall; do
+    output=$(run_workspace_sidecar "$scenario" 4)
+    assertEquals "$scenario: log the state once, not every pass" \
+      "workspace-bootstrap: waiting for Dashboards and a Jaeger span index" "$output"
+    assertEquals "$scenario: keep retrying" 4 "$(count_sidecar_calls '^sleep 15$')"
+    assertFalse "$scenario: no index pattern" "[ -e '$SHUNIT_TMPDIR/sidecar-log.spans' ]"
+  done
 }
 
 testDeploysPinnedOpenSearchChartsInOrder() {

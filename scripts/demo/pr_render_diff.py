@@ -95,7 +95,8 @@ def revision(root):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def render(root, temp, legacy):
+def render(root, temp, legacy, target=TARGET, index=index_objects):
+    """Render the six releases. `target` and `index` let another check reuse this render."""
     temp.mkdir(mode=0o700)
     home = temp / "home"
     home.mkdir(mode=0o700)
@@ -116,13 +117,13 @@ def render(root, temp, legacy):
                           ("open-telemetry", "https://open-telemetry.github.io/opentelemetry-helm-charts")):
             child(root, env, "helm", "repo", "add", name, url)
         for ns, name, chart, flags in legacy_inputs(root):
-            raw = child(root, env, "helm", "template", name, chart, "--namespace", ns, *TARGET, *flags, *stable_values(name))
-            index_objects(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
+            raw = child(root, env, "helm", "template", name, chart, "--namespace", ns, *target, *flags, *stable_values(name))
+            index(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
         for ns, companions in source_values(root)["companions"].items():
             for obj in companions["objects"]:
                 # The script applied each object with --namespace, including the generated ConfigMap.
                 obj["metadata"].setdefault("namespace", ns)
-            index_objects(records, ns, "demo-resources", companions["objects"])
+            index(records, ns, "demo-resources", companions["objects"])
     else:
         child(root, env, "helmfile", "-f", "helmfile.yaml", "repos")
         for state in ("helmfile.yaml", "helmfile-resources.yaml.gotmpl"):
@@ -143,8 +144,8 @@ def render(root, temp, legacy):
                 if not item["enabled"] or not item["installed"]:
                     continue
                 raw = child(root, env, *args, "--skip-deps", "-l", f"namespace={ns},name={name}",
-                            "template", "--skip-needs", *TARGET, *stable_values(name))
-                index_objects(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
+                            "template", "--skip-needs", *target, *stable_values(name))
+                index(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
     return records
 
 

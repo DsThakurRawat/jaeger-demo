@@ -18,8 +18,7 @@ run of the same `deploy` job on main uses `demo-scheduled`, which has no
 reviewer, and runs only while the repository variable `DEMO_SCHEDULE_ENABLED` is
 `true`. Activation follows the
 [handover runbook](../../docs/cutover.md#review-scheduled-scope). A merged change
-takes effect at the next scheduled run; no executor image is published or
-installed for it.
+takes effect at the next scheduled run.
 
 The Kubernetes access both environments' identities need is defined in
 `ops/rbac/deployer.yaml` and explained in
@@ -67,7 +66,7 @@ historical `otel_deploy_scope` input also accepts `monitoring` for an isolated O
 pairs fail. Direct script callers can select a scope through
 `JAEGER_DEMO_DEPLOY_SCOPE`; the legacy OTel environment variable remains accepted.
 Before the first cluster change, both scripts verify every chart they install
-against [`ops/executor/chart-archives.json`](../../ops/executor/chart-archives.json)
+against [`scripts/demo/chart-archives.lock.json`](chart-archives.lock.json)
 with `chart_archives.py`. A chart version without a locked digest, including a
 `PROMETHEUS_STACK_CHART_VERSION` override, fails.
 

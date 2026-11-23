@@ -1,11 +1,11 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Every Helm and Kubernetes version literal must agree with the guarded sources of truth.
+"""Every Helm and Kubernetes version literal must agree with the toolchain lock.
 
-The sources are the literals in scheduled_adapter.py (guarded, read here, never edited). Bumping
-either version in a Renovate PR or by hand fails this test with every straggler named. Rehearsal
-receipts, README records of past runs, the envtest pin and ops/executor/preview/go.* are history
-or unrelated and are deliberately not checked.
+The source of truth is scripts/demo/helmfile-tools.lock.json (read here, never edited by this
+test). Bumping either version in a Renovate PR or by hand fails this test with every straggler
+named. Rehearsal receipts, README records of past runs and the envtest pin are history or
+unrelated and are deliberately not checked.
 """
 
 import json
@@ -19,35 +19,18 @@ import yaml
 
 import deploy
 
-ADAPTER = "scripts/demo/scheduled_adapter.py"
-HELM_SOURCE = re.compile(r'== "(v\d+\.\d+\.\d+)", "Require reviewed Helm')
-KUBE_SOURCE = re.compile(r'server == "(v\d+\.\d+\.\d+)", "Kubernetes version differs')
+LOCK = "scripts/demo/helmfile-tools.lock.json"
+INVENTORY = "ops/rbac/chart-objects.json"
 VER = r"v?\d+\.\d+\.\d+"
 
 # (path, regex with one capture group, "helm" | "kube", minimum number of matches)
 LITERALS = (
     ("scripts/demo/oci_test.py", rf'"--kube-version", "({VER})"', "kube", 1),
-    ("scripts/demo/scheduled_adapter_test.py", rf'"kubernetes": "({VER})"', "kube", 2),
-    ("scripts/demo/scheduled_adapter_test.py", rf'"gitVersion":"({VER})"', "kube", 1),
-    ("scripts/demo/scheduled_adapter_test.py", rf'b"({VER})"', "helm", 1),
-    ("scripts/demo/rehearsals/helm-history/all_five_candidates.py", rf'--kube-version=({VER})"', "kube", 1),
-    ("scripts/demo/rehearsals/helm-history/all_five_candidates.py", rf'"helm": "({VER})"', "helm", 1),
-    ("scripts/demo/rehearsals/helm-history/all_five_candidates.py", rf'== b"({VER})"', "helm", 1),
-    ("scripts/demo/rehearsals/helm-history/six_chart_approvals.py", rf'--kube-version=({VER})"', "kube", 1),
-    ("scripts/demo/rehearsals/helm-history/six_chart_approvals.py", rf'"kubernetes": "({VER})"', "kube", 1),
-    ("scripts/demo/rehearsals/helm-history/rehearse-six-release-history.py", rf'startswith\("({VER})\+"\)', "helm", 1),
-    ("scripts/demo/rehearsals/monitoring-writer/build_fixture.py", rf'"--kube-version",\s*"({VER})"', "kube", 1),
-    ("scripts/demo/rehearsals/monitoring-writer/build_fixture.py", rf'startswith\(\s*"({VER})\+"\s*\)', "helm", 1),
-    ("scripts/demo/rehearsals/monitoring-writer/rehearse.py", rf'startswith\("({VER})\+"\)', "helm", 1),
-    (".github/actions/rehearse-executor/action.yml", rf"kindest/node:({VER})@", "kube", 1),
+    ("scripts/demo/rehearsals/helmfile-applications/equivalence.py", rf'"--kube-version", "({VER})"', "kube", 1),
+    (".github/workflows/ci.yml", rf"kindest/node:({VER})@", "kube", 1),
     ("examples/oci/monitoring-values.yaml", r'depName=registry\.k8s\.io/kubectl\s+tag: "(v\d+\.\d+\.\d+)@sha256', "kube", 1),
-    ("ops/executor/monitoring_hooks.py", rf'== b"({VER})"', "helm", 1),
-    ("ops/executor/monitoring_hooks.py", rf'--kube-version=({VER})"', "kube", 1),
-    ("ops/executor/review_packet.py", rf"Kubernetes ({VER}) from a trusted operator", "kube", 1),
-    ("ops/executor/Containerfile", rf"get\.helm\.sh/helm-({VER})-linux", "helm", 1),
-    ("ops/executor/Containerfile", rf"dl\.k8s\.io/release/({VER})/bin", "kube", 1),
 )
-WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/ci-deploy-demo.yml", ".github/workflows/executor-ci.yml")
+WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/ci-deploy-demo.yml")
 
 
 def bare(version):
@@ -61,12 +44,8 @@ def next_patch(version):
 
 
 def source_versions(root):
-    text = (root / ADAPTER).read_text()
-    found = {"helm": HELM_SOURCE.findall(text), "kube": KUBE_SOURCE.findall(text)}
-    for name, values in found.items():
-        if len(values) != 1:
-            raise AssertionError(f"Expected one {name} version literal in {ADAPTER}, found {len(values)}")
-    return found["helm"][0], found["kube"][0]
+    lock = json.loads((root / LOCK).read_text())
+    return lock["tools"]["helm"]["version"], lock["kubernetesSchema"]["version"]
 
 
 def setup_helm_versions(text):
@@ -93,9 +72,9 @@ def stragglers(root):
             bad.append(f"{path}: expected at least {minimum} {kind} match(es) for {pattern!r}, found {len(found)}")
         for got in found:
             compare(path, kind, got)
-    matrix = json.loads((root / "docs/all-five-chart-access.json").read_text())
-    compare("docs/all-five-chart-access.json (helm)", "helm", str(matrix.get("helm")))
-    compare("docs/all-five-chart-access.json (targetKubernetes)", "kube", str(matrix.get("targetKubernetes")))
+    matrix = json.loads((root / INVENTORY).read_text())
+    compare(f"{INVENTORY} (helm)", "helm", str(matrix.get("helm")))
+    compare(f"{INVENTORY} (targetKubernetes)", "kube", str(matrix.get("targetKubernetes")))
     for path in WORKFLOWS:
         found = setup_helm_versions((root / path).read_text())
         if not found:
@@ -106,16 +85,16 @@ def stragglers(root):
 
 
 class VersionLiteralTests(unittest.TestCase):
-    def test_every_helm_and_kubernetes_literal_matches_the_adapter(self):
+    def test_every_helm_and_kubernetes_literal_matches_the_toolchain_lock(self):
         helm, kube = source_versions(deploy.ROOT)
         bad = stragglers(deploy.ROOT)
-        self.assertEqual(bad, [], f"Helm {helm} and Kubernetes {kube} come from {ADAPTER}; update every straggler together:\n"
+        self.assertEqual(bad, [], f"Helm {helm} and Kubernetes {kube} come from {LOCK}; update every straggler together:\n"
                          + "\n".join(bad))
 
     def test_a_stale_literal_is_reported_with_its_path(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            for path in {ADAPTER, "docs/all-five-chart-access.json", *WORKFLOWS, *(entry[0] for entry in LITERALS)}:
+            for path in {LOCK, INVENTORY, *WORKFLOWS, *(entry[0] for entry in LITERALS)}:
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy(deploy.ROOT / path, root / path)
             self.assertEqual(stragglers(root), [])
@@ -125,14 +104,15 @@ class VersionLiteralTests(unittest.TestCase):
             text = workflow.read_text()
             self.assertIn(f"version: {helm}", text)
             workflow.write_text(text.replace(f"version: {helm}", f"version: {stale_helm}"))
-            hooks = root / "ops/executor/monitoring_hooks.py"
-            text = hooks.read_text()
-            self.assertIn(f"--kube-version={bare(kube)}", text)
-            hooks.write_text(text.replace(f"--kube-version={bare(kube)}", f"--kube-version={bare(stale_kube)}"))
+            fixture = root / LITERALS[0][0]
+            text = fixture.read_text()
+            literal = f'"--kube-version", "{bare(kube)}"'
+            self.assertIn(literal, text)
+            fixture.write_text(text.replace(literal, f'"--kube-version", "{bare(stale_kube)}"'))
             bad = stragglers(root)
             self.assertEqual(len(bad), 2, bad)
             self.assertTrue(any(line.startswith(WORKFLOWS[0]) and stale_helm in line for line in bad))
-            self.assertTrue(any(line.startswith("ops/executor/monitoring_hooks.py") and bare(stale_kube) in line for line in bad))
+            self.assertTrue(any(line.startswith(LITERALS[0][0]) and bare(stale_kube) in line for line in bad))
 
 
 if __name__ == "__main__":
