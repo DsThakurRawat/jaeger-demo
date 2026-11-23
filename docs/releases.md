@@ -18,10 +18,11 @@ The extraction retains the existing shell scripts and Python reconciler.
 Manual deployments use a reviewed GitHub environment. The
 [script schedule](cutover.md#review-scheduled-scope) runs the same `deploy` job
 and reconciler in its own environment, `demo-scheduled`, behind the
-`DEMO_SCHEDULE_ENABLED` switch. The future Helmfile runner, generated immutable
-bundle, read-only `plan` operation and automatic image-compatibility gate are not
-implemented by extraction. Track them in
-[Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
+`DEMO_SCHEDULE_ENABLED` switch. The future Helmfile runner and its automatic
+image-compatibility gate are not implemented by extraction. Track them in
+[Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1). The
+generated bundle and read-only `plan` operation of the earlier design are retired
+([migration plan](MIGRATION.md#execution-contract)).
 
 The current workflow supports these inputs:
 
@@ -262,9 +263,10 @@ it does not authorize routine destructive maintenance.
 
 ## Helmfile acceptance
 
-The Helmfile phase must add the generated immutable bundle, read-only plan RBAC,
-compatibility checks before mutation, failed-release retry with empty diffs,
-pending-state blocking and OCI verification before OTel mutation. Its first
+The Helmfile phase must add `helmfile apply` from the deploy workflow in place of
+the scripts, with compatibility checks before mutation, failed-release retry with
+empty diffs, pending-state blocking and OCI verification before OTel mutation. It
+adds no bundle and no second identity. Its first
 ownership adoption freezes live chart/config/image references. A verified no-op
 apply follows adoption; digest-reference promotion is a separate deployment.
 

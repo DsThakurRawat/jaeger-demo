@@ -82,6 +82,9 @@ def chart_requests(records):
             verbs.add("patch")  # Helm applies a hook by patch when the release uses server-side apply
         if name.startswith("sh.helm.release.v1."):
             verbs.add("list")  # helm status, history and upgrade list the release records
+            # Helm numbers every revision. Access that names today's revisions passes
+            # until the next upgrade and then fails part-way, so ask for the kind.
+            name = ""
         else:
             verbs |= {"list", "watch"}  # helm --wait and kubectl rollout watch the kind
             verbs.add("delete")  # Helm deletes an object when a chart stops rendering it

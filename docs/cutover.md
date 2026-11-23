@@ -374,6 +374,13 @@ Do not remove the legacy fingerprint ConfigMap during handover.
 
 ## Later Helmfile adoption
 
+> **Under revision.** This section was written for the plan-and-apply contract.
+> The [migration plan](MIGRATION.md#execution-contract) retires the deployment
+> bundle and the separate read-only plan identity, so the steps below that depend
+> on them do not apply as written. The identity, ownership and no-op requirements
+> still hold. [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) tracks
+> the rewrite.
+
 Helmfile conversion starts only after the script handover succeeds and the parallel
 core HotROD fixture has merged. Before production adoption:
 
