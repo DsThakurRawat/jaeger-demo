@@ -50,7 +50,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 11 to 16,
   the removal of the executor's admission policies, RBAC, namespace and CRD, and
   lists the leftovers that still need their own approval.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#121](https://github.com/jaegertracing/jaeger-demo/pull/121),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 8 to 10,
   including the first accepted scheduled run, and the monitoring chart 93.6.1
   upgrade, and narrows the remaining gates to removing the executor objects.
