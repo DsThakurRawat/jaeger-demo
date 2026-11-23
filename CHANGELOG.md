@@ -72,7 +72,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Actions, because the deployer role cannot create or delete namespaces and a
   clean run would leave the demo partly removed. An administrator can still run
   `clean` from a shell, as [deployer access](docs/deployer-access.md) describes.
-  fixes [#98](https://github.com/jaegertracing/jaeger-demo/issues/98)
+  ([#104](https://github.com/jaegertracing/jaeger-demo/pull/104),
+  fixes [#98](https://github.com/jaegertracing/jaeger-demo/issues/98))
 - The deployment lock on `default/jaeger-demo-deployment-revisions`. The three
   workflows that change the cluster share one concurrency group instead, and
   `deploy.py` records each component by patching only its own key.
