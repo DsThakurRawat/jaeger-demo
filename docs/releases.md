@@ -5,7 +5,7 @@
 
 For the Helmfile candidate, run `make validate` before submitting a configuration change. It compares the six application releases to the script-era inputs and checks both application and supplemental resources against the target Kubernetes and chart schemas. The dependency check pairs script and Helmfile chart updates during the transition. Production continues to run the extracted workflow until operator acceptance. [Application validation](helmfile-applications.md) · [Adoption rehearsal](helmfile-companions.md)
 
-The [private Helmfile bundle contract](helmfile-bundles.md) describes the offline planner and executor handoff under development.
+The [private Helmfile bundle contract](helmfile-bundles.md) describes the offline planner and executor handoff of the earlier plan-and-apply design. The [migration plan](MIGRATION.md#execution-contract) replaces that contract, and the document is under revision.
 
 A deployment release is a configuration commit plus the chart and tool versions,
 Jaeger and HotROD image references and digests, and verification evidence.
@@ -158,9 +158,9 @@ first manual install creates the ConfigMap.
 A scheduled run selects both Jaeger components and every component whose
 fingerprint differs from its key in the ConfigMap, including a missing key. It
 requires that ConfigMap and the existing releases, and upgrades in place only:
-it installs no release and creates no namespace. Each selected release must have
-Helm status `deployed`. A `failed` non-Jaeger release is repaired in place; a
-failed Jaeger release, and any release in a `pending-*` state, is refused until
+it installs no release and creates no namespace. Both Jaeger releases must have
+Helm status `deployed`. Any other release may be `deployed` or `failed`, and a
+failed one is upgraded in place. A release in a `pending-*` state is refused until
 an operator repairs it. Charts install only from archives whose SHA-256 matches
 `ops/executor/chart-archives.json`, checked before any cluster change. A change
 that adds, removes or renames an object is applied like any other once the

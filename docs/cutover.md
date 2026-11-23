@@ -298,8 +298,8 @@ or runner. Manual runs continue to use `demo-apply`.
    [chart inventory](all-five-chart-access.json). Verify that the main-only
    `demo-scheduled` environment has no reviewer and that an administrator has
    applied `ops/rbac/deployer.yaml` and bound the scheduled identity. Run
-   `deployer_access.py check --identity scheduled` and require
-   `0 difference(s)`. The scheduled identity does not hold the recovery role.
+   `deployer_access.py check --identity scheduled --user <scheduled user OCID>`
+   and require `0 difference(s)`. The scheduled identity does not hold the recovery role.
    Keep the human reviewer on `demo-apply`. Follow
    [Before the first direct run](executor-retirement.md#before-the-first-direct-run)
    in the executor retirement procedure up to enabling the schedule, which is

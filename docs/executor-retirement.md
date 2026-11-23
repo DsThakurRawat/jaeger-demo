@@ -143,6 +143,14 @@ Rollback: delete the new bindings.
 
 ### 7. Upgrade each component manually
 
+Before each run, confirm that every release it touches has Helm status `deployed`
+(`helm status <release> -n <namespace>`). A manual run uninstalls and reinstalls a
+`default/jaeger` release that is in any other state, which replaces its Service
+addresses. It refuses a `default/prometheus` release that is neither `deployed`
+nor `failed`, such as the `pending-upgrade` revision that
+[#87](https://github.com/jaegertracing/jaeger-demo/issues/87) describes. Repair
+such a release as an administrator first.
+
 Dispatch **Deploy Jaeger Demo to OKE** from `main` once per component, in this
 order, and verify each before the next:
 
@@ -186,6 +194,10 @@ gh variable set DEMO_SCHEDULE_ENABLED --repo jaegertracing/jaeger-demo --body tr
 
 Do not leave a manual run waiting for approval across 13:00 UTC: it would hold the
 concurrency group and delay or cancel the scheduled run.
+
+Do not re-run a scheduled run that was created before the direct path merged. A
+re-run uses the workflow file of its own commit, so it would signal the request
+record instead of deploying, and the re-run guard does not exist in that file.
 
 ### 10. Accept the first scheduled run
 
@@ -321,6 +333,8 @@ Then retire, each with its own approval:
   identities afterwards.
 - The published `jaeger-demo-executor` container images, after deciding how long
   to keep them.
+- The `demo-plan` GitHub environment, its OCI secrets and its identity's cluster
+  bindings. No workflow uses that environment.
 
 ## Record
 
