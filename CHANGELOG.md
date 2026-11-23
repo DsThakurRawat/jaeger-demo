@@ -71,7 +71,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   It runs in the `Helmfile render and adoption rehearsal` CI job and replaces
   `access_matrix.py`. The Helm and Kubernetes version test now reads
   `scripts/demo/helmfile-tools.lock.json`.
-  (PR_LINK,
+  ([#107](https://github.com/jaegertracing/jaeger-demo/pull/107),
   fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Removed
@@ -90,7 +90,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   permission generators, and the documents that described them. The deployment no
   longer uses it. What it installed in the cluster is removed by
   `docs/executor-retirement.md`, which must be recorded before this merges.
-  (PR_LINK,
+  ([#107](https://github.com/jaegertracing/jaeger-demo/pull/107),
   fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Security
