@@ -102,6 +102,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- `docs/MIGRATION.md` and `docs/executor-retirement.md` no longer say the executor
+  code removal must wait for the cluster objects to be removed; it merged first, and
+  the removal steps use only `kubectl`.
+  ([#113](https://github.com/jaegertracing/jaeger-demo/pull/113),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - The access check asks for Helm release records as a kind, not by the names of
   today's revisions, so a grant that would fail on the next upgrade no longer
   passes. It also reports why `kubectl` failed and bounds each request.
