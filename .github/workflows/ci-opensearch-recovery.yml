@@ -55,23 +55,23 @@ jobs:
     - name: Verify OCI CLI version
       run: python scripts/demo/verify_oci_cli.py
 
-    - name: Acquire the shared deployment lock
-      id: writer-lock
-      env:
-        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
-      run: python3 scripts/demo/scheduled_request.py manual-acquire
+    # Stop before any change when the credential lacks part of the reviewed role
+    # (docs/deployer-access.md). A partial grant otherwise fails mid-upgrade and
+    # leaves a release pending.
+    - name: Verify the deployment identity's access
+      id: access
+      run: python scripts/demo/deployer_access.py check --self --identity manual
 
     - name: Create and verify OpenSearch recovery point
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: bash examples/otel-demo/opensearch-recovery.sh backup-test
 
-    # Skip unless the lock step succeeded. If the CLI check failed, kubectl would run an
-    # unverified CLI. If the lock was refused, the recovery script never started and
-    # there is nothing to collect. A successful step can report held=false, so this
-    # condition does not prove that the run holds the lock.
+    # Skip unless the access check succeeded. If the CLI check failed, kubectl would
+    # run an unverified CLI. If the access check failed, the recovery script never
+    # started and there is nothing to collect.
     - name: Collect failure diagnostics
-      if: failure() && steps.writer-lock.outcome == 'success'
+      if: failure() && steps.access.outcome == 'success'
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
@@ -84,13 +84,9 @@ jobs:
           -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
 
     - name: Remove disposable restore pod
-      if: always() && steps.writer-lock.outcome == 'success'
+      if: always() && steps.access.outcome == 'success'
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
         kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
           --ignore-not-found=true --wait=false
-
-    - name: Release the shared deployment lock
-      if: success() && steps.writer-lock.outputs.held == 'true'
-      run: python3 scripts/demo/scheduled_request.py manual-release

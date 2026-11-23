@@ -44,6 +44,12 @@ recovery_policy() {
   python3 "$SCRIPT_DIR/../../scripts/demo/recovery_policy.py" "${JAEGER_DEMO_STACK:-}" "$MODE" "$DEPLOY_SCOPE" "$OPENSEARCH_RECOVERY"
 }
 
+# Print the path of a chart archive whose SHA-256 equals the reviewed lock.
+verified_chart() {
+  python3 "$SCRIPT_DIR/../../scripts/demo/chart_archives.py" pull "$1" "$2" "$CHART_ARCHIVE_DIR" ||
+    err "Chart $1 $2 could not be verified against its reviewed archive"
+}
+
 validate_options() {
   case "$MODE" in
     upgrade|clean)
@@ -475,17 +481,16 @@ deploy_opensearch_releases() {
   fi
 
   log "Deploying OpenSearch chart $OPENSEARCH_CHART_VERSION"
-  helm "${HELM_UPGRADE[@]}" opensearch opensearch/opensearch \
+  helm "${HELM_UPGRADE[@]}" opensearch "${OPENSEARCH_CHART_ARCHIVE:?verified OpenSearch chart archive required}" \
     "${OPENSEARCH_NAMESPACE[@]}" \
-    --version "$OPENSEARCH_CHART_VERSION" \
     -f "$SCRIPT_DIR/opensearch-values.yaml" \
     --wait --timeout 10m
   wait_for_statefulset opensearch opensearch-cluster-single "${ROLLOUT_TIMEOUT}s"
 
   log "Deploying OpenSearch Dashboards chart $OPENSEARCH_DASHBOARDS_CHART_VERSION"
-  if ! helm "${HELM_UPGRADE[@]}" opensearch-dashboards opensearch/opensearch-dashboards \
+  if ! helm "${HELM_UPGRADE[@]}" opensearch-dashboards \
+    "${OPENSEARCH_DASHBOARDS_CHART_ARCHIVE:?verified OpenSearch Dashboards chart archive required}" \
     --namespace opensearch \
-    --version "$OPENSEARCH_DASHBOARDS_CHART_VERSION" \
     -f "$SCRIPT_DIR/opensearch-dashboard-values.yaml" \
     --wait --timeout "$OPENSEARCH_DASHBOARDS_HELM_TIMEOUT"; then
     diagnose_opensearch_dashboards_failure
@@ -605,6 +610,25 @@ clone_jaeger_v2() {
   prepare_jaeger_chart "$SCRIPT_DIR/helm-charts"
 }
 
+# Verify every chart the selected scope installs before the first cluster mutation.
+prepare_verified_charts() {
+  if deploy_jaeger_stack; then
+    clone_jaeger_v2
+  else
+    log "Skipping Jaeger Helm chart preparation in '$MODE' mode with deploy scope '$DEPLOY_SCOPE'"
+  fi
+
+  CHART_ARCHIVE_DIR=$(mktemp -d)
+  trap 'rm -rf "$CHART_ARCHIVE_DIR"' EXIT
+  if deploy_opensearch_stack; then
+    OPENSEARCH_CHART_ARCHIVE=$(verified_chart opensearch "$OPENSEARCH_CHART_VERSION") || exit 1
+    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=$(verified_chart opensearch-dashboards "$OPENSEARCH_DASHBOARDS_CHART_VERSION") || exit 1
+  fi
+  if deploy_otel_demo; then
+    OTEL_DEMO_CHART_ARCHIVE=$(verified_chart opentelemetry-demo "$OTEL_DEMO_CHART_VERSION") || exit 1
+  fi
+}
+
 
 
 main() {
@@ -621,20 +645,10 @@ main() {
   check_required_files
   check_cluster
 
+  prepare_verified_charts
 
   if [[ "$MODE" == "clean" ]]; then
     cleanup
-  fi
-
-  log "Adding/updating Helm repos"
-  helm repo add opensearch https://opensearch-project.github.io/helm-charts >/dev/null 2>&1 || true
-  helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null 2>&1 || true
-  helm repo add jaegertracing https://jaegertracing.github.io/helm-charts >/dev/null 2>&1 || true
-  helm repo update >/dev/null
-  if deploy_jaeger_stack; then
-    clone_jaeger_v2
-  else
-    log "Skipping Jaeger Helm chart preparation in '$MODE' mode with deploy scope '$DEPLOY_SCOPE'"
   fi
 
   if deploy_opensearch_stack; then
@@ -700,8 +714,7 @@ main() {
     wait_for_service_endpoints jaeger jaeger-collector 180
 
     log "Deploying OpenTelemetry Demo chart $OTEL_DEMO_CHART_VERSION (with in-cluster Collector)"
-    if ! helm "${HELM_UPGRADE[@]}" otel-demo open-telemetry/opentelemetry-demo \
-      --version "$OTEL_DEMO_CHART_VERSION" \
+    if ! helm "${HELM_UPGRADE[@]}" otel-demo "${OTEL_DEMO_CHART_ARCHIVE:?verified OTel Demo chart archive required}" \
       -f "$SCRIPT_DIR/otel-demo-values.yaml" \
       "${OTEL_DEMO_NAMESPACE[@]}" \
       --wait --timeout 15m; then

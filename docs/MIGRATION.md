@@ -3,7 +3,7 @@
 
 # Hosted-demo migration plan
 
-Updated November 21, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh and chose an in-cluster executor. The GitHub requester signals a named ConfigMap. Separately authenticated Kubernetes workloads prepare the reviewed inputs and execute Helm. The scheduled OCI identity currently has read-only cluster access. The executor is installed and the schedule switch has been on since November 20 at 12:44 UTC. The [first scheduled run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44742195163) on November 20 at configuration `1819e9a` completed, and the protected executor reported a verified bundle. Its operator acceptance (release and fingerprint reconciliation, public health, TLS and storage bindings) is not yet recorded. The [November 21 run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44907484823) failed because no preparation was published for the slot: the preparer could not be scheduled on the executor's node, which was at its pod limit, and ran into its deadline. The requester did not signal. See [current evidence](#current-evidence-and-unresolved-gates). [Executor release and installation](in-cluster-executor.md) · [Permissions and rehearsal](daily-executor-permissions.md) · [Original access inventory](all-five-schedule-access.md)
+Updated November 23, 2026. Both manual production handovers succeeded. Maintainers selected all five components for the daily refresh and first ran it through an in-cluster executor. That executor completed one scheduled run, on November 20, and failed to prepare the next two. The schedule switch has been off since November 23 at 00:15 UTC. [#95](https://github.com/jaegertracing/jaeger-demo/issues/95) replaces the executor with direct deployment: the scheduled run and a manual run are the same workflow job, which runs the deployment scripts with one reviewed [deployer role](deployer-access.md). That path is defined in this repository and is not active in production until the role is applied, the identities are bound and the schedule switch is turned on. The executor objects stay in the cluster until the first direct scheduled run is accepted. See [current evidence](#current-evidence-and-unresolved-gates). [Executor retirement](executor-retirement.md) · [Deployer access](deployer-access.md) · [Releases](releases.md)
 
 ## Ownership and fixed constraints
 
@@ -20,11 +20,15 @@ Core retains product source, image publishing, ordinary examples and integration
 ## Execution contract
 
 - Implementation stages start only after predecessor exits are met. The core HotROD fixture runs in parallel with extraction. Helmfile conversion waits for script handover and the fixture to merge; post-adoption refactors merge before core removal.
-- During script handover, capture and enforce frozen inputs in an operator-verified deployment record; do not imply a generated plan/apply runner exists yet. Helmfile conversion implements the following contract: Plan produces an immutable, digest-addressed deployment bundle: configuration commit merged to main, chart/dependency pins, tool versions/checksums, image commits/resolved digests and exact image references, stack/component/release selection including prerequisites, rendered manifests, relevant live-state fingerprint, and verification/rollback expectations. Apply consumes this exact bundle and rejects changed inputs or relevant live drift; it does not re-resolve main or image tags.
+- A deployment is the reviewed configuration at one commit on main, applied by the deploy workflow from GitHub Actions. This replaces the earlier plan-and-apply contract, in which a plan produced an immutable bundle and a separate apply consumed it ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No generated plan, bundle or in-cluster runner sits between review and apply.
+- The workflow resolves the Jaeger and HotROD snapshot tags at deploy time, installs public charts only from archives that match the committed SHA-256 lock, checks its identity's access before any change, deploys components independently, and records each successful component's fingerprint. A scheduled run upgrades existing releases in place and never installs, creates a namespace or resets storage.
+- The control on what reaches the cluster is code-owner review and merge to main, the main-only GitHub environments, and reviewer approval of each manual run. Scheduled runs have no reviewer. The Kubernetes access of both identities is one committed role; it limits mistakes and is not a boundary against someone who controls an identity ([deployer access](deployer-access.md)).
+- Workflows that change the cluster share one concurrency group, so one runs at a time. There is no lock in the cluster.
+- Helmfile, when adopted, replaces the scripts inside this model. It does not reintroduce a bundle or a second identity.
 - First ownership adoption freezes live chart, values/config and exact image references. Preserve supplemental UIDs/selectors/Service ClusterIPs/pod-template hashes. Do not silently convert existing application image tags to digest syntax during adoption. Verify no-op behavior, then promote digest-pinned candidate images in a distinct reviewed deployment.
 - Merge the extraction preserving both imported authored history and seed-repository history. Do not squash or rebase away imported commits. Verify filtered source ancestors are reachable from main after merge.
 - Existing functional defects block the first script handover and Helmfile adoption, not local implementation. Refresh a healthy baseline immediately before each production transition.
-- Helmfile automatic apply remains disabled until the initial plan is reviewed and manual adoption is verified.
+- Helmfile automatic apply remains disabled until the adoption render is reviewed and manual adoption is verified.
 - Respect required checks and maintainer review; never bypass branch protections.
 - Do not expose plaintext credentials. Review new access/identity changes before creating or broadening permissions.
 
@@ -84,7 +88,7 @@ Exit criteria:
 
 ### 4. Verbatim script handover
 
-Status: the [OCI run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431) reached revision 25 and the [OTel run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094) reached revision 14 at configuration `df261c2`. Both demos produced fresh queryable traces. The scheduled scope includes all five components and uses the existing live OpenSearch volume without snapshot or restore. Manual backup and recovery remain available during Stage 1. The later Helmfile plan retains its agreed retirement of those tools. See the [script schedule](https://github.com/jaegertracing/jaeger-demo/issues/11) for access, rehearsal and first-run verification. The schedule is active and its first run completed on November 20. Acceptance of that run and the November 21 request failure are open; see [current evidence](#current-evidence-and-unresolved-gates).
+Status: the [OCI run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44380168431) reached revision 25 and the [OTel run](https://github.com/jaegertracing/jaeger-demo/actions/runs/44383352094) reached revision 14 at configuration `df261c2`. Both demos produced fresh queryable traces. The scheduled scope includes all five components and uses the existing live OpenSearch volume without snapshot or restore. Manual backup and recovery remain available during Stage 1. The later Helmfile plan retains its agreed retirement of those tools. See the [script schedule](https://github.com/jaegertracing/jaeger-demo/issues/11) for access, rehearsal and first-run verification. The executor-based schedule completed its first run on November 20 and failed on November 21 and 22. It is paused, and the direct path in [#95](https://github.com/jaegertracing/jaeger-demo/issues/95) replaces it; see [current evidence](#current-evidence-and-unresolved-gates). The remaining exit criterion is met by the manual upgrades and the first accepted scheduled run in [executor retirement](executor-retirement.md).
 
 Requires: foundation, extraction.
 
@@ -106,19 +110,19 @@ Exit criteria:
 
 ### 5. Helmfile conversion
 
-Credential-free implementation and rehearsal are in progress.
+Credential-free implementation and rehearsal are in progress. The plan-and-apply bundle this phase was first written around is retired by [#95](https://github.com/jaegertracing/jaeger-demo/issues/95), together with bundle custody ([#71](https://github.com/jaegertracing/jaeger-demo/issues/71), [#72](https://github.com/jaegertracing/jaeger-demo/issues/72), [#73](https://github.com/jaegertracing/jaeger-demo/issues/73)) and the runtime decision in [#69](https://github.com/jaegertracing/jaeger-demo/issues/69).
 
 Issues: [jaeger-demo#1](https://github.com/jaegertracing/jaeger-demo/issues/1).
 
-The candidate configuration renders all six application releases and four namespace-local companion releases. `make validate` compares the application manifests against the extracted scripts and schema-checks both sets. The ownership rehearsal runs on a full Kubernetes node in PR CI. The frozen-bundle tests cover image compatibility, private inputs, drift rejection and stack ordering. The release phase rehearsal covers healthy no-op applies, retry after a failed release, and pending-state blocking. The first scheduled deployment, complete live-equivalence inventory and production adoption are outstanding. [Application releases](helmfile-applications.md) · [Companion rehearsal](helmfile-companions.md)
+The candidate configuration renders all six application releases and four namespace-local companion releases. `make validate` compares the application manifests against the extracted scripts and schema-checks both sets. The ownership rehearsal runs on a full Kubernetes node in PR CI. The release phase rehearsal covers healthy no-op applies, retry after a failed release, and pending-state blocking. The frozen-bundle tooling and tests built for the earlier contract remain in the repository until a separate issue removes or repurposes them. The complete live-equivalence inventory ([#70](https://github.com/jaegertracing/jaeger-demo/issues/70)) and production adoption are outstanding. [Application releases](helmfile-applications.md) · [Companion rehearsal](helmfile-companions.md)
 
-Requires: verbatim-script-handover, core-hotrod-fixture.
+Requires: verbatim-script-handover, core-hotrod-fixture, and an accepted direct scheduled run.
 
 Deliverables:
 
 - Pinned/checksummed toolchain, six labeled application releases and allowlisted namespace-local companion resources
-- Immutable plan/apply bundle, independent image resolution, compatibility validation before any mutation, failed/pending state handling, OCI-before-OTel verification and checks even on empty diffs
-- Complete sanitized equivalence fixture, live drift checks, read-only plan RBAC and kind regression/adoption/rollback tests
+- `helmfile apply` from the deploy workflow in place of the scripts: image resolution at deploy time, chart archive verification, compatibility validation before any mutation, failed/pending state handling, OCI-before-OTel verification and checks even on empty diffs
+- Complete sanitized equivalence fixture, live drift report, deployer role coverage of the Helmfile render, and kind regression/adoption/rollback tests
 - Delete backup/restore tooling and recovery gate; retain volume expansion and explicit constrained manual reset
 - Native Helmfile Renovate, daily checks, seven-day release age, reviewed updates without automerge
 - Architecture, configuration/selectors, access/RBAC, release/promotion/rollback, maintenance/reset/incidents and troubleshooting runbooks
@@ -128,7 +132,7 @@ Exit criteria:
 - [ ] All local/kind/schema/render/equivalence checks pass, including unchanged adoption identities and pod templates
 - [ ] Last release-writer Helm major established; digest support confirmed; preliminary inventory gaps resolved
 - [ ] Runbook commands validated and adoption/rollback rehearsed; reviewed PR merged to main
-- [ ] Automatic apply remains disabled; manual adoption configuration commit and bundle pinned
+- [ ] Automatic apply remains disabled; manual adoption configuration commit pinned
 
 ### 6. Manual helmfile adoption
 
@@ -139,7 +143,7 @@ Requires: helmfile-conversion.
 Deliverables:
 
 - Refresh healthy baseline, complete inventory and relevant live drift report
-- Human verifies immutable bundle, adoption allowlist, exact live references and rollback revisions
+- Human verifies the adoption render at its commit, the adoption allowlist, exact live references and rollback revisions
 - Adopt only allowlisted supplemental resources with keep policy; first companion install without atomic; preserve live application inputs
 - Verify OCI before OTel mutation and all functional/resource invariants; perform a second no-op apply
 
@@ -147,7 +151,7 @@ Exit criteria:
 
 - [ ] Initial manual adoption and no-op apply verified with unchanged supplemental UIDs/selectors/ClusterIPs/pod-template hashes
 - [ ] No unexplained application rollout or resource/storage/route drift
-- [ ] Human verification of successful adoption unlocks guarded automatic Helmfile operations
+- [ ] Human verification of successful adoption unlocks scheduled Helmfile operations
 
 ### 7. Promotion and acceptance
 
@@ -157,8 +161,8 @@ Requires: manual-helmfile-adoption.
 
 Deliverables:
 
-- Enable guarded schedule only after manual adoption verification
-- Promote digest-pinned candidate images separately from ownership adoption, using validated immutable bundles
+- Switch the schedule from the scripts to Helmfile only after manual adoption verification
+- Promote digest-pinned candidate images separately from ownership adoption, each as a reviewed commit
 - Verify one scheduled refresh and one reviewed Renovate chart bump through the new path
 - Observe at least 24 hours; maintain fresh functional evidence for traces, traffic, UI, finite SPM, Grafana, TLS and analytics
 - Record configuration/image/chart/tool provenance, rollback revisions and acceptance evidence; human verifies final acceptance
@@ -212,7 +216,7 @@ Exit criteria:
 ## Release and documentation contract
 
 - A hosted deployment is identified by its configuration commit plus chart/tool pins, independent upstream image commits/digests, exact image references and verification record. Core remains responsible for Jaeger/HotROD image publishing and product releases.
-- Workflow summaries and documented durable records include bundle digest, selected/changed releases, checks and outcomes, prior Helm revisions and rollback inputs. Define retention before operational handover.
+- Workflow summaries and documented durable records include the configuration commit, selected/changed releases, checks and outcomes, prior Helm revisions and rollback inputs. Define retention before operational handover.
 - Docs ship with implementation, tested examples and stage exit evidence. Cover architecture, prerequisites, contributor/agent workflow, configuration, access, releases/promotion, maintenance/reset, rollback and incidents.
 - Reviewed configuration/chart changes and accepted scheduled image refreshes run under standing authorization after the initial gates. A changed access scope, destructive reset or departure from documented invariants requires a concrete decision.
 
@@ -225,4 +229,7 @@ Exit criteria:
 - DCO app and required repository controls are verified. The historical-import exception passed at `e169d72`; the approved temporary review bypass used for #3 was removed. Renovate configuration/discovery CI passes, but the app's repository access is still unverified.
 - Daily schedule, first run: `DEMO_SCHEDULE_ENABLED` was set to `true` on November 20 at 12:44 UTC. [Run 44742195163](https://github.com/jaegertracing/jaeger-demo/actions/runs/44742195163) signalled the 13:00 UTC slot at configuration `1819e9a` and reported "Protected executor verified bundle 406fe1a80c6098002af4fe9ee7f9cd3993f1630205cb24225433c185fd2018e5" at 13:14:57 UTC. The executor image for that commit was [published](https://github.com/jaegertracing/jaeger-demo/actions/runs/44619647169) on November 19. Operator acceptance of this run, which reconciles the six releases and five component fingerprints and verifies fresh traces, public health, TLS and storage bindings ([commissioning and first-run criteria](daily-production-install-review.md)), is not recorded yet.
 - Daily schedule, November 21: [run 44907484823](https://github.com/jaegertracing/jaeger-demo/actions/runs/44907484823) at configuration `ebbb98b` failed at 13:10:41 UTC with "Invalid reviewed execution engine or schedule interval". No preparation had been published for the slot. An operator read the cluster the same day, without changing it: the 12:20 UTC preparer Job started at 12:20:00 and failed at 13:00:00 UTC with `DeadlineExceeded`, its 40-minute limit; the node that runs the executor held 31 running pods against a limit of 31, the newest two created by the November 20 run; and the preparer has a required affinity to that node, because both mount the same single-attach volume. The request record was still the November 20 slot in state `succeeded`, so the requester did not signal, and the checkpoint named no lock holder. The scheduler's events had expired, so the reason the pod stayed unscheduled is inferred from the full node, not read. A refusal over guarded files exits within a minute and would not reach the deadline. Separately, the installed executor image was still the one for `1819e9a`, while merges after it had changed four executor-guarded files (both `deploy-all.sh`, `deploy.py` and `verify_trace.py`), so that preparation would have been refused had it started. The image [published](https://github.com/jaegertracing/jaeger-demo/actions/runs/44849897776) for `a06fb5d` was not installed, and later merges changed further guarded files. The next slot needs a free pod slot on the executor's node and an installed image that matches `main` ([guarded files](releases.md#merging-a-change-to-guarded-files), [a preparation that did not run](releases.md#failure-handling)). [#81](https://github.com/jaegertracing/jaeger-demo/issues/81) tracks the misleading message and the late report.
+- Daily schedule, November 22: [run 45026014303](https://github.com/jaegertracing/jaeger-demo/actions/runs/45026014303) failed with no preparation published for the slot. [#94](https://github.com/jaegertracing/jaeger-demo/issues/94) records the cause read from the cluster: after [#56](https://github.com/jaegertracing/jaeger-demo/pull/56) changed the object inventory, the executor image was reinstalled but its permissions and admission guards were not, so the preparer could not read the new OTel application objects.
+- Schedule paused: `DEMO_SCHEDULE_ENABLED` has been `false` since November 23 at 00:15 UTC. Whether the preparer is suspended and the executor stopped is not recorded here yet; [executor retirement](executor-retirement.md#before-the-first-direct-run) steps 2 to 4 cover them.
+- Direct deployment ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95), Option A): chart archive verification ([#96](https://github.com/jaegertracing/jaeger-demo/pull/96)), the deployer role ([#97](https://github.com/jaegertracing/jaeger-demo/pull/97)) and the workflow change define the path. None of it is production evidence. Open gates, in order: apply the role and bind the manual identity with a clean `check`; one accepted manual upgrade per component, monitoring first ([#87](https://github.com/jaegertracing/jaeger-demo/issues/87)); bind the scheduled identity; enable the schedule; accept the first direct scheduled run; then remove the executor objects from the cluster and the executor code from the repository.
 - Add delivering PR links, merged commits and evidence as phases complete. Do not mark planned work complete.

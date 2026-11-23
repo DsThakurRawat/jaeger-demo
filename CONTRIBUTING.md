@@ -29,8 +29,6 @@ and changes that only restate existing behavior need no entry.
 - Use the Keep a Changelog category (Added, Changed, Fixed, Removed, Security) and
   write one or two sentences about the effect, not the implementation.
 - End with the PR link and `fixes` or `refs` the issue, matching the PR body.
-- Append **Executor image.** when `scripts/demo/guarded_changes.py` lists a changed
-  file, so the required executor release is visible.
 - A merge is not a deployment. Record production evidence in the release record
   and [docs/MIGRATION.md](docs/MIGRATION.md), not in the changelog.
 
@@ -81,15 +79,20 @@ checks for Helmfile adoption are documented below.
 
 Renovate updates the first location of a pin only. Each second location below fails
 a test with the command or files to change, so a bump PR cannot pass CI and fail at
-preparation.
+deployment.
 
 - **Chart versions.** After a chart pin changes in either `deploy-all.sh`, run
   `python3 scripts/utils/update-chart-archives.py` and commit the resulting
   `ops/executor/chart-archives.json`. It downloads each of the four pinned archives,
   requires its SHA-256 to equal the digest in the publisher's `index.yaml`, and
   rewrites the `charts` map only. `--check` changes nothing and exits non-zero with
-  the differences. Executor handling of these files is described in
-  [in-cluster-executor.md](docs/in-cluster-executor.md).
+  the differences; the `Demo tests` CI job runs it. The deploy scripts enforce
+  this lock: `scripts/demo/chart_archives.py` pulls each chart at
+  its pinned version from the publisher and installs it only when the archive's
+  SHA-256 matches, and `scripts/demo/jaeger-chart.sh` checks the Jaeger chart's
+  built dependencies against `jaegerDependencies`. The update script never changes
+  `jaegerDependencies`; maintain those entries by hand when the Jaeger chart
+  commit changes its `Chart.lock`.
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
   the versions in `scripts/demo/scheduled_adapter.py` and lists every other literal
   that disagrees. Change all listed files in one commit.
@@ -120,7 +123,7 @@ bumps already managed by automation.
 ## Production changes
 
 Tests and PRs require no production access. Keep production workflows main-only. Scheduled deployment requires the
-[activation and verification procedure](docs/cutover.md#review-scheduled-scope). Repository
+[activation and verification procedure](docs/cutover.md#review-scheduled-scope). The Kubernetes access both deployment identities hold is defined in [ops/rbac/deployer.yaml](ops/rbac/deployer.yaml); a change to it is an access change that an administrator applies after review ([deployer access](docs/deployer-access.md)). Repository
 protection and DCO/Renovate app coverage must be verified, not inferred from files.
 
 The first access transition, script handover, Helmfile adoption and final

@@ -3,6 +3,8 @@
 
 # Private Helmfile deployment bundles
 
+> **Under revision.** [#95](https://github.com/jaegertracing/jaeger-demo/issues/95) replaces the plan-and-apply contract this document implements, and bundle custody is retired with the in-cluster executor. The Helmfile candidate configuration and its validation remain. See the [migration plan](MIGRATION.md) for the current contract.
+
 The planner freezes one reviewed configuration commit, one component selection
 and its prerequisites. The executor consumes those bytes under the deployment
 lock. An adoption bundle preserves existing image references. A promotion bundle

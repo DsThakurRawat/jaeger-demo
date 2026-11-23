@@ -73,22 +73,23 @@ class WorkflowTests(unittest.TestCase):
                 order = [source.index(step) for step in (
                     '    - name: Checkout demo configuration\n', configure_header,
                     '    - name: Verify OCI CLI version\n      run: python scripts/demo/verify_oci_cli.py\n',
-                    '    - name: Acquire the shared deployment lock\n', script)]
+                    "    - name: Verify the deployment identity's access\n", script)]
                 self.assertEqual(sorted(order), order)
                 self.assertEqual(1, source.count('verify_oci_cli.py'))
 
-    def test_recovery_diagnostics_and_cleanup_need_the_verified_lock_step(self):
+    def test_recovery_diagnostics_and_cleanup_need_the_access_check(self):
         source = (WORKFLOWS / 'ci-opensearch-recovery.yml').read_text()
         for name, trigger in (('Collect failure diagnostics', 'failure()'), ('Remove disposable restore pod', 'always()')):
             step = source.split('    - name: %s\n' % name, 1)[1].split('\n    - name:', 1)[0]
             condition = re.search(r'^      if: (.+)$', step, re.MULTILINE)[1]
-            # A rejected OCI CLI check skips the lock step; kubectl must not run after it.
-            for lock in ('success', 'failure', 'cancelled', 'skipped'):
+            # A rejected OCI CLI check skips the access check; kubectl must not run after it.
+            self.assertNotIn('writer-lock', condition)
+            for access in ('success', 'failure', 'cancelled', 'skipped'):
                 for job_failed in (True, False):
-                    with self.subTest(step=name, lock=lock, job_failed=job_failed):
+                    with self.subTest(step=name, access=access, job_failed=job_failed):
                         expression = condition.replace(trigger, repr(job_failed if trigger == 'failure()' else True))
-                        expression = expression.replace('steps.writer-lock.outcome', repr(lock)).replace('&&', 'and')
-                        expected = lock == 'success' and (job_failed or trigger == 'always()')
+                        expression = expression.replace('steps.access.outcome', repr(access)).replace('&&', 'and')
+                        expected = access == 'success' and (job_failed or trigger == 'always()')
                         self.assertEqual(expected, eval(expression, {'__builtins__': {}}, {}))
 
     def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
@@ -101,41 +102,103 @@ class WorkflowTests(unittest.TestCase):
                 self.assertIn('  group: jaeger-otel-demo-opensearch-recovery\n  cancel-in-progress: false', source)
                 self.assertNotIn('pull_request_target', source)
 
-    def test_daily_activation_and_manual_jobs_use_separate_environments(self):
+    def test_one_job_selects_its_environment_by_event(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
         self.assertEqual(['schedule', 'workflow_dispatch'], re.findall(r'^  ([a-z_]+):', events, re.MULTILINE))
         self.assertIn("  schedule:\n    - cron: '0 13 * * *'\n", events)
-        manual, request = source.split('\n  request-daily:\n', 1)
-        self.assertIn("    environment: demo-apply\n", manual)
-        self.assertIn("    environment: demo-scheduled\n", request)
-        self.assertIn("scheduled_request.py request", request)
-        for dangerous in ("azure/setup-helm", "scripts/demo/deploy.py", "manual-acquire", "demo-apply"):
-            self.assertNotIn(dangerous, request)
-        self.assertIn("Send detailed Slack notification on failure", request)
-        self.assertIn("env: *demo-failure-alert", request)
-        for section in (manual, request):
-            self.assertIn('    concurrency:\n      group: jaeger-otel-demo-opensearch-recovery\n      cancel-in-progress: false', section)
-            condition = ' '.join(section.split('    if: >-\n', 1)[1].split('\n    environment:', 1)[0].split())
-            for event in ('schedule', 'workflow_dispatch', 'push', 'pull_request_target'):
-                for ref in ('refs/heads/main', 'refs/heads/topic', 'refs/tags/main'):
-                    for switch in ('true', 'false', '', 'yes'):
-                        with self.subTest(event=event, ref=ref, switch=switch):
-                            expression = condition.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
-                            expression = expression.replace('vars.DEMO_SCHEDULE_ENABLED', repr(switch))
-                            expression = expression.replace('&&', 'and').replace('||', 'or')
-                            intended = event == 'workflow_dispatch' if section == manual else event == 'schedule' and switch == 'true'
-                            self.assertEqual(ref == 'refs/heads/main' and intended,
-                                             eval(expression, {'__builtins__': {}}, {}))
+        workflow = yaml.safe_load(source)
+        self.assertEqual(['deploy'], list(workflow['jobs']))
+        job = workflow['jobs']['deploy']
+        self.assertEqual({'group': 'jaeger-otel-demo-opensearch-recovery', 'cancel-in-progress': False}, job['concurrency'])
+        environment = re.fullmatch(r'\$\{\{ (.+) \}\}', job['environment'])[1]
+        condition = ' '.join(job['if'].split())
 
-    def test_all_manual_writers_use_the_shared_lock(self):
+        def evaluate(expression, event, ref, switch):
+            expression = expression.replace('github.event_name', repr(event)).replace('github.ref', repr(ref))
+            expression = expression.replace('vars.DEMO_SCHEDULE_ENABLED', repr(switch))
+            return eval(expression.replace('&&', 'and').replace('||', 'or'), {'__builtins__': {}}, {})
+
+        for event in ('schedule', 'workflow_dispatch', 'push', 'pull_request_target', 'workflow_run'):
+            for ref in ('refs/heads/main', 'refs/heads/topic', 'refs/tags/main'):
+                for switch in ('true', 'false', '', 'yes'):
+                    with self.subTest(event=event, ref=ref, switch=switch):
+                        intended = event == 'workflow_dispatch' or event == 'schedule' and switch == 'true'
+                        self.assertEqual(ref == 'refs/heads/main' and intended, evaluate(condition, event, ref, switch))
+                        # Only a scheduled run gets the environment with no reviewer.
+                        self.assertEqual('demo-scheduled' if event == 'schedule' else 'demo-apply',
+                                         evaluate(environment, event, ref, switch))
+        # The access check asks for the role of the identity the environment holds.
+        access = next(step for step in job['steps'] if step.get('id') == 'access')
+        identity = re.fullmatch(r'\$\{\{ (.+) \}\}', access['env']['DEPLOYER_IDENTITY'])[1]
+        for event in ('schedule', 'workflow_dispatch', 'push'):
+            self.assertEqual('scheduled' if event == 'schedule' else 'manual', evaluate(identity, event, '', ''))
+        self.assertEqual('python scripts/demo/deployer_access.py check --self --identity "$DEPLOYER_IDENTITY"', access['run'])
+        # Scheduled runs take no manual input, so the recovery policy stays empty and resolves to preserve-pvc.
+        self.assertEqual('${{ inputs.opensearch_recovery }}', job['env']['JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY'])
+
+    def test_all_writers_share_one_concurrency_group_and_take_no_lock(self):
         for workflow, operation in [('ci-deploy-demo.yml','Reconcile demo components'),
                                    ('ci-opensearch-recovery.yml','Create and verify OpenSearch recovery point'),
                                    ('ci-opensearch-volume-expand.yml','Expand and verify the OpenSearch volume')]:
-            source = (WORKFLOWS / workflow).read_text()
-            self.assertLess(source.index('scheduled_request.py manual-acquire'),source.index('- name: '+operation))
-            self.assertLess(source.index('- name: '+operation),source.index('scheduled_request.py manual-release'))
-            self.assertIn("if: success() && steps.writer-lock.outputs.held == 'true'",source)
+            with self.subTest(workflow=workflow):
+                source = (WORKFLOWS / workflow).read_text()
+                self.assertEqual(1, source.count('group: jaeger-otel-demo-opensearch-recovery\n'))
+                self.assertEqual(1, source.count('cancel-in-progress: false\n'))
+                for retired in ('scheduled_request.py', 'writer-lock', 'JAEGER_DEMO_LOCK_HELD', 'deployment lock'):
+                    self.assertNotIn(retired, source)
+                # The credential's access is checked before the operation that changes the cluster.
+                check = source.index('deployer_access.py check --self --identity ')
+                self.assertLess(source.index('verify_oci_cli.py'), check)
+                self.assertLess(check, source.index('- name: ' + operation))
+        for workflow in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
+            self.assertIn('deployer_access.py check --self --identity manual\n', (WORKFLOWS / workflow).read_text())
+
+    def test_only_the_writer_workflows_use_a_deployment_environment(self):
+        writers = {'ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'}
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            source = path.read_text()
+            with self.subTest(workflow=path.name):
+                self.assertNotIn('pull_request_target', source)
+                jobs = yaml.safe_load(source).get('jobs') or {}
+                environments = [job['environment'] for job in jobs.values() if 'environment' in job]
+                if path.name not in writers:
+                    self.assertEqual([], environments)
+                    self.assertNotIn('OCI_CLI_KEY_CONTENT', source)
+                    self.assertNotIn('OKE_CLUSTER_OCID', source)
+                elif path.name != 'ci-deploy-demo.yml':
+                    self.assertEqual(['demo-apply'], environments)
+
+    def scheduled_rerun(self, event, attempt, remote, status=0):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            git = directory / 'git'
+            git.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$GIT_LOG"\nprintf "%s" "$GIT_OUTPUT"\nexit "$GIT_STATUS"\n')
+            git.chmod(0o755)
+            log = directory / 'git.log'
+            result = subprocess.run(['bash', '-eo', 'pipefail', '-c', step_script('Verify the reviewed configuration revision')],
+                                    env=dict(os.environ, PATH=temp + os.pathsep + os.environ['PATH'], GIT_OUTPUT=remote,
+                                             GIT_STATUS=str(status), GIT_LOG=str(log), EXPECTED_CONFIG_SHA='',
+                                             GITHUB_SHA=CONFIG_SHA, GITHUB_EVENT_NAME=event, GITHUB_RUN_ATTEMPT=attempt,
+                                             GITHUB_REPOSITORY='jaegertracing/jaeger-demo'), text=True, capture_output=True)
+            return result, log.read_text() if log.exists() else ''
+
+    def test_scheduled_rerun_requires_current_main(self):
+        current, moved = CONFIG_SHA + '\trefs/heads/main\n', CORE_SHA + '\trefs/heads/main\n'
+        # A first attempt and every manual run are decided elsewhere and never ask the remote.
+        for event, attempt in (('schedule', '1'), ('workflow_dispatch', '1'), ('workflow_dispatch', '3')):
+            with self.subTest(event=event, attempt=attempt):
+                result, invocation = self.scheduled_rerun(event, attempt, moved)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual('', invocation)
+        result, invocation = self.scheduled_rerun('schedule', '2', current)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ls-remote https://github.com/jaegertracing/jaeger-demo.git refs/heads/main\n', invocation)
+        for remote, status in ((moved, 0), ('', 0), ('', 1), (current * 2, 0)):
+            with self.subTest(remote=remote, status=status):
+                result, _ = self.scheduled_rerun('schedule', '2', remote, status)
+                self.assertNotEqual(0, result.returncode)
+        self.assertIn('must be at the current main commit', self.scheduled_rerun('schedule', '2', moved)[0].stderr)
 
     def test_config_guard_accepts_only_matching_full_sha_or_no_override(self):
         script = step_script('Verify the reviewed configuration revision')
@@ -237,6 +300,23 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(expected is not None, result.returncode == 0, result.stderr)
                 self.assertEqual(expected or '', result.stdout.strip())
 
+    def test_dispatch_cannot_select_a_clean_run(self):
+        # The deployer role cannot create or delete namespaces (docs/deployer-access.md),
+        # so a clean run would leave the demo down. Only an administrator runs it.
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        workflow = yaml.safe_load(source)
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertNotIn('deploy_mode', inputs)
+        for name, spec in inputs.items():
+            with self.subTest(input=name):
+                self.assertNotIn('clean', spec.get('options') or [])
+        env = workflow['jobs']['deploy']['env']
+        self.assertEqual('upgrade', env['JAEGER_DEMO_DEPLOY_MODE'])
+        self.assertNotIn('deploy_mode', source)
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            with self.subTest(workflow=path.name):
+                self.assertNotIn('inputs.deploy_mode', path.read_text())
+
     def test_reviewed_sha_is_shared_with_reconciler_and_child_scripts(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         job = source.split('\n    steps:', 1)[0]
@@ -254,15 +334,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('github.event.pull_request.number || github.sha', concurrency['group'])
         self.assertEqual("${{ github.event_name == 'pull_request' }}", concurrency['cancel-in-progress'])
 
-    def test_ci_flags_guarded_changes_for_pull_requests_without_failing(self):
-        steps = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['tests']['steps']
-        step = next(item for item in steps if 'guarded_changes.py' in item.get('run', ''))
-        self.assertEqual("github.event_name == 'pull_request'", step['if'])
-        self.assertNotIn('continue-on-error', step)
-        self.assertIn('git fetch', step['run'])
-        self.assertIn('::notice::', step['run'])
-        self.assertIn('GITHUB_STEP_SUMMARY', step['run'])
-        self.assertNotIn('exit 1', step['run'])
+    def test_ci_no_longer_flags_guarded_changes(self):
+        # No executor image has to match main once the schedule deploys directly.
+        source = (WORKFLOWS / 'ci.yml').read_text()
+        self.assertNotIn('guarded_changes.py', source)
+        self.assertNotIn('executor image', source)
+
+    def test_demo_tests_job_checks_the_chart_archive_lock_against_the_publishers(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        job, = [job for job in jobs.values() if job.get('name') == 'Demo tests']
+        steps = [step for step in job['steps'] if step.get('run') == 'python3 scripts/utils/update-chart-archives.py --check']
+        self.assertEqual(1, len(steps))
+        self.assertNotIn('if', steps[0])
+        self.assertNotIn('continue-on-error', steps[0])
 
     def test_renovate_job_uses_the_discovery_make_target(self):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['renovate']
@@ -275,13 +359,13 @@ class WorkflowTests(unittest.TestCase):
     def test_unsuccessful_deployments_notify_and_reconcile_stops_inside_the_job_limit(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         header = '    - name: Send detailed Slack notification on failure\n'
-        manual, daily = source.split(header)[1:]
-        # Both jobs end with the notification and the daily job reuses the manual message.
-        self.assertNotIn('\n    - name:', manual.split('\n  request-daily:', 1)[0])
-        self.assertNotIn('\n    - name:', daily)
-        self.assertIn('      env: *demo-failure-alert\n', daily)
-        self.assertIn('*Status:* ${{ job.status }}', manual)
-        for notify in (manual, daily):
+        notify, = source.split(header)[1:]
+        # The one job serves both triggers and ends with the notification.
+        self.assertNotIn('\n    - name:', notify)
+        self.assertNotIn('\n  request-daily:', source)
+        self.assertIn('*Status:* ${{ job.status }}', notify)
+        self.assertIn('*Trigger:* ${{ github.event_name }}', notify)
+        for notify in (notify,):
             condition = re.search(r'^      if: (.+)$', notify, re.MULTILINE)[1]
             for status in ('success', 'failure', 'cancelled'):
                 with self.subTest(status=status):

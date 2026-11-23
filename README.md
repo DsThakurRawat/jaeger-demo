@@ -9,11 +9,11 @@ product releases and integration tests remain in
 [jaegertracing/jaeger](https://github.com/jaegertracing/jaeger).
 
 The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
-the OTel sample application, and OCI monitoring through a
-[protected deployment request](docs/daily-update-request.md) to an
-[in-cluster executor](docs/in-cluster-executor.md). For current migration
-status and handover evidence, see [docs/MIGRATION.md](docs/MIGRATION.md).
-Schedule activation is tracked in the
+the OTel sample application, and OCI monitoring. It runs the same workflow job
+and [deploy.py](scripts/demo/deploy.py) as a manual deployment, without a
+reviewer, and only while the `DEMO_SCHEDULE_ENABLED` repository variable is
+`true`. For current migration status and handover evidence, see
+[docs/MIGRATION.md](docs/MIGRATION.md). Schedule activation is tracked in the
 [handover runbook](docs/cutover.md#review-scheduled-scope).
 
 ## Public endpoints
@@ -131,61 +131,53 @@ select changed components and invoke the stack scripts. The snapshot resolver
 selects Jaeger and HotROD images independently from upstream core commits. This
 repository's commit identifies configuration, never a product image.
 
-Two paths write to the cluster, and both hold the same writer lock. Maintainers
-dispatch the manual path. The daily path is gated: it needs operator installation
-of the preparer and executor, then separate activation approval, before the
-`DEMO_SCHEDULE_ENABLED` switch lets the 13:00 UTC job signal. The
-[executor sequence](docs/in-cluster-executor.md#daily-sequence) shows each step and
-its failure handling.
+One job, `deploy` in
+[ci-deploy-demo.yml](.github/workflows/ci-deploy-demo.yml), serves both triggers
+on `main`. A maintainer's dispatch waits for a `demo-apply` reviewer. The 13:00 UTC
+schedule uses `demo-scheduled`, which has no reviewer, and runs only while the
+`DEMO_SCHEDULE_ENABLED` repository variable is `true`. Before any cluster change
+the job checks that its credential holds the role in
+[ops/rbac/deployer.yaml](ops/rbac/deployer.yaml) ([deployer access](docs/deployer-access.md)),
+and the stack scripts install charts only from archives that match
+[ops/executor/chart-archives.json](ops/executor/chart-archives.json). The deployment,
+OpenSearch recovery and volume-expansion workflows share one concurrency group, so
+one of them runs at a time.
 
 ```mermaid
 flowchart TB
-    subgraph manual["Manual path: ci-deploy-demo.yml, job deploy"]
-        dispatch["workflow_dispatch on main"] --> approve["Environment demo-apply<br/>reviewer approval"]
-        approve --> manual_lock["Acquire the writer lock<br/>once its protocol is installed"]
-        manual_lock --> reconcile["deploy.py runs the stack scripts<br/>for the selected components"]
+    subgraph job["ci-deploy-demo.yml, job deploy, on main"]
+        dispatch["workflow_dispatch"] --> apply_env["Environment demo-apply<br/>reviewer approval"]
+        schedule["schedule, 13:00 UTC<br/>while DEMO_SCHEDULE_ENABLED is true"] --> scheduled_env["Environment demo-scheduled<br/>no reviewer"]
+        apply_env --> access["deployer_access.py check --self<br/>against ops/rbac/deployer.yaml"]
+        scheduled_env --> access
+        access -- "role complete" --> reconcile["deploy.py selects components<br/>and runs the stack scripts"]
+        reconcile --> otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo<br/>(an OpenSearch failure blocks the other two)"]
+        otel -- "then, not gated on OTel" --> oci["OCI: default/jaeger, default/prometheus"]
     end
 
-    subgraph daily["Daily path, 13:00 UTC (gated on installation and activation)"]
-        request["ci-deploy-demo.yml, job request-daily<br/>environment demo-scheduled<br/>runs when DEMO_SCHEDULE_ENABLED is true"]
-        control["ConfigMap<br/>jaeger-demo-operations/daily-hosted-update"]
-        preparer["jaeger-demo-preparer<br/>CronJob, 12:20 UTC"]
-        custody[("Bundle custody")]
-        executor["jaeger-demo-executor<br/>verifies the receipt, claims the writer lock,<br/>then decrypts the bundle"]
-        oci["OCI first: default/prometheus, default/jaeger"]
-        otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo"]
-        outcomes[("Durable outcome records")]
-
-        preparer -- "signed, encrypted dated bundle" --> custody
-        preparer -- "ready request and receipt" --> control
-        request -- "signal" --> control
-        control -- "polled every 10 s" --> executor
-        custody -- "signed receipt, then bundle" --> executor
-        executor -- "selected components" --> oci
-        oci -- "health checks pass" --> otel
-        executor --> outcomes
-        executor -- "terminal state" --> control
-        control -- "observed result" --> request
-    end
-
-    lock[("Writer lock on<br/>default/jaeger-demo-deployment-revisions")]
+    state[("ConfigMap<br/>default/jaeger-demo-deployment-revisions")]
+    writers["ci-opensearch-recovery.yml<br/>ci-opensearch-volume-expand.yml<br/>environment demo-apply"]
+    group{{"Concurrency group<br/>jaeger-otel-demo-opensearch-recovery"}}
     slack["Slack #jaeger-operations"]
     observer["demo-run-observer.yml<br/>runs that ended before any job started"]
-    helmfile["Helmfile candidate, engine helmfile-v1<br/>not in production"]
+    helmfile["Helmfile candidate, helmfile.yaml<br/>not in production"]
 
-    manual_lock -.-> lock
-    executor -.-> lock
-    reconcile -- "failed, cancelled or timed out" --> slack
-    request -- "failed, cancelled or timed out" --> slack
+    reconcile -. "reads fingerprints,<br/>records each success" .-> state
+    job -. "one writer at a time" .- group
+    writers -. "one writer at a time" .- group
+    job -- "failed, cancelled or timed out" --> slack
+    job -. "completed run" .-> observer
     observer --> slack
 
-    style daily stroke-dasharray: 5 5
     style helmfile stroke-dasharray: 5 5
 ```
 
-Dashed outlines mark the gated daily path and the Helmfile candidate. The Helmfile
-candidate is validated locally and in PR CI; production continues to run the
-extracted scripts until operator acceptance ([migration plan](docs/MIGRATION.md)).
+A scheduled run selects both Jaeger components every day, to refresh the snapshot
+images, plus every component whose fingerprint differs from its key in the
+ConfigMap. It upgrades existing releases in place only. A dashed outline marks the
+Helmfile candidate. It is validated locally and in PR CI; production continues to
+run the extracted scripts until operator acceptance
+([migration plan](docs/MIGRATION.md)).
 
 Existing namespaces, release names, routes, Service addresses and PVCs are
 preserved. Certificate issuers and the shared cluster, ingress controller and

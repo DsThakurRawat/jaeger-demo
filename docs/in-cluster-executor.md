@@ -3,6 +3,8 @@
 
 # In-cluster scheduled executor
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 The trusted preparer publishes the day's private, signed bundle. The executor independently authenticates that bundle and claims the same durable writer lock used by manual operations. The GitHub job supplies one signal and observes the result. The manifests, service accounts, keys and cluster permissions require operator installation before activation. [Daily request protocol](daily-update-request.md) · [Receiver entry point](../scripts/demo/scheduled_receiver.py)
 
 ## Daily sequence
@@ -107,7 +109,7 @@ During preparation, the pod reads the exact public `jaeger-demo/main` commit. It
 
 ### Updating a dependency
 
-For a Renovate chart update, use the repository and chart listed in `scheduled_inputs.CHARTS`. Fetch the candidate version from the publisher. Compare the downloaded archive's SHA-256 with the publisher's digest in its Helm repository index. Include the new versioned filename and digest in `ops/executor/chart-archives.json` in the same PR as the version change. A Jaeger chart Git pin change also requires comparing the upstream `Chart.lock` and the checksums of its packaged dependencies. The acquisition code rejects missing, extra and changed archives. Retain the seven-day release-age review and the rendered diff. [Dependency review](releases.md) · [Public input and checksum checks](../scripts/demo/scheduled_inputs.py)
+For a Renovate chart update, use the repository and chart listed in `chart_archives.CHARTS`. Fetch the candidate version from the publisher. Compare the downloaded archive's SHA-256 with the publisher's digest in its Helm repository index. Include the new versioned filename and digest in `ops/executor/chart-archives.json` in the same PR as the version change. A Jaeger chart Git pin change also requires comparing the upstream `Chart.lock` and the checksums of its packaged dependencies. The acquisition code rejects missing, extra and changed archives. Retain the seven-day release-age review and the rendered diff. [Dependency review](releases.md) · [Public input acquisition](../scripts/demo/scheduled_inputs.py) · [Checksum checks](../scripts/demo/chart_archives.py)
 
 For a Helm, kubectl, Python or Go runtime change, update the version, appropriate platform checksums or image index digest, compatibility checks, and release rehearsal together. Validate the actual Linux AMD64 build and kind job on the reviewed commit. Publish a new image by digest, pause new requests, allow an active transaction to finish, then review the replacement deployment digest. Retain the prior image and custody keys until an operator has verified the replacement against a signed slot. Changing the runtime image in production requires installation approval.
 

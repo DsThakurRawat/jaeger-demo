@@ -19,4 +19,6 @@ prepare_jaeger_chart() {
   helm repo add incubator https://charts.helm.sh/incubator
   helm repo update
   helm dependency build "$dest/charts/jaeger"
+  # Install nothing unless the dependency archives equal the reviewed lock.
+  python3 "$(dirname "${BASH_SOURCE[0]}")/chart_archives.py" dependencies "$dest/charts/jaeger/charts"
 }
