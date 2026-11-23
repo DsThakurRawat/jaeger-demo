@@ -53,6 +53,9 @@ def exercise(checkout, chart, temp):
     context = {"kubernetesVersion": json.loads(lock)["kubernetesSchema"]["version"], "apiVersions":["v1"]}
     releases = yaml.safe_load((checkout / "helmfile.yaml").read_text())["releases"]
     release, = [r for r in releases if r["namespace"] == "default" and r["name"] == "prometheus"]
+    matrix = json.loads((checkout / "ops/rbac/chart-objects.json").read_bytes())
+    # The reviewed object list names every templated object of the monitoring release, hooks included.
+    reviewed_objects = sum((r["component"], r["release"]) == ("oci-monitoring", "prometheus") for r in matrix["records"])
     values = yaml.safe_load((checkout / "examples/oci/monitoring-values.yaml").read_bytes())
     values.setdefault("crds", {}).setdefault("upgradeJob", {}).update(enabled=True, forceConflicts=True)
     values.setdefault("grafana", {})["adminPassword"] = "synthetic-rehearsal-password"
@@ -100,7 +103,7 @@ def exercise(checkout, chart, temp):
         expected = files["postrender.yaml"]
         ordinary = [o for o in yaml.load_all(expected, Loader=bundle.ManifestLoader) if o]
         static = len(objects) - len(ordinary)
-        if (static, len(ordinary)) != (10, 129):
+        if (static, len(ordinary)) != (10, reviewed_objects):
             raise AssertionError("Unexpected archived CRDs or transaction resource count")
         protected = render(chart, values, context["kubernetesVersion"], approved=expected)
         if sum(o is not None for o in yaml.load_all(protected, Loader=bundle.ManifestLoader)) != len(objects):
