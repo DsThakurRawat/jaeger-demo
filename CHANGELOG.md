@@ -76,7 +76,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   a missing release. The companion-adoption rehearsal's first install is now a
   plain `helm install` without `--take-ownership`, and neither rehearsal imports
   `adoption_bundle` or `helmfile_transaction`.
-  (fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
+  ([#108](https://github.com/jaegertracing/jaeger-demo/pull/108),
+  fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
 
 ### Removed
 
