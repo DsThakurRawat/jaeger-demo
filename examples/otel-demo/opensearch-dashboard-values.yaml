@@ -22,3 +22,90 @@ config:
     console.enabled: false
     # Index Management can also send requests to the cluster.
     opensearch_index_management.enabled: false
+    # Explore (the new Discover) runs only inside a workspace, and the workspace
+    # UI is built for the new navigation. Setting it as an override also keeps
+    # visitors from switching the navigation back in Advanced Settings.
+    # data_source stays disabled: without an endpoint deny list any visitor could
+    # make this pod connect to in-cluster addresses.
+    workspace.enabled: true
+    explore.enabled: true
+    # Once a visitor creates a second workspace, / goes to the default
+    # workspace, or to the home page when none is set.
+    uiSettings:
+      overrides:
+        "home:useNewHomePage": true
+        defaultWorkspace: observability
+
+# A sidecar keeps the Observability workspace that visitors land in, with an
+# index pattern for the spans Jaeger writes, so Explore can query them at once.
+# With the security plugin disabled every visitor can delete both, and on a
+# fresh install Jaeger writes its first span only after Dashboards is ready, so
+# the sidecar checks every minute instead of once at startup. It never affects
+# the Dashboards container's readiness, and every request has a time limit.
+# Logs go to the workspace-bootstrap container, one line per state change.
+extraContainers: |
+  - name: workspace-bootstrap
+    image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+    imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # The shell runs the trap between commands, so a request in flight
+        # delays shutdown by at most its 10-second limit, well inside the
+        # pod's 30-second grace period.
+        trap 'exit 0' TERM INT
+        base=http://localhost:5601
+        workspace='{"attributes":{"id":"observability","name":"Observability","description":"Search the OpenTelemetry demo spans that Jaeger stores in OpenSearch.","features":["use-case-observability"]},"settings":{}}'
+        pattern=jaeger-main-jaeger-span-*
+        req() { curl -fs --connect-timeout 5 --max-time 10 "$@"; }
+        ensure_workspace() {
+          req "$base/api/workspaces/observability" | grep -q '"success":true' ||
+            req -X POST -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+              -d "$workspace" "$base/api/workspaces" | grep -q '"success":true'
+        }
+        # Explore's histogram needs the field list stored in the index pattern,
+        # which the saved objects API does not compute. The first write after
+        # each start overwrites the pattern to refresh its fields and repair
+        # edits; later passes only recreate a missing pattern. Reading the
+        # fields fails until Jaeger has written a span index.
+        ensure_spans() {
+          if [ "$refreshed" = yes ] && req -o /dev/null "$base/w/observability/api/saved_objects/index-pattern/jaeger-spans"; then
+            return 0
+          fi
+          fields=$(req "$base/api/index_patterns/_fields_for_wildcard?pattern=$pattern&meta_fields=_source&meta_fields=_id&meta_fields=_index&meta_fields=_score") || return 1
+          fields=$(printf '%s' "$fields" | sed -e 's/^{"fields"://' -e 's/}$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+          req -o /dev/null -X POST -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+            -d "{\"attributes\":{\"title\":\"$pattern\",\"timeFieldName\":\"startTimeMillis\",\"fields\":\"$fields\"}}" \
+            "$base/w/observability/api/saved_objects/index-pattern/jaeger-spans?overwrite=true" &&
+            refreshed=yes
+        }
+        refreshed=no
+        state=
+        while :; do
+          if ensure_workspace && ensure_spans; then
+            [ "$state" = ready ] || echo "workspace-bootstrap: the Observability workspace and span index pattern exist"
+            state=ready
+            delay=60
+          else
+            [ "$state" = waiting ] || echo "workspace-bootstrap: waiting for Dashboards and a Jaeger span index"
+            state=waiting
+            delay=15
+          fi
+          sleep "$delay" &
+          wait $!
+        done
