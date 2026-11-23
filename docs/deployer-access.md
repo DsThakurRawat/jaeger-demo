@@ -108,10 +108,23 @@ section explains how a hostile holder gets past them.
   RoleBindings in `default` and `opensearch`, which removes its own access there.
 - No install of a release into a namespace that does not exist.
 
-`deploy_mode=clean` is not safe with these identities. A clean run uninstalls what
-the role can delete, ignores what it cannot, and cannot recreate the namespaces,
-so it leaves the demo partly removed. Do not dispatch it; a clean reinstall is an
-administrator action.
+The workflow does not offer a clean reinstall. A clean run uninstalls what the
+role can delete, ignores what it cannot, and cannot recreate the namespaces, so
+under these identities it would leave the demo partly removed. The workflow has
+no `deploy_mode` input and always runs `upgrade`, and `deploy.py` refuses `clean`
+when `GITHUB_ACTIONS` is `true`. A clean reinstall deletes namespaces and
+PersistentVolumeClaim bindings that the [migration plan](MIGRATION.md) preserves,
+so only an administrator performs it, from a shell, with that administrator's own
+kubeconfig and with explicit maintainer approval. Take the backup first
+([OpenSearch recovery](../examples/otel-demo/OPENSEARCH_RECOVERY.md)), then run
+`./deploy-all.sh clean` in the stack's example directory (`examples/oci` or
+`examples/otel-demo`) from a checkout of the reviewed commit. Pass the image
+tag as the second argument or in `JAEGER_DEMO_IMAGE_TAG`; the repositories default
+to the release images and `JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY` and
+`JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY` override them. Running `scripts/demo/deploy.py` with
+`JAEGER_DEMO_DEPLOY_MODE=clean` also works from a shell, but it first resolves
+snapshot image tags and so needs `MAIN_SHA`, the `jaegertracing/jaeger` commit to
+deploy.
 
 ## Apply and bind
 

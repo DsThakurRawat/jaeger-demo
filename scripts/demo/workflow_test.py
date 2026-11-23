@@ -307,6 +307,23 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(expected is not None, result.returncode == 0, result.stderr)
                 self.assertEqual(expected or '', result.stdout.strip())
 
+    def test_dispatch_cannot_select_a_clean_run(self):
+        # The deployer role cannot create or delete namespaces (docs/deployer-access.md),
+        # so a clean run would leave the demo down. Only an administrator runs it.
+        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
+        workflow = yaml.safe_load(source)
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertNotIn('deploy_mode', inputs)
+        for name, spec in inputs.items():
+            with self.subTest(input=name):
+                self.assertNotIn('clean', spec.get('options') or [])
+        env = workflow['jobs']['deploy']['env']
+        self.assertEqual('upgrade', env['JAEGER_DEMO_DEPLOY_MODE'])
+        self.assertNotIn('deploy_mode', source)
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            with self.subTest(workflow=path.name):
+                self.assertNotIn('inputs.deploy_mode', path.read_text())
+
     def test_reviewed_sha_is_shared_with_reconciler_and_child_scripts(self):
         source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
         job = source.split('\n    steps:', 1)[0]
