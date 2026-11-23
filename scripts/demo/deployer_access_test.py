@@ -86,6 +86,19 @@ class DeployerAccessTests(unittest.TestCase):
         self.assertIn(R("", d.RBAC, "clusterrolebindings", "patch", "cluster-admin"), wrongly_allowed("scheduled", widened))
         self.assertTrue(d.unexplained("scheduled", widened, d.required("scheduled")))
 
+        # Release records limited to the revisions that exist today are not enough: the
+        # next upgrade writes a new one. This is the grant that failed in #87.
+        records = sorted(r["name"] for r in json.loads(d.INVENTORY.read_text())["records"]
+                         if r["scope"] == "default" and r["name"].startswith("sh.helm.release.v1."))
+        self.assertTrue(records)
+        named = copy.deepcopy(ROLES)
+        for rule in named[d.DEPLOYER, "default"]:
+            if rule["resources"] == ["secrets"] and rule["verbs"] == ["update"]:
+                rule["resourceNames"] = records
+        self.assertEqual([R("default", "", "secrets", "update", "")], missing("scheduled", named))
+        for request in d.required("scheduled"):
+            self.assertFalse(request.name.startswith("sh.helm.release.v1."), request)
+
         # A namespaced verb with no reason is found even when nothing lists it as denied.
         added = copy.deepcopy(ROLES)
         added[d.DEPLOYER, "otel-demo"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["patch"]})

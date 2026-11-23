@@ -98,7 +98,7 @@ kubectl -n default get configmap jaeger-demo-deployment-revisions -o jsonpath='{
 | Request state | Action |
 | --- | --- |
 | `succeeded`, `recovered`, `ready` or empty | Continue |
-| `requested` | Wait until the record's `expiresAt` has passed, then read it again |
+| `requested` | Wait until the record's `expiresAt` has passed. An unclaimed request stays `requested` after it expires; nothing rewrites it. Continue once it has expired, step 3 shows no lock holder, and the executor's log shows it did not claim the request |
 | `running` | Stop. An update is in progress or was interrupted. Treat it as an incident and inspect the executor before anything else |
 | `failed` or `verified` | Reconcile it with the reviewed recovery command in [daily deployment requests](daily-update-request.md#concurrency-and-recovery), with approval |
 
@@ -168,8 +168,12 @@ role stops before any change. Verify each component as in the
 These runs also record all five fingerprints, so the first scheduled run selects
 only the two Jaeger components unless something merged since.
 
-Rollback: `helm rollback <release> <revision> -n <namespace>` to the revision in
-the release record.
+Rollback, for every release except OpenSearch: `helm rollback <release> <revision>
+-n <namespace>` to the revision in the release record. Never roll OpenSearch back
+with Helm after its engine version has changed: the older engine would start on
+data the newer one has already upgraded. Use the tested recovery point and the
+[OpenSearch recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md)
+instead.
 
 ### 8. Bind the scheduled identity
 
@@ -220,7 +224,7 @@ executor objects stay in place until this run is accepted.
 ### 11. Export everything to private custody
 
 Keep the exports outside Git; they include Secrets. They are the only rollback for
-steps 12 and 13.
+steps 12 and 13, so save full manifests, not only names.
 
 ```bash
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings -o yaml > admission.yaml
@@ -229,6 +233,17 @@ kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings -o yam
 ```bash
 kubectl get all,configmaps,secrets,serviceaccounts,networkpolicies,persistentvolumeclaims,roles,rolebindings,dailyworkloadapprovals -n jaeger-demo-operations -o yaml > operations.yaml
 ```
+
+```bash
+kubectl get clusterroles,clusterrolebindings -o yaml > cluster-rbac.yaml
+```
+
+```bash
+kubectl get roles,rolebindings -A -o yaml > namespaced-rbac.yaml
+```
+
+Those two files hold every Role and binding in the cluster, so anything step 13
+deletes can be restored from them. This list selects the executor's objects:
 
 ```bash
 kubectl get rolebindings,clusterrolebindings -A -o json | jq -r '.items[] | select(any(.subjects[]?; .namespace == "jaeger-demo-operations")) | "\(.kind) \(.metadata.namespace // "-") \(.metadata.name) \(.roleRef.name)"' > executor-rbac.txt
@@ -291,6 +306,9 @@ ClusterRoleBinding it names. Objects inside `jaeger-demo-operations` go with the
 namespace in the next step. Verify that `executor-rbac.txt`, generated again,
 lists only objects in that namespace, and that `check` for both identities still
 reports no difference.
+
+Rollback: apply the deleted objects again from `cluster-rbac.yaml` and
+`namespaced-rbac.yaml`.
 
 ### 14. Delete the namespace
 

@@ -287,13 +287,42 @@ class DeploymentTests(unittest.TestCase):
     @patch("deploy.run")
     def test_manual_default_recovery_precedes_upgrade_and_fresh_trace(self, run):
         deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        self.assertEqual("backup-test", run.call_args_list[0].args[0][-1])
-        self.assertTrue(run.call_args_list[1].args[0][1].endswith("deploy-all.sh"))
-        self.assertTrue(run.call_args_list[2].args[0][1].endswith("verify_trace.py"))
         pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
+        # Both charts are verified against the lock before the recovery test allocates storage.
+        script = str(deploy.ROOT / "scripts/demo/chart_archives.py")
+        pulls = [call.args[0] for call in run.call_args_list[:2]]
+        self.assertEqual([["python3", script, "pull", "opensearch", pins["OPENSEARCH_CHART_VERSION"]],
+                          ["python3", script, "pull", "opensearch-dashboards", pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]]],
+                         [pull[:-1] for pull in pulls])
+        self.assertEqual(pulls[0][-1], pulls[1][-1])
+        self.assertFalse(Path(pulls[0][-1]).exists(), "the verification directory must be removed")
+        self.assertEqual("backup-test", run.call_args_list[2].args[0][-1])
+        self.assertTrue(run.call_args_list[3].args[0][1].endswith("deploy-all.sh"))
+        self.assertTrue(run.call_args_list[4].args[0][1].endswith("verify_trace.py"))
         self.assertEqual([pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]],
-                         run.call_args_list[2].args[0][2:])
-        self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+                         run.call_args_list[4].args[0][2:])
+        self.assertEqual("opensearch", run.call_args_list[3].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+
+    @patch("deploy.run")
+    def test_a_chart_that_fails_verification_stops_before_the_recovery_test(self, run):
+        def command(args, **kwargs):
+            if "pull" in args:
+                raise subprocess.CalledProcessError(1, args)
+        run.side_effect = command
+        with tempfile.NamedTemporaryFile() as output:
+            env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_OUTPUT=output.name)
+            with self.assertRaises(subprocess.CalledProcessError):
+                deploy.deploy_component("opensearch", env)
+            # Nothing was created, so there is nothing for the workflow to clean up.
+            self.assertEqual("", Path(output.name).read_text())
+        self.assertEqual(1, run.call_count)
+        self.assertFalse(any(call.args[0][-1] == "backup-test" for call in run.call_args_list))
+
+    @patch("deploy.run")
+    def test_only_the_recovery_path_verifies_charts_ahead_of_the_stack_script(self, run):
+        # Everywhere else deploy-all.sh is the first step and verifies before it changes anything.
+        deploy.deploy_component("otel-demo", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
+        self.assertTrue(run.call_args_list[0].args[0][1].endswith("deploy-all.sh"))
 
     @patch("deploy.run")
     def test_verifier_receives_each_chart_pin_in_order(self, run):
@@ -310,16 +339,27 @@ class DeploymentTests(unittest.TestCase):
             (stack / "deploy-all.sh").write_text(script)
             with patch.object(deploy, "ROOT", Path(temp)):
                 deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        verifier = run.call_args_list[2].args[0]
+        # The charts are verified first, each at its own pin, before the recovery test.
+        self.assertEqual([["pull", "opensearch", "9.1.0"], ["pull", "opensearch-dashboards", "9.2.0"]],
+                         [call.args[0][2:5] for call in run.call_args_list[:2]])
+        self.assertEqual("backup-test", run.call_args_list[2].args[0][-1])
+        verifier = run.call_args_list[4].args[0]
         self.assertTrue(verifier[1].endswith("verify_trace.py"))
         self.assertEqual(["9.1.0", "9.2.0"], verifier[2:])
-        self.assertEqual("opensearch", run.call_args_list[1].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+        self.assertEqual("opensearch", run.call_args_list[3].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
-    @patch("deploy.run", side_effect=subprocess.CalledProcessError(1, "recovery"))
+    @patch("deploy.run")
     def test_manual_recovery_failure_prevents_helm_upgrade(self, run):
+        def command(args, **kwargs):
+            if args[-1] == "backup-test":
+                raise subprocess.CalledProcessError(1, "recovery")
+        run.side_effect = command
         with self.assertRaises(subprocess.CalledProcessError):
             deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        self.assertEqual(1, run.call_count)
+        # Two chart verifications, then the recovery test that fails. Nothing runs after it.
+        self.assertEqual(["pull", "pull", "backup-test"],
+                         [call.args[0][2] if "pull" in call.args[0] else call.args[0][-1] for call in run.call_args_list])
+        self.assertFalse(any(str(call.args[0][1]).endswith("deploy-all.sh") for call in run.call_args_list))
 
     @patch("deploy.run")
     def test_explicit_manual_waiver_skips_only_backup(self, run):

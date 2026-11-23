@@ -65,6 +65,22 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
+### Fixed
+
+- The access check asks for Helm release records as a kind, not by the names of
+  today's revisions, so a grant that would fail on the next upgrade no longer
+  passes. It also reports why `kubectl` failed and bounds each request.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- A manual OpenSearch upgrade verifies its chart archives before the recovery test
+  creates a snapshot and a restore volume.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `deploy.py` no longer reports a deployed component as failed when the
+  deployment record was created while it ran.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
 ### Removed
 
 - The `deploy_mode` input of **Deploy Jaeger Demo to OKE**. The workflow always
