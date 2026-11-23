@@ -1,11 +1,12 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
+import contextlib
 import copy
-import gzip
+import io
+from pathlib import Path
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 
 import live_observation as o
 
@@ -32,74 +33,26 @@ class ReadOnlyTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 o.item_path(bad, routes)
 
-    def test_paginated_metadata_rejects_full_secret_list_and_mixed_snapshots(self):
-        def page(rv="39", cont=""):
+    def test_paginated_metadata_rejects_other_lists_and_mixed_snapshots(self):
+        def page(rv="39", cont="", items=None):
             return {"kind": "PartialObjectMetadataList", "apiVersion": "meta.k8s.io/v1",
-                    "items": None, "metadata": {"resourceVersion": rv, "continue": cont}}
-        self.assertEqual(o.ledger(Mock(return_value=page()), "default", "prometheus"), {})
+                    "items": items, "metadata": {"resourceVersion": rv, "continue": cont}}
+        def read(rows):
+            get = Mock(side_effect=rows)
+            items = list(o.pages(get, "/api/v1/namespaces/default/secrets", "owner=helm,name=prometheus",
+                                 o.METADATA, "meta.k8s.io/v1", "PartialObjectMetadataList"))
+            for args in get.call_args_list:
+                self.assertEqual(args.args[1], o.METADATA)
+                self.assertIn("labelSelector=owner%3Dhelm%2Cname%3Dprometheus", args.args[0])
+            return items
+        self.assertEqual(read([page()]), [])
+        self.assertEqual(read([page(cont="a", items=[{"metadata": {"name": "one"}}]),
+                               page(items=[{"metadata": {"name": "two"}}])]),
+                         [{"metadata": {"name": "one"}}, {"metadata": {"name": "two"}}])
         for rows in ([page(cont="a"), page("40")], [page(cont="a"), page(cont="a")],
-                     [dict(page(), kind="SecretList")], [dict(page(), items=[{"metadata": {}, "data": {}}])]):
+                     [dict(page(), kind="SecretList")], [dict(page(), items={"metadata": {}})], [None]):
             with self.subTest(rows=rows), self.assertRaises(ValueError):
-                o.ledger(Mock(side_effect=rows), "default", "prometheus")
-
-    def test_record_compares_payload_identity_and_hashes_stored_hooks(self):
-        release = {"namespace": "default", "name": "prometheus", "version": 9, "info": {"status": "superseded"},
-                   "chart": {"metadata": {"name": "prometheus", "version": "1.0.0"}}, "hooks": [{"manifest": "first"}]}
-        labels = {"owner": "helm", "name": "prometheus", "version": "9", "status": "superseded"}
-        meta = {"namespace": "default", "name": "sh.helm.release.v1.prometheus.v9", "uid": "uid", "resourceVersion": "12", "labels": labels}
-        def read(payload, compress=True):
-            raw = o.canonical(payload)
-            content = gzip.compress(raw) if compress else raw
-            encoded = base64.b64encode(base64.b64encode(content)).decode()
-            get = Mock(return_value={"kind": "Secret", "apiVersion": "v1", "type": "helm.sh/release.v1",
-                                     "metadata": meta, "data": {"release": encoded}})
-            result = o.record(get, "default", "prometheus", 9, ("superseded", "uid", "12"))
-            get.assert_called_once_with("/api/v1/namespaces/default/secrets/sh.helm.release.v1.prometheus.v9")
-            return result
-        initial = read(release)
-        self.assertEqual(initial, read(release, False))
-        self.assertNotEqual(initial["recordSHA256"], read(dict(release, hooks=[{"manifest": "changed"}]))["recordSHA256"])
-        for changed in ({"version": True}, {"info": {"status": "failed"}}, {"name": "other"}, {"namespace": "jaeger"}):
-            with self.assertRaisesRegex(ValueError, "payload"):
-                read(dict(release, **changed))
-
-    def test_observer_checks_each_ui_against_its_successful_helm_record(self):
-        by_namespace = {"default": {"gaID": "approved-oci"}, "jaeger": {"gaID": "approved-otel"}}
-        revisions = {"default": {1: ("deployed", "uid1", "1")},
-                     "jaeger": {2: ("failed", "uid2", "2"), 1: ("superseded", "uid1", "1")}}
-        scope = {"releases": ["default/jaeger", "jaeger/jaeger"], "objects": [], "imageStacks": ["oci", "otel"]}
-        def get(path):
-            if path == "/api/v1/namespaces/kube-system":
-                return {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "kube-system", "uid": "cluster"}}
-            ns, rev = path.split("/")[4], int(path.rsplit(".v", 1)[1])
-            phase, uid, rv = revisions[ns][rev]
-            tracking = by_namespace[ns] if rev == 1 else {"gaID": "failed-candidate"}
-            payload = {"namespace": ns, "name": "jaeger", "version": rev, "info": {"status": phase},
-                       "chart": {"metadata": {"name": "jaeger", "version": "1"}},
-                       "config": {"uiconfig": o.canonical({"tracking": tracking}).decode()}}
-            labels = {"owner": "helm", "name": "jaeger", "version": str(rev), "status": phase}
-            metadata = {"namespace": ns, "name": path.rsplit("/", 1)[1], "labels": labels, "uid": uid, "resourceVersion": rv}
-            return {"kind": "Secret", "apiVersion": "v1", "type": "helm.sh/release.v1", "metadata": metadata,
-                    "data": {"release": base64.b64encode(base64.b64encode(o.canonical(payload))).decode()}}
-        hosted_check = o.hosted_check
-        with (patch.object(o, "ledger", side_effect=lambda get, ns, name: revisions[ns]),
-              patch.object(o, "discover", return_value=({}, {"kubernetesVersion": "v1.36.1"})),
-              patch.object(o, "live_image", return_value={}), patch.object(o, "hosted_check") as check):
-            result, _ = o.observe(scope, get)
-            self.assertTrue(result["healthy"])
-            self.assertEqual(check.call_args_list, [call("oci", tracking=by_namespace["default"]),
-                                                   call("otel", tracking=by_namespace["jaeger"])])
-            self.assertNotIn(b"approved-oci", o.canonical(result))
-            self.assertNotIn(b"approved-otel", o.canonical(result))
-            def wrong_ui(_):
-                return b'Jaeger UI; const JAEGER_CONFIG = {"tracking":{"gaID":"failed-candidate"}};'
-            check.side_effect = lambda stack, **kwargs: hosted_check(stack, wrong_ui, **kwargs)
-            with self.assertRaisesRegex(ValueError, "tracking configuration differs"):
-                o.observe(scope, get)
-            by_namespace["default"] = None
-            with self.assertRaisesRegex(ValueError, "tracking configuration"):
-                o.observe(scope, get)
-            self.assertEqual(check.call_count, 3)
+                read(rows)
 
     def test_runtime_image_requires_ready_replica_and_true_owner_chain(self):
         image = o.REPOS["jaeger"] + ":" + "a" * 40
@@ -137,6 +90,70 @@ class ReadOnlyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Running Pod digest"):
             read()
 
+
+    def test_snapshot_fingerprints_named_objects_and_reads_each_stack_component(self):
+        deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "status": {"replicas": 1},
+                      "metadata": {"name": "jaeger", "namespace": "default", "uid": "u1", "resourceVersion": "5"},
+                      "spec": {"replicas": 1}}
+        routes = {("apps/v1", "Deployment"): ("/apis/apps/v1", "deployments", True)}
+        paths = {"/apis/apps/v1/namespaces/default/deployments/jaeger": deployment}
+        images = {"reference": "r", "sourceCommit": "c", "digest": "d"}
+        with (patch.object(o, "discover", return_value=(routes, {})) as discover,
+              patch.object(o, "live_image", return_value=images) as live_image):
+            result = o.snapshot(paths.get, ["apps/v1:Deployment:default:jaeger", "apps/v1:Deployment:default:gone"], ["otel"])
+            self.assertEqual(result["objects"]["apps/v1:Deployment:default:gone"], None)
+            fingerprint = result["objects"]["apps/v1:Deployment:default:jaeger"]
+            self.assertEqual(fingerprint["uid"], "u1")
+            # Status and transient metadata do not change the fingerprint; the spec does.
+            deployment["status"] = {"replicas": 0}
+            deployment["metadata"]["resourceVersion"] = "6"
+            self.assertEqual(o.snapshot(paths.get, ["apps/v1:Deployment:default:jaeger"], [])["objects"]
+                             ["apps/v1:Deployment:default:jaeger"], fingerprint)
+            deployment["spec"]["replicas"] = 2
+            self.assertNotEqual(o.snapshot(paths.get, ["apps/v1:Deployment:default:jaeger"], [])["objects"]
+                                ["apps/v1:Deployment:default:jaeger"], fingerprint)
+            self.assertEqual(result["images"], {"otel": {"jaeger": images, "hotrod": images}})
+            self.assertEqual(sorted(c.args[2:] for c in live_image.call_args_list[:2]), [("jaeger", "hotrod"), ("jaeger", "jaeger")])
+            discover.reset_mock()
+            self.assertEqual(o.snapshot(paths.get, [], ["oci"])["objects"], {})
+            discover.assert_not_called()
+            for objects, stacks in (([], []), ([], ["other"]), ([], ["oci", "oci"]), (["v1:Namespace:-:a"] * 2, [])):
+                with self.subTest(objects=objects, stacks=stacks), self.assertRaisesRegex(ValueError, "read scope"):
+                    o.snapshot(paths.get, objects, stacks)
+
+    def test_cli_prints_only_the_snapshot_and_hides_failure_details(self):
+        @contextlib.contextmanager
+        def reader(kubeconfig, context):
+            self.assertEqual((kubeconfig, context), ("cfg", "ctx"))
+            yield "get"
+        args = ["--kubeconfig", "cfg", "--context", "ctx", "--stack", "oci"]
+        out = io.StringIO()
+        with (patch.object(o, "reader", reader), patch.object(o, "snapshot", return_value={"images": {}}) as snap,
+              contextlib.redirect_stdout(out)):
+            o.main(args)
+        snap.assert_called_once_with("get", [], ["oci"])
+        self.assertEqual(out.getvalue(), '{"images":{}}\n')
+        err = io.StringIO()
+        with (patch.object(o, "reader", reader), patch.object(o, "snapshot", side_effect=KeyError("private-value")),
+              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as exit):
+            o.main(args)
+        self.assertEqual(exit.exception.code, 1)
+        self.assertNotIn("private-value", err.getvalue())
+        self.assertIn("KeyError", err.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit:
+            o.main(["--kubeconfig", "cfg", "--context", "ctx"])
+        self.assertEqual(exit.exception.code, 2)
+
+    def test_module_is_independent_of_the_bundle_contract(self):
+        source = Path(o.__file__).read_text()
+        self.assertNotIn("adoption_bundle", source)
+        for removed in ("observe", "live_reader", "history", "ledger", "record", "functional_health"):
+            self.assertFalse(hasattr(o, removed), removed)
+        with self.assertRaisesRegex(ValueError, "Duplicate JSON property"):
+            o.read_json(b'{"a":1,"a":2}')
+        with self.assertRaisesRegex(ValueError, "Non-finite"):
+            o.read_json(b'{"a":NaN}')
+        self.assertEqual(o.canonical({"b": 1, "a": [1]}), b'{"a":[1],"b":1}')
 
 if __name__ == "__main__":
     unittest.main()

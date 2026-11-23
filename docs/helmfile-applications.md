@@ -61,6 +61,15 @@ python3 scripts/demo/rehearsals/helmfile-applications/equivalence.py
 
 This credential-free check uses the extracted scripts' chart versions and equivalent Helm arguments as its reference. It renders each release using Helm and Helmfile, compares full Kubernetes objects by identity including CRDs and hooks, checks both application's exact image references and pull policies, and compares the OTel application selection with Helmfile's native transitive rendering. A synthetic Grafana password makes its two offline renders deterministic. Production planning must compare against the current named Grafana Secret and preserve its UID and payload. Live equivalence, supplemental resource adoption, and rollout verification are separate operator checks. [Adoption contract](MIGRATION.md)
 
+## Read live fingerprints and images
+
+```bash
+python3 scripts/demo/live_observation.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  --object apps/v1:Deployment:default:jaeger --stack oci --stack otel
+```
+
+The command makes only `GET` requests, through a local `kubectl proxy` that rejects every other method. For each `--object` identity (`apiVersion:Kind:namespace:name`, with `-` as the namespace of a cluster-scoped object) it resolves the resource through server discovery and prints the object's UID and a SHA-256 of its content without `status` and transient metadata, or `null` when the object is absent. For each `--stack` it prints the Jaeger and HotROD image reference, source commit and registry digest, after checking that the Deployment is fully rolled out and each of its Pods is ready on that registry digest. On any failure it prints nothing on standard output and only the error type on standard error.
+
 ## Public health checks
 
 Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. Calls and latency use the same UTC end time and must have matching sample timestamps. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
