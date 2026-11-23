@@ -118,6 +118,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   listing omits, stops the run before any write.
   ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
   fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+- The OpenTelemetry Demo values now give the reason the assistant stack is
+  disabled as the migration's AI activation constraint, not the retired
+  executor's size limit, and note the endpoint override the agent would need.
+  No rendered object changes.
+  ([#118](https://github.com/jaegertracing/jaeger-demo/pull/118),
+  fixes [#55](https://github.com/jaegertracing/jaeger-demo/issues/55))
 
 ### Fixed
 
