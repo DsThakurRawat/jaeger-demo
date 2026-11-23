@@ -302,7 +302,7 @@ role is applied.
 A chart change that adds, removes or renames an object, or alters a hook or an
 RBAC object, no longer needs a manual upgrade before the schedule accepts it. The
 next scheduled run upgrades the release in place like any other change. Before
-merging, `python3 scripts/demo/access_matrix.py` names the objects a chart adds
+merging, `python3 scripts/demo/chart_objects.py --check` names the objects a chart adds
 and the reviewed records it no longer renders, and the role must cover them.
 
 To apply such a change under review rather than unattended, pause the schedule

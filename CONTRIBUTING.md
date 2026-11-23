@@ -94,8 +94,16 @@ deployment.
   `jaegerDependencies`; maintain those entries by hand when the Jaeger chart
   commit changes its `Chart.lock`.
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
-  the versions in `scripts/demo/scheduled_adapter.py` and lists every other literal
-  that disagrees. Change all listed files in one commit.
+  the versions in `scripts/demo/helmfile-tools.lock.json` and lists every other
+  literal that disagrees. Change all listed files in one commit.
+- **Chart objects.** The deployer role is derived from the object inventory in
+  `ops/rbac/chart-objects.json`. After a chart pin changes, run
+  `python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check`.
+  It renders the six releases without cluster access and lists every object that has
+  no record. `--write` adds the records; review them, then update
+  `ops/rbac/deployer.yaml` until `deployer_access_test.py` passes
+  ([deployer access](docs/deployer-access.md#changing-the-role)). The
+  `Helmfile render and adoption rehearsal` CI job runs the check.
 - **OCI CLI.** `scripts/demo/oci-cli-constraints.txt` records what the deployment
   runner installed, including packages already present, not only new ones (see its
   header). To regenerate it, take the full `pip freeze` output of the runner that

@@ -23,7 +23,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ops/rbac/deployer.yaml"
-INVENTORY = ROOT / "docs/all-five-chart-access.json"
+INVENTORY = ROOT / "ops/rbac/chart-objects.json"
 RBAC = "rbac.authorization.k8s.io"
 SNAPSHOTS = "snapshot.storage.k8s.io"
 RELEASE_NAMESPACES = ("default", "jaeger", "opensearch", "otel-demo")
