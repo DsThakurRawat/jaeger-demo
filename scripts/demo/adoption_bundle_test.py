@@ -163,6 +163,49 @@ class BundleTests(unittest.TestCase):
             b.consume(path, self.cipher, sha, self.checkout, self.commit, self.render, self.fail, apply, self.fail)
         apply.assert_not_called()
 
+    def test_otel_drift_after_oci_verification_blocks_every_otel_write(self):
+        # Moved from release_phases_test when the per-stack drift check moved into consume.
+        ids = ["default/jaeger", "otel-demo/otel-demo"]
+        rows = [{"id": rid, "observe": [f"object-{i}"], "rollback": {"revision": 3}} for i, rid in enumerate(ids)]
+        plan = {"releases": rows, "images": {"oci": {}}}
+        previous = {"cluster": "fixture", "healthy": True, "capabilitiesSHA256": "fixture",
+                    "objects": {"object-0": "before", "object-1": "before"},
+                    "releases": {rid: {"status": "deployed"} for rid in ids},
+                    "rollbackTargets": dict.fromkeys(ids, 3), "images": {"oci": {}}}
+        files = {"plan.json": b.canonical(plan)}
+        for rid in ids:
+            files.update({f"releases/{rid}/{name}": rid.encode() for name in ("chart.tgz", "values.yaml", "rendered.yaml")})
+        def scenario(drift, calls):
+            live = copy.deepcopy(previous)
+            def observe(scope):
+                calls.append(("observe", scope["releases"]))
+                return b.baseline_for(scope, live)
+            def apply(row, method, inputs):
+                calls.append((method, row["id"]))
+                # A successful OCI release may legitimately change its own objects.
+                live["objects"][row["observe"][0]] = "changed"
+            def verify(stack):
+                calls.append(("verify", stack))
+                if drift and stack == "oci":
+                    live["objects"]["object-1"] = "unexpected"
+                return True
+            with (patch.object(b, "verify_source"), patch.object(b, "verify_frozen_source"),
+                  patch.object(b, "unseal", return_value=(copy.deepcopy(plan), copy.deepcopy(previous), dict(files))),
+                  patch.object(b, "transaction_render", return_value=b"post")):
+                receipt = b.consume(Path("bundle"), self.cipher, "a"*64, self.checkout, self.commit,
+                                    self.render, observe, apply, verify)
+            return receipt
+        calls = []
+        receipt = scenario(False, calls)
+        self.assertEqual(calls, [("observe", ids), ("observe", ids[:1]), ("apply", ids[0]), ("verify", "oci"),
+                                 ("observe", ids[1:]), ("apply", ids[1]), ("verify", "otel")])
+        self.assertEqual(receipt, {"releases": dict.fromkeys(ids, "apply"), "verifiedStacks": ["oci", "otel"]})
+        calls = []
+        with self.assertRaisesRegex(ValueError, "otel changed after the initial bundle verification"):
+            scenario(True, calls)
+        self.assertEqual(calls, [("observe", ids), ("observe", ids[:1]), ("apply", ids[0]), ("verify", "oci"),
+                                 ("observe", ids[1:])])
+
     def test_consume_never_raises_a_parser_error_that_quotes_private_values(self):
         path, _ = self.build()
         def corrupt(rows):
