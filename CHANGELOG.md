@@ -117,7 +117,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   disabled as the migration's AI activation constraint, not the retired
   executor's size limit, and note the endpoint override the agent would need.
   No rendered object changes.
-  (fixes [#55](https://github.com/jaegertracing/jaeger-demo/issues/55))
+  ([#118](https://github.com/jaegertracing/jaeger-demo/pull/118),
+  fixes [#55](https://github.com/jaegertracing/jaeger-demo/issues/55))
 
 ### Fixed
 
