@@ -27,7 +27,7 @@ python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
 
 Apply a reviewed plan with `scripts/demo/apply-ownership-patches.sh`, which records each applied patch, and reverse that record with the planner's `--de-adopt` option. The exact commands are in [Apply the ownership patches](cutover.md#apply-the-ownership-patches) and [De-adopt companion releases](cutover.md#de-adopt-companion-releases).
 
-This ownership plan is one input to the reviewed deployment bundle. The production decision also requires full configuration and live-state comparison, including chart inputs, Services, pod templates and rollback state. Keep raw production inventory and release data in private storage.
+Review this ownership plan alongside the adoption render before applying the ownership patches. The production decision also requires full configuration and live-state comparison, including chart inputs, Services, pod templates and rollback state. Keep raw production inventory and release data in private storage.
 
 ## Rehearse in a fresh local cluster
 
