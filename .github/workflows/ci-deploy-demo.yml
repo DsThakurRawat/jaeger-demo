@@ -113,6 +113,7 @@ jobs:
 
     steps:
     - name: Verify the reviewed configuration revision
+      shell: bash
       run: |
         if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
           if [[ ! "$EXPECTED_CONFIG_SHA" =~ ^[0-9a-f]{40}$ || "$EXPECTED_CONFIG_SHA" != "$GITHUB_SHA" ]]; then
@@ -176,6 +177,9 @@ jobs:
     # leaves a release pending.
     - name: Verify the deployment identity's access
       id: access
+      # About nine hundred short requests. The limit keeps a hung API server from
+      # holding the concurrency group.
+      timeout-minutes: 10
       env:
         DEPLOYER_IDENTITY: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
       run: python scripts/demo/deployer_access.py check --self --identity "$DEPLOYER_IDENTITY"

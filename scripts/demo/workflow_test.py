@@ -134,6 +134,9 @@ class WorkflowTests(unittest.TestCase):
         for event in ('schedule', 'workflow_dispatch', 'push'):
             self.assertEqual('scheduled' if event == 'schedule' else 'manual', evaluate(identity, event, '', ''))
         self.assertEqual('python scripts/demo/deployer_access.py check --self --identity "$DEPLOYER_IDENTITY"', access['run'])
+        # The guard runs under the shell the tests use, with pipefail.
+        guard = next(step for step in job['steps'] if step['name'] == 'Verify the reviewed configuration revision')
+        self.assertEqual('bash', guard['shell'])
         # Scheduled runs take no manual input, so the recovery policy stays empty and resolves to preserve-pvc.
         self.assertEqual('${{ inputs.opensearch_recovery }}', job['env']['JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY'])
 
@@ -151,6 +154,10 @@ class WorkflowTests(unittest.TestCase):
                 check = source.index('deployer_access.py check --self --identity ')
                 self.assertLess(source.index('verify_oci_cli.py'), check)
                 self.assertLess(check, source.index('- name: ' + operation))
+                # A hung API server must not hold the group for the whole job limit.
+                jobs = yaml.safe_load(source)['jobs']
+                access, = [step for job in jobs.values() for step in job['steps'] if step.get('id') == 'access']
+                self.assertLessEqual(access['timeout-minutes'], 15)
         for workflow in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
             self.assertIn('deployer_access.py check --self --identity manual\n', (WORKFLOWS / workflow).read_text())
 

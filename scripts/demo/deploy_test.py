@@ -160,6 +160,29 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual({"data": {"oci-monitoring": self.desired["oci-monitoring"]}}, json.loads(writes[1][-1]))
         self.assertEqual(2, len(writes))
 
+    @patch("deploy.resolve_snapshots")
+    @patch("deploy.deploy_component")
+    @patch("deploy.run")
+    def test_a_record_created_meanwhile_is_patched_and_the_component_still_succeeds(self, run, component, snapshots):
+        writes = []
+
+        def command(args, **kwargs):
+            if args[3] == "get":
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            writes.append(args)
+            if args[3] == "create":
+                raise subprocess.CalledProcessError(1, args, stderr="AlreadyExists")
+            return subprocess.CompletedProcess(args, 0, stdout="")
+
+        run.side_effect = command
+        env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_STACK="oci",
+                   JAEGER_OTEL_DEMO_DEPLOY_SCOPE="all")
+        self.assertEqual(0, deploy.reconcile(env))
+        # One failed create, then every component is recorded by a patch of its own key.
+        self.assertEqual(["create", "patch", "patch"], [write[3] for write in writes])
+        self.assertEqual([{"data": {name: self.desired[name]}} for name in ("oci-jaeger", "oci-monitoring")],
+                         [json.loads(write[-1]) for write in writes[1:]])
+
     def test_manual_routing_and_clean(self):
         for name, (stack, scope, _) in deploy.COMPONENTS.items():
             self.assertEqual([name], deploy.selected_components("workflow_dispatch", stack, scope, "upgrade", {}, self.desired))

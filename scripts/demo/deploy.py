@@ -225,13 +225,18 @@ def reconcile(env, root=ROOT):
             deploy_component(name, env)
             # Write one key at a time, so a concurrent or earlier writer's other
             # keys and the object's annotations are never replaced.
+            patch = ["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p",
+                     json.dumps({"data": {name: desired[name]}})]
             if state_exists:
-                patch = json.dumps({"data": {name: desired[name]}})
-                run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
+                run(patch)
             else:
                 # Only a first manual install reaches this; a scheduled run requires the record above.
-                run(["kubectl", "-n", "default", "create", "configmap", STATE,
-                     "--from-literal=" + name + "=" + desired[name]])
+                try:
+                    run(["kubectl", "-n", "default", "create", "configmap", STATE,
+                         "--from-literal=" + name + "=" + desired[name]])
+                except subprocess.CalledProcessError:
+                    # Something created the record since it was read. Patching its key is still correct.
+                    run(patch)
                 state_exists = True
             print(f"{name}: deployed successfully", flush=True)
         except (subprocess.CalledProcessError, ScheduledReleaseError) as error:

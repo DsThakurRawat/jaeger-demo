@@ -258,6 +258,27 @@ class DeployerAccessTests(unittest.TestCase):
             with self.subTest(broken=broken), self.assertRaises(ValueError):
                 d.check("scheduled", SCHEDULED_USER, run=lambda reviews: [broken(r) for r in reviews])
 
+    def test_reviews_go_through_kubectl_with_a_request_timeout_and_report_its_error(self):
+        import subprocess
+        calls = []
+
+        def kubectl(status, stdout="", stderr=""):
+            def run(args, **kwargs):
+                calls.append((args, kwargs))
+                return subprocess.CompletedProcess(args, status, stdout=stdout, stderr=stderr)
+            return run
+
+        reviews = [d.review(None, R("default", "", "pods", "list", ""))]
+        answer = dict(reviews[0], status={"allowed": True})
+        self.assertEqual(d.create(reviews, run=kubectl(0, json.dumps(answer))), [answer])
+        args, kwargs = calls[0]
+        self.assertEqual(["kubectl", "create", "--request-timeout=30s", "-f", "-", "-o", "json"], args)
+        self.assertEqual(json.loads(kwargs["input"]), {"apiVersion": "v1", "kind": "List", "items": reviews})
+        with self.assertRaisesRegex(ValueError, "could not complete the access reviews: error: You must be logged in"):
+            d.create(reviews, run=kubectl(1, stderr="error: You must be logged in to the server (Unauthorized)\n"))
+        with self.assertRaisesRegex(ValueError, "exit status 137"):
+            d.create(reviews, run=kubectl(137))
+
     def test_kubectl_output_is_read_as_separate_documents_or_a_list(self):
         reviews = [{"kind": "SubjectAccessReview", "status": {"allowed": value}} for value in (True, False, True)]
         stream = "".join(json.dumps(item, indent=4) + "\n" for item in reviews)

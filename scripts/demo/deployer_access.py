@@ -259,13 +259,20 @@ def documents(text):
     return items
 
 
+def create(reviews, run=subprocess.run):
+    """Send the reviews through kubectl and return the cluster's answers in order."""
+    # One request per review. The timeout bounds each one, so a hung API cannot hold the job.
+    result = run(["kubectl", "create", "--request-timeout=30s", "-f", "-", "-o", "json"], text=True,
+                 capture_output=True, input=json.dumps({"apiVersion": "v1", "kind": "List", "items": reviews}))
+    if result.returncode != 0:
+        # Say why: an expired credential, an unreachable API and a throttled client look alike otherwise.
+        raise ValueError("kubectl could not complete the access reviews: "
+                         + (result.stderr.strip() or "exit status %d" % result.returncode))
+    return documents(result.stdout)
+
+
 def check(identity, user, run=None, groups=(), only_required=False):
     """Return the requests whose live answer differs from the committed role."""
-    def create(reviews):
-        result = subprocess.run(["kubectl", "create", "-f", "-", "-o", "json"], check=True, text=True,
-                                capture_output=True, input=json.dumps({"apiVersion": "v1", "kind": "List", "items": reviews}))
-        return documents(result.stdout)
-
     expected = [(request, True) for request in required(identity)]
     if not only_required:
         expected += [(request, False) for request in denied(identity)]
