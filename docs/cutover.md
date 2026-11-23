@@ -172,9 +172,9 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    disposition and retain the tested independent recovery route.
 5. Enable the new manual deployment path if GitHub has disabled it. Dispatch only
    the reviewed inputs from main. Transfer the OCI demo first, verify it, then
-   transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger`,
-   `deploy_mode=upgrade`, and each stack's existing Jaeger/HotROD commit tags. The
-   stacks may run different image versions; one `demo_stack=all` invocation shares
+   transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger` and
+   each stack's existing Jaeger/HotROD commit tags. The workflow always runs
+   `upgrade`. The stacks may run different image versions; one `demo_stack=all` invocation shares
    image inputs and cannot preserve those differences. Supply the full configuration SHA in
    `expected_config_sha`; the workflow fails before OKE setup if main has changed.
    Capture the shared fingerprint ConfigMap immediately before each dispatch, with
@@ -190,7 +190,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    : "${oci_hotrod_tag:?Set the existing OCI HotROD commit tag}"
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
-     -f demo_stack=oci -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f demo_stack=oci -f otel_deploy_scope=jaeger \
      -f "jaeger_image_tag=$oci_jaeger_tag" -f "hotrod_image_tag=$oci_hotrod_tag" \
      -f opensearch_recovery=required
    ```
@@ -204,7 +204,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    : "${otel_hotrod_tag:?Set the existing OTel HotROD commit tag}"
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
-     -f demo_stack=otel -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f demo_stack=otel -f otel_deploy_scope=jaeger \
      -f "jaeger_image_tag=$otel_jaeger_tag" -f "hotrod_image_tag=$otel_hotrod_tag" \
      -f opensearch_recovery=required
    ```
