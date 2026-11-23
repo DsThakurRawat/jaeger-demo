@@ -105,7 +105,7 @@ Exit criteria:
 
 - [x] Healthy baseline verified before the first production change and recorded with the reviewed configuration and rollback captures
 - [x] Human-verified handover used merged main and frozen inputs. All three old workflows were disabled and drained. Core’s Actions signing secret was deleted. The shared maintainer OCI key remains active.
-- [ ] Manual deployment and scheduled refresh succeed without unexplained resource, route or storage changes
+- [x] Manual deployment and scheduled refresh succeed without unexplained resource, route or storage changes
 - [x] The manual handover records contain the actual revisions, verification and per-stack rollback inputs
 
 ### 5. Helmfile conversion
