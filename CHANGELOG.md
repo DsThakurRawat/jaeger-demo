@@ -46,7 +46,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
-  (refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+  ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
+  refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 
 ### Changed
 
