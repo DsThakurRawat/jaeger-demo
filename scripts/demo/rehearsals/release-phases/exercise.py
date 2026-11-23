@@ -239,9 +239,9 @@ def exercise(cfg, context):
         ran.clear()
         missing = {"id": namespaces[1] + "/jaeger-phase-missing"}
         try:
-            release_phases.run(rows + [missing], statuses(), reconcile, healthy)
+            release_phases.run(rows + [missing], statuses(rows + [missing]), reconcile, healthy)
         except ValueError as exc:
-            assert "operator review" in str(exc)
+            assert "operator review" in str(exc), str(exc)
         else:
             raise AssertionError("Missing application release accepted")
         assert not ran and revisions() == [2, 1]
