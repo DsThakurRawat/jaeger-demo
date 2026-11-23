@@ -373,5 +373,7 @@ In [docs/MIGRATION.md](MIGRATION.md): the dates of the switch to the direct path
 the approvals, the accepted first run and the removal of the executor objects.
 Production state does not go in the changelog, the README or a diagram.
 
-Merge the change that removes the executor code and documents from the repository
-only after step 16 is recorded.
+The executor code and documents were removed from `main` by
+[#107](https://github.com/jaegertracing/jaeger-demo/pull/107) on November 23,
+before these removal steps ran. The steps use only `kubectl`, and the removed
+design stays readable at `f9b54fe`.
