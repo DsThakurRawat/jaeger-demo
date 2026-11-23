@@ -27,7 +27,6 @@ HOTROD_IMAGE_TAG="${JAEGER_DEMO_HOTROD_IMAGE_TAG:-$IMAGE_TAG}"
 IMAGE_PULL_POLICY="${JAEGER_DEMO_IMAGE_PULL_POLICY:-IfNotPresent}"
 PUBLIC_BASE_URL="${JAEGER_DEMO_PUBLIC_BASE_URL:-https://demo.jaegertracing.io}"
 RUN_PUBLIC_SMOKE_TESTS="${RUN_PUBLIC_SMOKE_TESTS:-false}"
-PROMETHEUS_STACK_CHART="prometheus-community/kube-prometheus-stack"
 # renovate: datasource=helm depName=kube-prometheus-stack registryUrl=https://prometheus-community.github.io/helm-charts
 PROMETHEUS_STACK_CHART_VERSION="${PROMETHEUS_STACK_CHART_VERSION:-82.10.4}"
 CLEAN_UNINSTALL_TIMEOUT="${JAEGER_DEMO_CLEAN_UNINSTALL_TIMEOUT:-10m0s}"
@@ -60,6 +59,8 @@ release_status() {
   awk -F': ' '$1 == "STATUS" { print $2 }' <<< "$output"
 }
 
+# Read-only preflight. A release that needs reinstalling is uninstalled later,
+# after the charts are verified.
 prepare_upgrade_release() {
   local name=$1
   local status
@@ -74,9 +75,27 @@ prepare_upgrade_release() {
       ;;
     *)
       echo "🟡 Helm release $name is in '$status' state. Reinstalling before upgrade."
-      uninstall_release "$name"
+      REINSTALL_RELEASES+=("$name")
       ;;
   esac
+}
+
+# Verify every chart this run installs before the first cluster mutation.
+prepare_verified_charts() {
+  if deploy_jaeger; then
+    # shellcheck source=scripts/demo/jaeger-chart.sh
+    source "$SCRIPT_DIR/../../scripts/demo/jaeger-chart.sh"
+    prepare_jaeger_chart "$SCRIPT_DIR/helm-charts"
+  fi
+  if deploy_monitoring; then
+    CHART_ARCHIVE_DIR=$(mktemp -d)
+    trap 'rm -rf "$CHART_ARCHIVE_DIR"' EXIT
+    if ! PROMETHEUS_STACK_CHART=$(python3 "$SCRIPT_DIR/../../scripts/demo/chart_archives.py" pull \
+      kube-prometheus-stack "$PROMETHEUS_STACK_CHART_VERSION" "$CHART_ARCHIVE_DIR"); then
+      echo "❌ kube-prometheus-stack $PROMETHEUS_STACK_CHART_VERSION could not be verified against its reviewed archive" >&2
+      exit 1
+    fi
+  fi
 }
 
 case "$MODE" in
@@ -100,6 +119,7 @@ case "$MODE" in
     ;;
 esac
 
+REINSTALL_RELEASES=()
 if [[ "$MODE" == "upgrade" ]]; then
   if deploy_jaeger; then
     prepare_upgrade_release jaeger
@@ -125,21 +145,23 @@ if [[ "$MODE" == "upgrade" ]]; then
     HELM_PROM_CMD=(upgrade --wait)
   fi
 else
-  echo "🟣 Clean mode: Uninstalling Jaeger and Prometheus..."
-  uninstall_release jaeger
-  uninstall_release prometheus
   HELM_JAEGER_CMD=(install --wait)
   HELM_PROM_CMD=(install --wait)
 fi
 
+prepare_verified_charts
+
+if [[ "$MODE" != "upgrade" ]]; then
+  echo "🟣 Clean mode: Uninstalling Jaeger and Prometheus..."
+  uninstall_release jaeger
+  uninstall_release prometheus
+fi
+for release in ${REINSTALL_RELEASES[@]+"${REINSTALL_RELEASES[@]}"}; do
+  uninstall_release "$release"
+done
+
 # Navigate to the script's directory (examples/oci)
 cd "$SCRIPT_DIR"
-
-if deploy_jaeger; then
-  # shellcheck source=scripts/demo/jaeger-chart.sh
-  source "$SCRIPT_DIR/../../scripts/demo/jaeger-chart.sh"
-  prepare_jaeger_chart "$SCRIPT_DIR/helm-charts"
-fi
 
 if deploy_jaeger; then
   # Set image repositories and deploy based on mode
@@ -191,12 +213,9 @@ if deploy_jaeger; then
 fi
 
 if deploy_monitoring; then
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-  helm repo update prometheus-community
   echo "🟢 Deploying Prometheus..."
   kubectl apply -f prometheus-svc.yaml
   helm "${HELM_PROM_CMD[@]}" --timeout 20m0s prometheus "$PROMETHEUS_STACK_CHART" \
-    --version "$PROMETHEUS_STACK_CHART_VERSION" \
     --set crds.upgradeJob.enabled=true \
     --set crds.upgradeJob.forceConflicts=true \
     -f monitoring-values.yaml

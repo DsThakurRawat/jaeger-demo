@@ -15,6 +15,7 @@ import urllib.request
 
 import yaml
 
+from chart_archives import CHARTS, LOCK, VERSION, checked_archives, pin
 from deploy import COMPONENTS, ROOT
 
 
@@ -22,18 +23,11 @@ CONFIG = "https://github.com/jaegertracing/jaeger-demo.git"
 CORE = "https://github.com/jaegertracing/jaeger.git"
 JAEGER_CHART = "https://github.com/jaegertracing/helm-charts.git"
 SHA = re.compile(r"[a-f0-9]{40}")
-VERSION = r"[0-9]+\.[0-9]+\.[0-9]+"
-CHARTS = (
-    ("opensearch/opensearch", "OPENSEARCH_CHART_VERSION", "opensearch", "https://opensearch-project.github.io/helm-charts"),
-    ("opensearch/opensearch-dashboards", "OPENSEARCH_DASHBOARDS_CHART_VERSION", "opensearch-dashboards", "https://opensearch-project.github.io/helm-charts"),
-    ("otel-demo/otel-demo", "OTEL_DEMO_CHART_VERSION", "opentelemetry-demo", "https://open-telemetry.github.io/opentelemetry-helm-charts"),
-    ("default/prometheus", "PROMETHEUS_STACK_CHART_VERSION", "kube-prometheus-stack", "https://prometheus-community.github.io/helm-charts"),
-)
 DEPS = {"bitnami": "https://charts.bitnami.com/bitnami", "incubator": "https://charts.helm.sh/incubator"}
 RESOLVER = "scripts/utils/resolve-demo-snapshot-tags.sh"
 GUARDED = (
     "examples/oci/deploy-all.sh", "examples/otel-demo/deploy-all.sh", RESOLVER,
-    "scripts/demo/jaeger-chart.sh", "scripts/demo/deploy.py", "scripts/demo/handover.py",
+    "scripts/demo/jaeger-chart.sh", "scripts/demo/chart_archives.py", "scripts/demo/deploy.py", "scripts/demo/handover.py",
     "scripts/demo/recovery_policy.py", "scripts/demo/scheduled_adapter.py", "scripts/demo/scheduled_bundle.py",
     "scripts/demo/scheduled_approvals.py", "scripts/demo/scheduled_approval_types.py",
     "scripts/demo/scheduled_inputs.py", "scripts/demo/scheduled_receiver.py", "scripts/demo/scheduled_request.py",
@@ -43,7 +37,6 @@ GUARDED = (
     "ops/executor/preview/go.mod", "ops/executor/preview/go.sum", "ops/executor/preview/main.go",
     "ops/executor/preview/check-abi.py", "ops/executor/requirements.lock", "docs/all-five-chart-access.json",
 )
-LOCK = "ops/executor/chart-archives.json"
 
 
 def require(ok, message):
@@ -121,28 +114,6 @@ def verify_runtime(root):
     for name in GUARDED:
         if compatible_script(name, (ROOT / name).read_text()) != compatible_script(name, (root / name).read_text()):
             raise ValueError(f"Reviewed configuration changed {name}; release the matching executor image")
-
-
-def pin(root, variable):
-    base = "examples/oci" if variable == "PROMETHEUS_STACK_CHART_VERSION" else "examples/otel-demo"
-    text = (root / base / "deploy-all.sh").read_text()
-    expr = (rf'^{variable}="\$\{{{variable}:-({VERSION})\}}"$' if base == "examples/oci"
-            else rf'^{variable}="({VERSION})"$')
-    pins = re.findall(expr, text, re.MULTILINE)
-    require(len(pins) == 1, "Expected one reviewed pin for " + variable)
-    return pins[0]
-
-
-def checked_archives(paths, locked):
-    require(isinstance(locked, dict) and {p.name for p in paths} == set(locked), "Archive set differs from the reviewed checksums")
-    result = {}
-    for path in paths:
-        require(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= 32 * 1024 * 1024,
-                "Invalid public chart archive")
-        data = path.read_bytes()
-        require(hashlib.sha256(data).hexdigest() == locked[path.name], "Chart archive differs from approved SHA-256: " + path.name)
-        result[path.name] = data
-    return result
 
 
 def charts_for(root, temp, env):

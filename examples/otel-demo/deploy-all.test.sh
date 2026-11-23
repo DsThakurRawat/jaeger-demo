@@ -189,6 +189,7 @@ run_jaeger_deploy() {
     check_handover() { :; }
     cleanup() { :; }
     clone_jaeger_v2() { :; }
+    verified_chart() { printf "/verified/%s-%s.tgz" "$1" "$2"; }
     wait_for_statefulset() { :; }
     wait_for_opensearch_dashboards() { :; }
     bash() { printf "bash %s\n" "$*"; }
@@ -336,12 +337,172 @@ testScheduledOtelUpgradesCannotInstallOrCreateNamespaces() {
   output=$(GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main run_jaeger_deploy upgrade "" all)
   assertEquals "scheduled upgrade should succeed" 0 "$?"
   assertNotContains "$output" "opensearch-recovery.sh"
-  assertContains "$output" "helm upgrade opensearch opensearch/opensearch"
-  assertContains "$output" "helm upgrade opensearch-dashboards opensearch/opensearch-dashboards"
+  assertContains "$output" "helm upgrade opensearch /verified/opensearch-$(pinned_version OPENSEARCH_CHART_VERSION).tgz"
+  assertContains "$output" \
+    "helm upgrade opensearch-dashboards /verified/opensearch-dashboards-$(pinned_version OPENSEARCH_DASHBOARDS_CHART_VERSION).tgz"
   assertContains "$output" "helm upgrade --wait --atomic jaeger"
-  assertContains "$output" "helm upgrade otel-demo open-telemetry/opentelemetry-demo"
+  assertContains "$output" "helm upgrade otel-demo /verified/opentelemetry-demo-$(pinned_version OTEL_DEMO_CHART_VERSION).tgz"
   assertNotContains "$output" "--install"
   assertNotContains "$output" "--create-namespace"
+}
+
+pinned_version() {
+  bash -c 'source "$1"; printf "%s" "${!2}"' _ "$SCRIPT" "$1"
+}
+
+testReleasesInstallOnlyVerifiedArchives() {
+  local output
+  output=$(run_jaeger_deploy upgrade "" all)
+  assertEquals "upgrade should succeed" 0 "$?"
+  assertEquals "four releases" 4 "$(grep -c '^helm upgrade ' <<<"$output")"
+  assertNotContains "$output" "--version"
+  assertNotContains "$output" "opensearch/opensearch"
+  assertNotContains "$output" "open-telemetry/opentelemetry-demo"
+}
+
+testVerifiedChartCallsTheLockHelper() {
+  local output
+  output=$(bash -c '
+    source "$1"
+    CHART_ARCHIVE_DIR=/archives
+    python3() { printf "python3"; printf " [%s]" "$@"; }
+    verified_chart opensearch 3.10.0
+  ' _ "$SCRIPT")
+  assertEquals "python3 [$(dirname "$SCRIPT")/../../scripts/demo/chart_archives.py] [pull] [opensearch] [3.10.0] [/archives]" \
+    "$output"
+}
+
+# Run main with cluster writes reported as unsafe and the chart helper answered
+# by a python3 stub that records the archive directory it was given.
+run_with_chart_helper() {
+  bash -c '
+    source "$1"
+    MODE="$2"
+    DEPLOY_SCOPE="$3"
+    helper="$4"
+    record="$5"
+    RUN_PUBLIC_SMOKE_TESTS=false
+    log() { :; }
+    need() { :; }
+    check_cluster() { :; }
+    check_handover() { :; }
+    clone_jaeger_v2() { printf "jaeger chart prepared\n"; }
+    cleanup() { printf "unsafe cleanup\n"; }
+    bash() { printf "unsafe bash %s\n" "$*"; }
+    kubectl() { printf "unsafe kubectl %s\n" "$*"; }
+    wait_for_statefulset() { :; }
+    wait_for_opensearch_dashboards() { :; }
+    wait_for_deployment() { :; }
+    wait_for_service_endpoints() { :; }
+    wait_for_daemonset() { :; }
+    adopt_resource_for_helm_release() { :; }
+    delete_deployment_before_helm_upgrade() { :; }
+    deploy_ingress() { :; }
+    helm() {
+      local argument
+      for argument in "$@"; do
+        if [[ "$argument" == *.tgz && ! -f "$argument" ]]; then printf "missing archive %s\n" "$argument"; fi
+      done
+      printf "helm %s\n" "$*"
+    }
+    python3() {
+      if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
+      if [[ "$1" != */scripts/demo/chart_archives.py || "$2" != pull ]]; then
+        printf "unexpected python3 %s\n" "$*"
+        return 1
+      fi
+      printf "%s\n" "$5" > "$record"
+      if [[ "$helper" == mismatch && "$3" == "$MISMATCH_CHART" ]]; then
+        printf "error: Chart archive differs from approved SHA-256: %s-%s.tgz\n" "$3" "$4" >&2
+        return 1
+      fi
+      printf "pull %s %s\n" "$3" "$4" >&2
+      printf "archive %s-%s\n" "$3" "$4" > "$5/$3-$4.tgz"
+      printf "%s/%s-%s.tgz\n" "$5" "$3" "$4"
+    }
+    main
+  ' _ "$SCRIPT" "$1" "$2" "$3" "$SHUNIT_TMPDIR/chart-archive-dir" 2>&1
+}
+
+chart_variable() {
+  case "$1" in
+    opensearch) echo OPENSEARCH_CHART_VERSION ;;
+    opensearch-dashboards) echo OPENSEARCH_DASHBOARDS_CHART_VERSION ;;
+    opentelemetry-demo) echo OTEL_DEMO_CHART_VERSION ;;
+  esac
+}
+
+testChartDigestMismatchStopsBeforeAnyClusterMutation() {
+  local values mode scope chart output rc
+  for values in upgrade/opensearch/opensearch upgrade/opensearch/opensearch-dashboards \
+      upgrade/otel-demo/opentelemetry-demo upgrade/all/opentelemetry-demo clean/all/opensearch; do
+    IFS=/ read -r mode scope chart <<<"$values"
+    output=$(MISMATCH_CHART="$chart" run_with_chart_helper "$mode" "$scope" mismatch)
+    rc=$?
+    assertNotEquals "$values mismatch must fail" 0 "$rc"
+    assertContains "$values" "$output" "differs from approved SHA-256: $chart-"
+    assertContains "$values" "$output" "Chart $chart $(pinned_version "$(chart_variable "$chart")") could not be verified"
+    assertNotContains "$values" "$output" "unsafe"
+    assertNotContains "$values" "$output" "helm "
+    assertNotContains "$values" "$output" "unexpected python3"
+  done
+}
+
+testVerifiedArchivesPrecedeCleanupAndAreRemovedOnExit() {
+  local output directory repository
+  rm -f "$SHUNIT_TMPDIR/chart-archive-dir"
+  output=$(run_with_chart_helper clean all verified)
+  assertEquals "clean deployment with stubs should succeed" 0 "$?"
+  directory=$(cat "$SHUNIT_TMPDIR/chart-archive-dir")
+  assertNotEquals "the archive directory was recorded" "" "$directory"
+  assertFalse "archive directory must be removed on exit" "[[ -e '$directory' ]]"
+  repository=$(cd "$(dirname "$SCRIPT")/../.." && pwd -P)
+  assertNotContains "archives must stay outside the repository" "$(cd "$(dirname "$directory")" && pwd -P)/" "$repository/"
+  assertNotContains "$output" "missing archive"
+  assertNotContains "$output" "unexpected python3"
+  assertEquals "charts are verified before cleanup" \
+    "jaeger chart prepared|pull opensearch|pull opensearch-dashboards|pull opentelemetry-demo|unsafe cleanup" \
+    "$(grep -E '^(jaeger chart prepared|pull |unsafe cleanup)' <<<"$output" |
+      sed -E 's/^(pull [a-z-]+) .*/\1/' | paste -sd'|' -)"
+  assertContains "$output" "helm upgrade --install opensearch $directory/opensearch-"
+  assertContains "$output" "helm upgrade --install opensearch-dashboards $directory/opensearch-dashboards-"
+  assertContains "$output" "helm upgrade --install otel-demo $directory/opentelemetry-demo-"
+}
+
+testJaegerDependencyMismatchStopsBeforeHelmUpgrade() {
+  local output rc
+  output=$(bash -c '
+    source "$1"
+    MODE=upgrade
+    DEPLOY_SCOPE=jaeger
+    RUN_PUBLIC_SMOKE_TESTS=false
+    log() { :; }
+    need() { :; }
+    check_cluster() { :; }
+    check_handover() { :; }
+    git() { :; }
+    kubectl() { printf "unsafe kubectl %s\n" "$*"; }
+    helm() {
+      case "$1" in
+        repo|dependency) ;;
+        *) printf "unsafe helm %s\n" "$*" ;;
+      esac
+    }
+    python3() {
+      if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
+      printf "python3 %s\n" "$*"
+      if [[ "$1" == */chart_archives.py && "$2" == dependencies ]]; then
+        printf "error: Chart archive differs from approved SHA-256: kafka-26.6.2.tgz\n" >&2
+        return 1
+      fi
+    }
+    main
+  ' _ "$SCRIPT" 2>&1)
+  rc=$?
+  assertNotEquals "a dependency mismatch must fail" 0 "$rc"
+  assertContains "$output" "chart_archives.py dependencies $(dirname "$SCRIPT")/helm-charts/charts/jaeger/charts"
+  assertContains "$output" "differs from approved SHA-256: kafka-26.6.2.tgz"
+  assertNotContains "$output" "unsafe"
 }
 
 testPinsCompatibleOtelDemoChart() {
@@ -792,6 +953,8 @@ testDeploysPinnedOpenSearchChartsInOrder() {
   output=$(bash -c '
     source "$1"
     MODE=upgrade
+    OPENSEARCH_CHART_ARCHIVE="/verified/opensearch-$OPENSEARCH_CHART_VERSION.tgz"
+    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE="/verified/opensearch-dashboards-$OPENSEARCH_DASHBOARDS_CHART_VERSION.tgz"
     log() { :; }
     bash() { printf "bash"; printf " %s" "$@"; printf "\n"; }
     helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
@@ -806,10 +969,11 @@ testDeploysPinnedOpenSearchChartsInOrder() {
   chart_versions=$(bash -c 'source "$1"; printf "%s|%s" "$OPENSEARCH_CHART_VERSION" "$OPENSEARCH_DASHBOARDS_CHART_VERSION"' _ "$SCRIPT")
   opensearch_version=${chart_versions%%|*}
   dashboards_version=${chart_versions##*|}
+  # The chart token is the verified archive; a version flag would refer to a repository chart.
   expected="bash $(dirname "$SCRIPT")/opensearch-recovery.sh verify
-helm upgrade --install opensearch opensearch/opensearch --namespace opensearch --create-namespace --version $opensearch_version -f $(dirname "$SCRIPT")/opensearch-values.yaml --wait --timeout 10m
+helm upgrade --install opensearch /verified/opensearch-$opensearch_version.tgz --namespace opensearch --create-namespace -f $(dirname "$SCRIPT")/opensearch-values.yaml --wait --timeout 10m
 wait-for-statefulset opensearch opensearch-cluster-single 600s
-helm upgrade --install opensearch-dashboards opensearch/opensearch-dashboards --namespace opensearch --version $dashboards_version -f $(dirname "$SCRIPT")/opensearch-dashboard-values.yaml --wait --timeout 60m"
+helm upgrade --install opensearch-dashboards /verified/opensearch-dashboards-$dashboards_version.tgz --namespace opensearch -f $(dirname "$SCRIPT")/opensearch-dashboard-values.yaml --wait --timeout 60m"
   expected="$expected
 wait-for-dashboards 600s"
   assertEquals "$expected" "$output"
@@ -819,6 +983,8 @@ testDashboardsHelmTimeoutCanBeOverridden() {
   output=$(OPENSEARCH_DASHBOARDS_HELM_TIMEOUT=75m bash -c '
     source "$1"
     MODE=clean
+    OPENSEARCH_CHART_ARCHIVE=/verified/opensearch.tgz
+    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=/verified/opensearch-dashboards.tgz
     log() { :; }
     helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
     wait_for_statefulset() { :; }
@@ -826,7 +992,7 @@ testDashboardsHelmTimeoutCanBeOverridden() {
     deploy_opensearch_releases
   ' _ "$SCRIPT")
 
-  assertContains "$output" "helm upgrade --install opensearch-dashboards opensearch/opensearch-dashboards"
+  assertContains "$output" "helm upgrade --install opensearch-dashboards /verified/opensearch-dashboards.tgz"
   assertContains "$output" "--wait --timeout 75m"
 }
 
@@ -834,9 +1000,11 @@ testDashboardsHelmFailureCollectsDiagnosticsAndStops() {
   output=$(bash -c '
     source "$1"
     MODE=clean
+    OPENSEARCH_CHART_ARCHIVE=/verified/opensearch.tgz
+    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=/verified/opensearch-dashboards.tgz
     log() { :; }
     helm() {
-      if [[ "$*" == *"opensearch-dashboards opensearch/opensearch-dashboards"* ]]; then
+      if [[ "$*" == *"opensearch-dashboards /verified/opensearch-dashboards.tgz"* ]]; then
         return 1
       fi
       return 0
@@ -958,6 +1126,8 @@ testRecoveryWaiverSkipsOnlyRecoveryGate() {
     GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main JAEGER_DEMO_STACK=otel
     export GITHUB_EVENT_NAME GITHUB_REF JAEGER_DEMO_STACK
     DEPLOY_SCOPE=opensearch
+    OPENSEARCH_CHART_ARCHIVE=/verified/opensearch.tgz
+    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=/verified/opensearch-dashboards.tgz
     log() { printf "log %s\n" "$*"; }
     bash() { printf "unsafe recovery call\n"; }
     helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
@@ -968,9 +1138,9 @@ testRecoveryWaiverSkipsOnlyRecoveryGate() {
 
   assertContains "$output" "WARNING: OpenSearch recovery was explicitly waived"
   assertNotContains "$output" "unsafe recovery call"
-  assertContains "$output" "helm upgrade --install opensearch opensearch/opensearch"
+  assertContains "$output" "helm upgrade --install opensearch /verified/opensearch.tgz"
   assertContains "$output" "wait-for-statefulset opensearch opensearch-cluster-single 600s"
-  assertContains "$output" "helm upgrade --install opensearch-dashboards opensearch/opensearch-dashboards"
+  assertContains "$output" "helm upgrade --install opensearch-dashboards /verified/opensearch-dashboards.tgz"
   assertContains "$output" "wait-for-dashboards 600s"
 }
 

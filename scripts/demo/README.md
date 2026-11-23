@@ -14,20 +14,40 @@ compatibility change updates that constraint. The OpenTelemetry Demo chart owns
 its PostgreSQL and Valkey images.
 
 Manual deployment runs use the reviewed `demo-apply` environment. The 13:00 UTC
-job on main uses `demo-scheduled` after activation through the
-[handover runbook](../../docs/cutover.md#review-scheduled-scope).
+run of the same `deploy` job on main uses `demo-scheduled`, which has no
+reviewer, and runs only while the repository variable `DEMO_SCHEDULE_ENABLED` is
+`true`. Activation follows the
+[handover runbook](../../docs/cutover.md#review-scheduled-scope). A merged change
+takes effect at the next scheduled run; no executor image is published or
+installed for it.
+
+The Kubernetes access both environments' identities need is defined in
+`ops/rbac/deployer.yaml` and explained in
+[deployer access](../../docs/deployer-access.md). `deployer_access.py bindings`
+prints the bindings for an administrator to apply, and `deployer_access.py check`
+compares an identity's live access with the committed role. Its tests fail when a
+chart or script needs access the role lacks, and when a rule has no chart object
+or command behind it. Every writer workflow runs
+`deployer_access.py check --self` with its own credential before any cluster
+change, so a credential that lacks part of the role stops the run before it
+changes anything.
 
 `deploy.py` fingerprints each component's deployment inputs and records successful
-revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap. Failed
+revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap, patching
+only that component's key; a first manual install creates the ConfigMap. Failed
 revisions are not recorded, so the next reconciliation retries them. The daily
 run also refreshes Jaeger and HotROD snapshots in both demos. A missing component key selects that component. Scheduled runs require the
-existing revision ConfigMap and existing Helm releases. A partial failure does
+existing revision ConfigMap and existing Helm releases, upgrade in place only,
+and refuse a release in a `pending-*` state. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 
-Deployment, manual recovery and volume expansion share one workflow concurrency
-lock. When the daily job selects OpenSearch, it upgrades the live StatefulSet
-on its existing PVC, waits for readiness, and then upgrades Dashboards. The job
+Deployment, manual recovery and volume expansion share the workflow concurrency
+group `jaeger-otel-demo-opensearch-recovery`, so one runs at a time and a running
+one is never cancelled. GitHub keeps one waiting run per group: a newer waiting
+run cancels an older waiting one. When the daily job selects OpenSearch, it
+upgrades the live StatefulSet on its existing PVC, waits for readiness, and then
+upgrades Dashboards. The job
 checks the database and public Dashboards versions against the application
 version of each deployed chart release and sends a fresh trace
 through the collector and query service before recording success. Historical
@@ -40,11 +60,16 @@ main can explicitly waive this test. The standalone [recovery
 procedure](../../examples/otel-demo/OPENSEARCH_RECOVERY.md) describes the
 storage, access and capacity it uses.
 
-The manual `demo_stack`, `otel_deploy_scope`, image overrides, `deploy_mode`, and
-recovery inputs are preserved. The historical `otel_deploy_scope` input also
-accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope
+The manual `demo_stack`, `otel_deploy_scope`, image overrides and recovery
+inputs are preserved. The `deploy_mode` input is removed: the workflow always
+runs `upgrade`, and `deploy.py` refuses `clean` inside GitHub Actions. The
+historical `otel_deploy_scope` input also accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope
 pairs fail. Direct script callers can select a scope through
 `JAEGER_DEMO_DEPLOY_SCOPE`; the legacy OTel environment variable remains accepted.
+Before the first cluster change, both scripts verify every chart they install
+against [`ops/executor/chart-archives.json`](../../ops/executor/chart-archives.json)
+with `chart_archives.py`. A chart version without a locked digest, including a
+`PROMETHEUS_STACK_CHART_VERSION` override, fails.
 
 Chart upgrades are separate reviewed changes; do not bundle them with the initial
 repository ownership handover. Keep component updates separate. Major database
@@ -73,8 +98,8 @@ Retries and alerts:
 - Each stack check runs up to three times, 20 seconds apart, and each attempt is
   killed after 150 seconds. The step fails only when all three attempts fail, so
   one slow probe does not fail a run. The job limit is 20 minutes, above the
-  worst case of about 16 minutes. The retry lives in the workflow because
-  `stack_health.py` is a guarded executor input.
+  worst case of about 16 minutes. The retry lives in the workflow, not in
+  `stack_health.py`.
 - A final step runs `scripts/demo/smoke_alert.py` with this run's result, the
   event and the conclusions of the last 10 completed scheduled runs. A failure
   posts to Slack through `SLACK_WEBHOOK_URL` only when the previous scheduled
