@@ -44,7 +44,7 @@ JAEGER_DEMO_DEPLOY_SCOPE=all ./deploy-all.sh upgrade
 ```
 - Clean install (removes previous releases/namespaces, then installs everything):
 
-> **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.**
+> **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.** The deploy workflow does not offer it, and its identities cannot create or delete namespaces; only an administrator runs it from a shell ([deployer access](../../docs/deployer-access.md)).
 > `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. It also removes any VolumeSnapshot and restored recovery PersistentVolumeClaim in that namespace. VolumeSnapshotContent objects with `deletionPolicy: Retain`, and the OCI backups behind them, survive, while content with `Delete` is removed together with its backup; see [OpenSearch recovery](./OPENSEARCH_RECOVERY.md#restore-after-namespace-or-workload-replacement). The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
 
 ```bash path=null start=null
@@ -205,8 +205,8 @@ instead. See the
 replaced-namespace recovery.
 
 During a manual dispatch from `main`, a maintainer can explicitly select
-`opensearch_recovery=waive` for `demo_stack=otel`, `deploy_mode=upgrade` and
-`otel_deploy_scope=opensearch`. Direct script use defaults to required recovery.
+`opensearch_recovery=waive` for `demo_stack=otel` and
+`otel_deploy_scope=opensearch`; the workflow always runs `upgrade`. Direct script use defaults to required recovery.
 The hosted daily job derives its own disposable-trace policy. A failure of a
 requested manual restore test blocks that protected upgrade.
 

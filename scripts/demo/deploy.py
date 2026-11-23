@@ -175,6 +175,11 @@ def reconcile(env, root=ROOT):
     reviewed_handover = handover.validate_inputs(env, stack, mode, scope)
     if stack not in ("oci", "otel", "all") or mode not in ("upgrade", "clean"):
         raise ValueError("Invalid demo stack or mode")
+    if mode == "clean" and env.get("GITHUB_ACTIONS") == "true":
+        # The workflow identities cannot create or delete namespaces, so a clean run
+        # would uninstall what they can delete and then fail to reinstall. A clean
+        # reinstall is an administrator action from a shell (docs/deployer-access.md).
+        raise ValueError("A clean reinstall cannot run in GitHub Actions; an administrator runs it from a shell")
     if event != "workflow_dispatch" and mode != "upgrade":
         raise ValueError("Automatic demo deployments must use upgrade mode")
     recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
