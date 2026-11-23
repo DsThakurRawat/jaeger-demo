@@ -2,12 +2,13 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acquire Helmfile adoption observations with named, read-only Kubernetes API requests."""
+"""Read object fingerprints and live image references with named, read-only Kubernetes API requests."""
 
 import argparse
-import base64
 import contextlib
+import hashlib
 import http.client
+import json
 import os
 from pathlib import Path
 import re
@@ -16,20 +17,43 @@ import subprocess
 import tempfile
 import time
 from urllib.parse import urlencode
-import zlib
 
-from adoption_bundle import RELEASES, canonical, digest, read_json, require
 from promotion_images import REPOS, STACKS, registry_image
-from stack_health import check as hosted_check
 
 
+RELEASES = {
+    "default/jaeger", "default/prometheus", "jaeger/jaeger", "opensearch/opensearch",
+    "opensearch/opensearch-dashboards", "otel-demo/otel-demo",
+    *(f"{ns}/demo-resources" for ns in ("default", "jaeger", "opensearch", "otel-demo")),
+}
 METADATA = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
 DNS = re.compile(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*")
 KIND = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 LIMIT = 32 * 1024 * 1024
-STATUSES = {"unknown", "deployed", "uninstalled", "superseded", "failed", "uninstalling",
-            "pending-install", "pending-upgrade", "pending-rollback"}
 TRANSIENT_METADATA = {"resourceVersion", "managedFields", "generation", "creationTimestamp"}
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def read_json(data):
+    def pairs(items):
+        obj = dict(items)
+        require(len(obj) == len(items), "Duplicate JSON property")
+        return obj
+    def invalid_number(_):
+        raise ValueError("Non-finite JSON number")
+    return json.loads(data, object_pairs_hook=pairs, parse_constant=invalid_number)
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
 class Connection(http.client.HTTPConnection):
@@ -151,76 +175,6 @@ def pages(get, path, selector, accept, api, kind):
     raise ValueError("Excessive Kubernetes pagination")
 
 
-def history_identity(ns, name, meta):
-    labels = meta["labels"]
-    version = labels["version"]
-    require(isinstance(version, str) and re.fullmatch(r"[1-9][0-9]{0,9}", version)
-            and meta["name"] == f"sh.helm.release.v1.{name}.v{version}" and meta["namespace"] == ns
-            and labels["name"] == name and labels["owner"] == "helm" and labels["status"] in STATUSES
-            and meta["uid"] and meta["resourceVersion"] and not meta.get("deletionTimestamp"), "Invalid Helm record identity")
-    return int(version), (labels["status"], meta["uid"], meta["resourceVersion"])
-
-
-def ledger(get, ns, name):
-    path = f"/api/v1/namespaces/{ns}/secrets"
-    revisions = {}
-    for item in pages(get, path, f"owner=helm,name={name}", METADATA, "meta.k8s.io/v1", "PartialObjectMetadataList"):
-        require(set(item) <= {"apiVersion", "kind", "metadata"}, "Expected metadata-only Secret item")
-        rev, identity = history_identity(ns, name, item["metadata"])
-        require(rev not in revisions, "Duplicate Helm revision")
-        revisions[rev] = identity
-    return revisions
-
-
-def record(get, ns, name, revision, identity, *, tracking_by_namespace=None):
-    obj = get(f"/api/v1/namespaces/{ns}/secrets/sh.helm.release.v1.{name}.v{revision}")
-    require(obj and (obj["apiVersion"], obj["kind"], obj["type"]) == ("v1", "Secret", "helm.sh/release.v1")
-            and history_identity(ns, name, obj["metadata"]) == (revision, identity), "Missing or changed Helm record")
-    raw = base64.b64decode(base64.b64decode(obj["data"]["release"], validate=True), validate=True)
-    if raw.startswith(b"\x1f\x8b"):
-        decoder = zlib.decompressobj(31)
-        raw = decoder.decompress(raw, LIMIT + 1)
-        require(decoder.eof and not decoder.unused_data, "Oversized or invalid compressed Helm record")
-    require(len(raw) <= LIMIT, "Oversized Helm record")
-    payload = read_json(raw)
-    require((payload["namespace"], payload["name"], payload["version"], payload["info"]["status"]) ==
-            (ns, name, revision, identity[0]) and type(payload["version"]) is int
-            and payload["chart"]["metadata"]["name"] and payload["chart"]["metadata"]["version"],
-            "Helm record payload disagrees with its identity or status")
-    if tracking_by_namespace is not None and name == "jaeger" and identity[0] in {"deployed", "superseded"}:
-        ui_config = read_json(payload["config"]["uiconfig"])
-        require(isinstance(ui_config, dict) and isinstance(ui_config.get("tracking"), dict),
-                "Successful Jaeger release lacks its UI tracking configuration")
-        tracking_by_namespace[ns] = ui_config["tracking"]
-    # Hash all decoded release bytes, including hooks, manifests, chart files and values.
-    return {"status": identity[0], "revision": revision, "recordSHA256": digest(raw)}
-
-
-def history(get, release, rollback, *, tracking_by_namespace=None):
-    ns, name = release.split("/")
-    revisions = ledger(get, ns, name)
-    if not revisions:
-        require(name == "demo-resources" and rollback in (None, 0), "Required release history is absent")
-        return {"status": "absent", "revision": 0, "recordSHA256": None}, None
-    latest = max(revisions)
-    require(revisions[latest][0] in {"deployed", "failed"}, "Latest Helm revision requires operator review")
-    # Helm atomic upgrade picks the highest deployed/superseded revision.
-    # An undiscoverable intermediate record could be a newer rollback target.
-    target, current = None, None
-    for rev in range(latest, 0, -1):
-        require(rev in revisions, "Gap before Helm rollback target")
-        item = record(get, ns, name, rev, revisions[rev], tracking_by_namespace=tracking_by_namespace)
-        if rev == latest:
-            current = item
-        if item["status"] in {"deployed", "superseded"}:
-            target = item
-            break
-        require(item["status"] == "failed", "Unresolved intervening Helm record")
-    require(target and rollback in (None, target["revision"]), "Rollback revision differs from Helm selection")
-    require(revisions == ledger(get, ns, name), "Helm ledger changed during acquisition")
-    return current, target
-
-
 def one(items, test, description):
     found = [i for i in items if test(i)]
     require(len(found) == 1, "Expected one " + description)
@@ -289,72 +243,38 @@ def live_image(get, resolve_image, ns, component):
     return {"reference": reference, "sourceCommit": src["sourceCommit"], "digest": src["digest"]}
 
 
-def functional_health(stacks, *, tracking_by_namespace=None):
+def snapshot(get, objects, stacks, resolve_image=registry_image):
+    """Fingerprint the named objects and read the live image references of the named stacks."""
+    require(len(set(objects)) == len(objects) <= 2048 and len(set(stacks)) == len(stacks)
+            and set(stacks) <= set(STACKS) and (objects or stacks), "Invalid or empty read scope")
+    result = {"objects": {}, "images": {}}
+    if objects:
+        routes, _ = discover(get)
+        for identity in objects:
+            result["objects"][identity] = object_state(identity, get(item_path(identity, routes)))
     for stack in stacks:
-        hosted_check(stack, tracking=(tracking_by_namespace or {}).get(STACKS[stack]))
-    return True
-
-
-def observe(scope, get, check_health=None, resolve_image=registry_image):
-    """Pass only scope identities, optionally omitting cluster/rollback expectations during planning."""
-    require(set(scope) <= {"cluster", "releases", "objects", "imageStacks", "rollbackRevisions"}, "Unexpected observation inputs")
-    releases, objects, image_stacks = (scope[k] for k in ("releases", "objects", "imageStacks"))
-    require(isinstance(releases, list) and releases and len(set(releases)) == len(releases) and set(releases) <= RELEASES,
-            "Unknown or duplicate Helm releases")
-    require(isinstance(objects, list) and len(set(objects)) == len(objects) and len(objects) <= 2048, "Invalid observation scope")
-    expected = {stack for stack, ns in STACKS.items() if ns + "/jaeger" in releases}
-    require(isinstance(image_stacks, list) and len(set(image_stacks)) == len(image_stacks) and set(image_stacks) == expected, "Image scope differs from selected releases")
-    rollbacks = scope.get("rollbackRevisions")
-    require(rollbacks is None or (set(rollbacks) == set(releases) and
-            all(type(n) is int and n >= 0 for n in rollbacks.values())), "Incomplete rollback scope")
-    routes, caps = discover(get)
-    cluster = get("/api/v1/namespaces/kube-system")
-    key = "v1:Namespace:-:kube-system"
-    cluster_id = object_state(key, cluster)
-    require(cluster_id and scope.get("cluster", cluster_id["uid"]) == cluster_id["uid"], "Cluster identity changed")
-    result = {"cluster": cluster_id["uid"], "capabilitiesSHA256": digest(canonical(caps)), "objects": {},
-              "releases": {}, "rollbackTargets": {}, "images": {}}
-    for identity in objects:
-        result["objects"][identity] = object_state(identity, get(item_path(identity, routes)))
-    tracking_by_namespace = {}
-    for release in releases:
-        result["releases"][release], result["rollbackTargets"][release] = history(
-            get, release, rollbacks and rollbacks[release], tracking_by_namespace=tracking_by_namespace)
-    for stack in image_stacks:
         result["images"][stack] = {name: live_image(get, resolve_image, STACKS[stack], name) for name in REPOS}
-    stacks = sorted({"oci" if release.startswith("default/") else "otel" for release in releases})
-    healthy = (functional_health(stacks, tracking_by_namespace=tracking_by_namespace)
-               if check_health is None else check_health(stacks))
-    require(healthy is True, "Fresh functional health check failed")
-    result["healthy"] = True
-    return result, caps
+    return result
 
 
-def live_reader(kubeconfig, context):
-    def read_live(scope):
-        with reader(kubeconfig, context) as get:
-            return observe(scope, get)[0]
-    return read_live
-
-
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--context", required=True)
-    parser.add_argument("--scope", type=Path, required=True)
-    parser.add_argument("--render-context", type=Path, help="Write fresh Kubernetes capabilities to a new file")
-    args = parser.parse_args()
+    parser.add_argument("--object", action="append", default=[], metavar="API_VERSION:KIND:NAMESPACE:NAME",
+                        help="Print the UID and state SHA-256 of this object; use - as the namespace of a cluster-scoped object")
+    parser.add_argument("--stack", action="append", default=[], choices=sorted(STACKS),
+                        help="Print the live image reference, source commit and digest of each component in this stack")
+    args = parser.parse_args(argv)
+    if not args.object and not args.stack:
+        parser.error("name at least one --object or --stack")
     try:
-        scope = read_json(args.scope.read_bytes())
         with reader(args.kubeconfig, args.context) as get:
-            result, caps = observe(scope, get)
-        if args.render_context:
-            with args.render_context.open("xb") as out:
-                out.write(canonical(caps))
+            result = snapshot(get, args.object, args.stack)
         print(canonical(result).decode())
     except (ValueError, KeyError, IndexError, TypeError, OSError, http.client.HTTPException) as error:
-        # Never echo exception data originating in stored manifests or HTTP payloads.
-        parser.exit(1, "Live acquisition failed. No observation was emitted (" + type(error).__name__ + ").\n")
+        # Never echo exception data originating in stored objects or HTTP payloads.
+        parser.exit(1, "Live read failed. Nothing was printed (" + type(error).__name__ + ").\n")
 
 
 if __name__ == "__main__":

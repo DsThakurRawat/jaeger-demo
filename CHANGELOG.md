@@ -99,6 +99,20 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `adoption_bundle` or `helmfile_transaction`.
   ([#108](https://github.com/jaegertracing/jaeger-demo/pull/108),
   fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
+- `scripts/demo/release_phases.py` takes the selected releases and their current
+  Helm statuses, as `helm list` reports them, instead of a sealed bundle plan
+  and its approval-time baseline. A release the listing omits counts as absent only
+  after `helm history` reports it not found. It still refuses pending and unknown states
+  before any write, retries a failed release with `sync`, applies OCI before OTel
+  and checks OCI health on every run. `scripts/demo/live_observation.py` now prints
+  the fingerprints of named objects (`--object`) and the live image references of
+  each stack (`--stack`); its `--scope` and `--render-context` options are gone.
+  Neither module imports `adoption_bundle.py` any more.
+  The release-phases rehearsal reads those statuses from `helm list` and also checks
+  that a missing application release, or a companion in the unknown state that the
+  listing omits, stops the run before any write.
+  ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
+  fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Fixed
 
@@ -141,6 +155,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `docs/executor-retirement.md`, which must be recorded before this merges.
   ([#107](https://github.com/jaegertracing/jaeger-demo/pull/107),
   fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The bundle-scope live observer: `live_observation.observe`, `live_reader` and
+  the Helm history readers, and `release_phases.observation_scope` and
+  `baseline_for`. `adoption_bundle.consume` keeps its per-stack drift check until
+  [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) deletes that module.
+  ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
+  fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Security
 

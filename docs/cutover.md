@@ -516,7 +516,7 @@ that holds `adopted.json`, written while the ownership patches were applied.
    ```
 
 Step 1 needs `list` and `delete` on Secrets in the namespace. Kubernetes cannot
-limit a list to Helm records, so review that access like the observer's. Steps 2
+limit a list to Helm records, so that access covers every Secret in the namespace. Steps 2
 to 4 need named `get` and `patch` on the allowlisted objects. For a failed first
 install, stop after step 1 when the ownership metadata should stay for a fresh
 install plan.
