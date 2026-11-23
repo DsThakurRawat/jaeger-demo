@@ -117,9 +117,14 @@ PersistentVolumeClaim bindings that the [migration plan](MIGRATION.md) preserves
 so only an administrator performs it, from a shell, with that administrator's own
 kubeconfig and with explicit maintainer approval. Take the backup first
 ([OpenSearch recovery](../examples/otel-demo/OPENSEARCH_RECOVERY.md)), then run
-`JAEGER_DEMO_DEPLOY_MODE=clean JAEGER_DEMO_STACK=<oci|otel|all> python3
-scripts/demo/deploy.py` from a checkout of the reviewed commit, or `./deploy-all.sh
-clean` in the stack's example directory.
+`./deploy-all.sh clean` in the stack's example directory (`examples/oci` or
+`examples/otel-demo`) from a checkout of the reviewed commit. Pass the image
+tag as the second argument or in `JAEGER_DEMO_IMAGE_TAG`; the repositories default
+to the release images and `JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY` and
+`JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY` override them. Running `scripts/demo/deploy.py` with
+`JAEGER_DEMO_DEPLOY_MODE=clean` also works from a shell, but it first resolves
+snapshot image tags and so needs `MAIN_SHA`, the `jaegertracing/jaeger` commit to
+deploy.
 
 ## Apply and bind
 
