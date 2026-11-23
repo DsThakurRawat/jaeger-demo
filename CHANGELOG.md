@@ -168,7 +168,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the post-renderer to the toolchain. No script imports `cryptography` any more: the
   `adoption` CI job no longer installs it, and local checks need only PyYAML on
   Python 3.9 or later instead of Python 3.11.
-  (fixes [#99](https://github.com/jaegertracing/jaeger-demo/issues/99))
+  ([#114](https://github.com/jaegertracing/jaeger-demo/pull/114),
+  fixes [#99](https://github.com/jaegertracing/jaeger-demo/issues/99))
 
 ### Security
 
