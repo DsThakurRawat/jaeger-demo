@@ -3,6 +3,8 @@
 
 # Production access for daily hosted demo updates
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 When enabled, the 13:00 UTC job evaluates five components. Both Jaeger releases refresh their
 images daily. OpenSearch and Dashboards, the OTel application and OCI monitoring
 apply reviewed input changes. Scheduled OpenSearch upgrades use the existing
@@ -29,6 +31,11 @@ It is restricted to `main` and has no per-run reviewer. The
 the reviewer-gated `demo-apply` environment.
 
 ## Deployment access awaiting approval
+
+[Deployer access](deployer-access.md) defines one reviewed role for the scheduled
+and manual identities under the direct deployment path proposed in
+[#95](https://github.com/jaegertracing/jaeger-demo/issues/95). It replaces the
+executor grants described below once an administrator applies it.
 
 The GitHub scheduled credential signals one named request through the [protected daily update protocol](daily-update-request.md). The independent executor owns the application write access. Its review covers candidate and rollback objects, all six Helm histories, functional checks and privileged monitoring hooks. Helm Secret GET/LIST in the four release namespaces can expose unrelated AI and TLS credentials to that executor. The Prometheus operator has cluster-wide Secret access. Protect the executor code, bundle custody, infrastructure, effective RBAC and accepted operations independently before the write grant and schedule activation.
 

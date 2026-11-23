@@ -28,7 +28,7 @@ import scheduled_inputs
 
 
 MATRIX = "docs/all-five-chart-access.json"
-PROCEDURE = "docs/releases.md#merging-a-change-to-guarded-files"
+PROCEDURE = "docs/deployer-access.md#changing-the-role"
 FIELDS = ("component", "release", "scope", "apiGroup", "resource", "name")
 # scheduled_adapter.inventory matches a record with the same rule. The test
 # suite checks every reviewed record against both, so the two cannot drift.
@@ -214,12 +214,12 @@ def main(argv=None, out=sys.stdout):
         print("\nDraft records for review. Verbs follow the existing records; confirm each one:", file=out)
         print(json.dumps([proposal(key, found[key]) for key in missing], indent=2), file=out)
     if missing or hooks:
-        print("\nThe daily executor rejects these charts until " + MATRIX + " is updated. Run\n"
+        print("\nThe pinned charts and " + MATRIX + " differ. Run\n"
               "  python3 scripts/demo/access_matrix.py --propose\n"
-              "for draft records, review each one, and edit the matrix by hand. The matrix is\n"
-              "executor-guarded, so the change needs a new executor image: " + PROCEDURE + "\n"
-              "A scheduled run also refuses an added, removed or renamed object, and a changed\n"
-              "protected one, until a manual upgrade has established the new release.", file=sys.stderr)
+              "for draft records, review each one, and edit the matrix by hand. Then run\n"
+              "scripts/demo/deployer_access_test.py: it fails when ops/rbac/deployer.yaml does not\n"
+              "cover the new objects. A change to that role is an access change that an\n"
+              "administrator applies before the next deployment: " + PROCEDURE, file=sys.stderr)
         return 1
     print("\nEvery rendered object has a reviewed record.", file=out)
     return 0

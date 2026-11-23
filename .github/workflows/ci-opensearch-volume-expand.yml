@@ -55,15 +55,12 @@ jobs:
     - name: Verify OCI CLI version
       run: python scripts/demo/verify_oci_cli.py
 
-    - name: Acquire the shared deployment lock
-      id: writer-lock
-      env:
-        DEMO_SCHEDULE_ENABLED: ${{ vars.DEMO_SCHEDULE_ENABLED }}
-      run: python3 scripts/demo/scheduled_request.py manual-acquire
+    # Stop before any change when the credential lacks part of the reviewed role
+    # (docs/deployer-access.md). A partial grant otherwise fails mid-upgrade and
+    # leaves a release pending.
+    - name: Verify the deployment identity's access
+      id: access
+      run: python scripts/demo/deployer_access.py check --self --identity manual
 
     - name: Expand and verify the OpenSearch volume
       run: bash examples/otel-demo/opensearch-expand-volume.sh
-
-    - name: Release the shared deployment lock
-      if: success() && steps.writer-lock.outputs.held == 'true'
-      run: python3 scripts/demo/scheduled_request.py manual-release

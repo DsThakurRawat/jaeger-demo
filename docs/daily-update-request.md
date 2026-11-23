@@ -3,6 +3,8 @@
 
 # Daily deployment requests
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 The daily workflow uses the `demo-scheduled` credential to read and patch one ConfigMap, `jaeger-demo-operations/daily-hosted-update`. GitHub holds its deployment concurrency group while the request is outstanding. Its failure step sends the existing Slack alert when the request, receiver or verification fails. The schedule switch defaults to off. The independent production planner, bundle storage and executor must be present and rehearsed before enabling it. [Workflow](../.github/workflows/ci-deploy-demo.yml) · [Protocol implementation](../scripts/demo/scheduled_request.py)
 
 | Actor | Responsibility |

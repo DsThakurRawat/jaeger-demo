@@ -172,9 +172,9 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    disposition and retain the tested independent recovery route.
 5. Enable the new manual deployment path if GitHub has disabled it. Dispatch only
    the reviewed inputs from main. Transfer the OCI demo first, verify it, then
-   transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger`,
-   `deploy_mode=upgrade`, and each stack's existing Jaeger/HotROD commit tags. The
-   stacks may run different image versions; one `demo_stack=all` invocation shares
+   transfer the OTel demo in a separate run. Use `otel_deploy_scope=jaeger` and
+   each stack's existing Jaeger/HotROD commit tags. The workflow always runs
+   `upgrade`. The stacks may run different image versions; one `demo_stack=all` invocation shares
    image inputs and cannot preserve those differences. Supply the full configuration SHA in
    `expected_config_sha`; the workflow fails before OKE setup if main has changed.
    Capture the shared fingerprint ConfigMap immediately before each dispatch, with
@@ -190,7 +190,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    : "${oci_hotrod_tag:?Set the existing OCI HotROD commit tag}"
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
-     -f demo_stack=oci -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f demo_stack=oci -f otel_deploy_scope=jaeger \
      -f "jaeger_image_tag=$oci_jaeger_tag" -f "hotrod_image_tag=$oci_hotrod_tag" \
      -f opensearch_recovery=required
    ```
@@ -204,7 +204,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    : "${otel_hotrod_tag:?Set the existing OTel HotROD commit tag}"
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
-     -f demo_stack=otel -f otel_deploy_scope=jaeger -f deploy_mode=upgrade \
+     -f demo_stack=otel -f otel_deploy_scope=jaeger \
      -f "jaeger_image_tag=$otel_jaeger_tag" -f "hotrod_image_tag=$otel_hotrod_tag" \
      -f opensearch_recovery=required
    ```
@@ -242,7 +242,8 @@ and monitoring fingerprints. Two successful manual Jaeger runs update only their
 own keys. A schedule selects every changed or missing component fingerprint plus
 both Jaeger components; it does not use the manual stack/scope filter. The initial
 apply role and its finite Helm revision window do not authorize this broader or
-repeated work.
+repeated work. The scheduled identity needs the deployer role defined in
+[ops/rbac/deployer.yaml](../ops/rbac/deployer.yaml).
 
 From the root of a clean checkout at the proposed merged configuration SHA,
 inspect the actual selection with this read-only command. It uses the same fingerprint and
@@ -279,11 +280,13 @@ inspection if configuration or stored fingerprints change. Do not overwrite
 unapplied fingerprints to hide additional selections. The initial manual access
 approval is not approval to broaden permissions or remove the environment reviewer.
 
-The maintainers selected all five components for the 13:00 UTC job. Keep the
-repository Actions variable `DEMO_SCHEDULE_ENABLED` set to `false` through
-preparation. Confirm the effective value if the organization defines the same
-name. A skipped scheduled job receives no deployment environment or runner.
-Manual runs continue to use `demo-apply`.
+The maintainers selected all five components for the 13:00 UTC job. The
+scheduled run is the same `deploy` job of `ci-deploy-demo.yml` as a manual run,
+in the `demo-scheduled` environment, and runs `scripts/demo/deploy.py` directly.
+Keep the repository Actions variable `DEMO_SCHEDULE_ENABLED` set to `false` until
+the steps below are complete. Confirm the effective value if the organization
+defines the same name. A skipped scheduled job receives no deployment environment
+or runner. Manual runs continue to use `demo-apply`.
 
 1. Review the pinned configuration and all selected releases. For OpenSearch,
    capture the existing StatefulSet, PVC binding, release revision, running
@@ -291,12 +294,21 @@ Manual runs continue to use `demo-apply`.
    before the change. The scheduled upgrade preserves the live volume and
    repeats the version and trace checks afterward. Existing synthetic trace
    history can be lost. Any destructive reset needs its own approval.
-2. Review the [proposed access and chart inventory](all-five-schedule-access.md).
-   Verify the main-only `demo-scheduled` environment and the four independently authenticated
-   request actors. Follow the [request and lock setup](daily-update-request.md). The requester
-   may signal the named request. The protected executor needs the rehearsed six-release
-   apply, rollback and verification access. Verify prep-only signing and executor-only decryption keys, enforce dry-run-only workload patching for the preparer, and confirm the requester has only its request role. Verify the durable lock across all manual writers and keep the human reviewer on `demo-apply`.
-3. With the signal off, verify receiver readiness and the real dated ready receipt from the preparer. With explicit activation approval, enable the preparer and the repository variable for the intended 13:00 UTC event. To pause future scheduled jobs, set it to `false`. Inspect
+2. Review the [deployer access](deployer-access.md) and the
+   [chart inventory](all-five-chart-access.json). Verify that the main-only
+   `demo-scheduled` environment has no reviewer and that an administrator has
+   applied `ops/rbac/deployer.yaml` and bound the scheduled identity. Run
+   `deployer_access.py check --identity scheduled` and require
+   `0 difference(s)`. The scheduled identity does not hold the recovery role.
+   Keep the human reviewer on `demo-apply`. Follow
+   [Before the first direct run](executor-retirement.md#before-the-first-direct-run)
+   in the executor retirement procedure up to enabling the schedule, which is
+   step 3 here.
+3. With explicit activation approval, set the repository variable to `true`
+   before the intended 13:00 UTC event. Do not dispatch a manual writer close to
+   13:00 UTC, and do not leave a dispatched run waiting for approval across it:
+   the writers share one concurrency group, and a newer waiting run cancels an
+   older one. To pause future scheduled jobs, set the variable to `false`. Inspect
    and drain any queued or running writers before changing access or rolling back.
 
    ```bash
@@ -309,9 +321,10 @@ Manual runs continue to use `demo-apply`.
    gh variable set DEMO_SCHEDULE_ENABLED --body false --repo jaegertracing/jaeger-demo
    ```
 
-4. Find the scheduled run, check its event, configuration SHA, environment and
-   component summary, and compare all six live release histories and fingerprint
-   keys with the pre-run record. A skipped job does not satisfy the stage exit.
+4. Find the scheduled run, check its event, configuration SHA, environment,
+   access check and component summary, and compare all six live release
+   histories and fingerprint keys with the pre-run record. A skipped job does
+   not satisfy the stage exit.
    Verify the [per-component checks](releases.md#daily-component-updates) and
    the public health checks on both demos. Record the run URL, versions, trace
    ID, and PVC binding before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
@@ -390,9 +403,9 @@ not complete. See the [bundle contract](helmfile-bundles.md#verify-and-consume).
 
 ### Apply the ownership patches
 
-Run this under the deployment lock, after the bundle is approved and before the
-first companion install. The planner reads the twelve allowlisted objects by name
-with the read-only plan identity. Each patch adds only the Helm ownership label,
+Run this with the schedule paused and no writer workflow queued or running,
+after the bundle is approved and before the first companion install. The planner
+reads the twelve allowlisted objects by name with the read-only plan identity. Each patch adds only the Helm ownership label,
 the two release annotations and the keep policy, and tests the UID and resource
 version it was planned for.
 
@@ -437,7 +450,8 @@ one OTel namespace at a time.
 
 Use this to roll back companion ownership, and to recover from a first companion
 install that left failed revision 1. Stop automation first, as in
-[If the handover fails](#if-the-handover-fails), and hold the deployment lock.
+[If the handover fails](#if-the-handover-fails), and let queued and running
+writer workflows drain.
 Repeat the steps for each namespace `$ns` to de-adopt. `$RECORD` is the directory
 that holds `adopted.json`, written while the ownership patches were applied.
 

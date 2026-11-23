@@ -11,15 +11,96 @@ categories: Added, Changed, Fixed, Removed and Security.
 
 A merge is not a production deployment. Deployment evidence and acceptance
 status live in [docs/MIGRATION.md](docs/MIGRATION.md) and the
-[release records](docs/releases.md). **Executor image** marks a merge for which
-`scripts/demo/guarded_changes.py` reports a changed file in
-`scheduled_inputs.GUARDED`: the daily preparation refuses to run until a matching
-executor image is published and installed. The check normalizes chart pins, so a
-pin-only bump is not marked and needs no executor release.
+[release records](docs/releases.md). **Executor image** marks entries up to
+2026-11-23 whose merge changed a file the in-cluster executor guarded. New entries
+do not carry it: the daily update runs `scripts/demo/deploy.py` directly
+([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)).
 
 Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
+
+## 2026-11-23
+
+### Added
+
+- Reviewed Kubernetes roles for the scheduled and manual deployment identities in
+  `ops/rbac/deployer.yaml`, covering all six releases, with
+  `scripts/demo/deployer_access.py` to print their bindings and to compare an
+  identity's live access with the role. Tests fail when a chart or script needs
+  access the role lacks or when a rule has nothing behind it. An administrator
+  applies the role; see `docs/deployer-access.md`.
+  ([#97](https://github.com/jaegertracing/jaeger-demo/pull/97),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95),
+  [#87](https://github.com/jaegertracing/jaeger-demo/issues/87))
+- `docs/executor-retirement.md`: the ordered operator procedure for moving
+  production to the direct deployment path and then removing the executor's
+  objects from the cluster.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
+### Changed
+
+- kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1. The chart no
+  longer renders the `prometheus-grafana` Role, so `ops/rbac/deployer.yaml` drops
+  its `bind` and `escalate` grant; Helm's delete of the old Role needs only the
+  existing `delete` rule. To apply it under review rather than unattended, see
+  [When a change alters a release's objects](docs/releases.md#when-a-change-alters-a-releases-objects).
+  ([#59](https://github.com/jaegertracing/jaeger-demo/pull/59),
+  fixes [#58](https://github.com/jaegertracing/jaeger-demo/issues/58))
+- The daily 13:00 UTC update and a manual dispatch are now the same `deploy` job,
+  which runs `scripts/demo/deploy.py`. A scheduled run uses `demo-scheduled` and
+  no reviewer; a manual run still waits for a `demo-apply` reviewer. The job no
+  longer signals the in-cluster executor, and a merged change takes effect at the
+  next scheduled run without an executor image.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The deploy, OpenSearch recovery and volume expansion workflows first check
+  their credential against `ops/rbac/deployer.yaml` and stop before any cluster
+  change when part of that access is missing. An administrator must apply the
+  role before the first run after this change.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- A re-run of a scheduled deployment is refused unless it is at the current `main`
+  commit, so an old scheduled run cannot redeploy an old configuration.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `docs/MIGRATION.md` replaces the plan-and-apply execution contract with direct
+  deployment from the workflow and retires Helmfile bundle custody. README,
+  release and handover documents describe the new path, and the executor
+  documents are marked as a retired design.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
+### Removed
+
+- The `deploy_mode` input of **Deploy Jaeger Demo to OKE**. The workflow always
+  runs `upgrade`, and `scripts/demo/deploy.py` refuses `clean` inside GitHub
+  Actions, because the deployer role cannot create or delete namespaces and a
+  clean run would leave the demo partly removed. An administrator can still run
+  `clean` from a shell, as [deployer access](docs/deployer-access.md) describes.
+  ([#104](https://github.com/jaegertracing/jaeger-demo/pull/104),
+  fixes [#98](https://github.com/jaegertracing/jaeger-demo/issues/98))
+- The deployment lock on `default/jaeger-demo-deployment-revisions`. The three
+  workflows that change the cluster share one concurrency group instead, and
+  `deploy.py` records each component by patching only its own key.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The CI notice for executor-guarded changes and the **Executor image.** marker
+  on changelog entries.
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
+### Security
+
+- Both `deploy-all.sh` scripts install OpenSearch, Dashboards, the OpenTelemetry
+  Demo and kube-prometheus-stack only from archives whose SHA-256 equals
+  `ops/executor/chart-archives.json`, and stop before any cluster change when an
+  archive or a Jaeger chart dependency differs or a version has no locked digest.
+  The `Demo tests` CI job now checks that lock against the publishers' indexes.
+  **Executor image.**
+  ([#96](https://github.com/jaegertracing/jaeger-demo/pull/96),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ## 2026-11-21
 
@@ -129,13 +210,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   to ten. **Executor image.**
   ([#49](https://github.com/jaegertracing/jaeger-demo/pull/49),
   refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1))
-- kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1, with values that
-  keep the release inside the executor's hook and Secret rules. It needs an
-  operator installation review and a
-  [manual upgrade](docs/releases.md#when-a-change-alters-a-releases-objects)
-  before a scheduled run accepts it. **Executor image.**
-  ([#59](https://github.com/jaegertracing/jaeger-demo/pull/59),
-  fixes [#58](https://github.com/jaegertracing/jaeger-demo/issues/58))
 
 ### Fixed
 

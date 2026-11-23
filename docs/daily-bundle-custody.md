@@ -3,6 +3,8 @@
 
 # Daily script bundle custody
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 The preparer freezes one six-release plan for a specific 13:00 UTC slot and reviewed configuration commit. The receiver reads that plan from a private PVC and checks GitHub's two-field receipt against an independently signed slot record. Release identity, allowed operations, drift, execution order and health checks belong to the script adapter. The private store authenticates the exact bytes the preparer froze. [Request protocol](daily-update-request.md)
 
 | Identity | Bundle PVC at `/var/lib/jaeger-bundles` | Keys at `/var/run/jaeger-bundle-keys` | Output |

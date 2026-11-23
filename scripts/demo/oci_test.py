@@ -1,6 +1,7 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,21 +13,40 @@ import unittest
 
 import yaml
 
+import chart_archives
 import deploy
+
+
+PROMETHEUS_VERSION = re.search(r'^PROMETHEUS_STACK_CHART_VERSION="\$\{PROMETHEUS_STACK_CHART_VERSION:-([^}"]+)\}"$',
+                               (deploy.ROOT / "examples/oci/deploy-all.sh").read_text(), re.MULTILINE)[1]
+PROMETHEUS_ARCHIVE = f"kube-prometheus-stack-{PROMETHEUS_VERSION}.tgz"
+DEPENDENCIES = sorted(chart_archives.load_lock()["jaegerDependencies"])
+
+
+def fixture_sha(body):
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 class OciScopeTests(unittest.TestCase):
     def execute(self, scope, status="deployed", repo_failure="", status_error="", uninstall_error="",
                 reviewed_handover=False, preflight_status="deployed", event="workflow_dispatch", mode="upgrade",
-                smoke="false"):
+                smoke="false", chart_body="", dependency_body="", pull_failure=""):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            self.last_root = root.resolve()
             directory = root / "examples/oci"
             shutil.copytree(deploy.ROOT / "examples/oci", directory)
             (directory / "helm-charts/.git").mkdir(parents=True)
             (root / "scripts/demo").mkdir(parents=True)
             shutil.copy(deploy.ROOT / "scripts/demo/jaeger-chart.sh", root / "scripts/demo")
             shutil.copy(deploy.ROOT / "scripts/demo/handover.py", root / "scripts/demo")
+            shutil.copy(deploy.ROOT / "scripts/demo/chart_archives.py", root / "scripts/demo")
+            # The fake Helm writes "chart <file>" and "dependency <file>"; the fixture lock approves exactly those.
+            (root / "ops/executor").mkdir(parents=True)
+            (root / chart_archives.LOCK).write_text(json.dumps({
+                "charts": {PROMETHEUS_ARCHIVE: fixture_sha("chart " + PROMETHEUS_ARCHIVE)},
+                "jaegerDependencies": {name: fixture_sha("dependency " + name) for name in DEPENDENCIES},
+            }))
             binaries = root / "bin"
             binaries.mkdir()
             fake = binaries / "fake"
@@ -62,9 +82,24 @@ if command == "helm":
                 raise SystemExit("Error: repo " + name + " not found")
             repositories[name] = True
         state.write_text(json.dumps(repositories))
-    elif sys.argv[1] in ("upgrade", "install") and "prometheus-community/kube-prometheus-stack" in sys.argv:
-        if not repositories.get("prometheus-community"):
-            raise SystemExit("Prometheus chart repository is missing or its index is unavailable")
+    elif sys.argv[1] == "pull":
+        if os.environ["TEST_PULL_FAILURE"]:
+            raise SystemExit("Error: " + os.environ["TEST_PULL_FAILURE"])
+        name = sys.argv[2] + "-" + sys.argv[sys.argv.index("--version") + 1] + ".tgz"
+        destination = Path(sys.argv[sys.argv.index("--destination") + 1])
+        (destination / name).write_text(os.environ["TEST_CHART_BODY"] or "chart " + name)
+    elif sys.argv[1:3] == ["dependency", "build"]:
+        charts = Path(sys.argv[3]) / "charts"
+        charts.mkdir(parents=True, exist_ok=True)
+        for name in os.environ["TEST_DEPENDENCIES"].split():
+            body = "dependency " + name
+            if name.startswith("kafka-") and os.environ["TEST_DEPENDENCY_BODY"]:
+                body = os.environ["TEST_DEPENDENCY_BODY"]
+            (charts / name).write_text(body)
+    elif sys.argv[1] in ("upgrade", "install"):
+        for argument in sys.argv:
+            if argument.endswith(".tgz") and not Path(argument).is_file():
+                raise SystemExit("Error: chart archive is missing: " + argument)
 elif command == "kubectl" and "get" in sys.argv:
     print("existing-object")
 elif command == "curl":
@@ -80,7 +115,9 @@ elif command == "curl":
                        JAEGER_DEMO_PUBLIC_BASE_URL="https://demo.invalid",
                        TEST_HELM_REPOSITORIES=str(root / "repositories.json"), TEST_REPO_FAILURE=repo_failure,
                        TEST_STATUS_ERROR=status_error, TEST_UNINSTALL_ERROR=uninstall_error,
-                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="", GITHUB_EVENT_NAME=event)
+                       TEST_PREFLIGHT_STATUS=preflight_status, EXPECTED_CONFIG_SHA="", GITHUB_EVENT_NAME=event,
+                       TEST_CHART_BODY=chart_body, TEST_DEPENDENCY_BODY=dependency_body,
+                       TEST_DEPENDENCIES=" ".join(DEPENDENCIES), TEST_PULL_FAILURE=pull_failure)
             if reviewed_handover:
                 env.update(EXPECTED_CONFIG_SHA="a" * 40, GITHUB_SHA="a" * 40,
                            GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/main",
@@ -113,22 +150,73 @@ elif command == "curl":
         self.assertEqual(2, len(upgrades))
         self.assertTrue(all("--install" not in call for call in upgrades))
 
-    def test_monitoring_scope_bootstraps_fresh_repository_without_touching_jaeger(self):
+    def test_monitoring_scope_pulls_its_verified_archive_without_touching_jaeger(self):
         result, calls = self.execute("monitoring")
         self.assertEqual(0, result.returncode, result.stderr)
         upgrades = [call for call in calls if call[:2] == ["helm", "upgrade"]]
         self.assertEqual(1, len(upgrades))
         self.assertIn("prometheus", upgrades[0])
         self.assertFalse(any(call[0] == "git" or "trace-script" in call for call in calls))
+        # helm pull --repo needs no repository configuration on a fresh runner.
+        self.assertFalse(any(call[:2] == ["helm", "repo"] for call in calls))
+        pull, = self.pulls(calls)
+        self.assertEqual(upgrades[0][upgrades[0].index("prometheus") + 1], self.archive(pull))
 
-    def test_repository_setup_failure_prevents_cluster_mutations(self):
+    def test_jaeger_repository_setup_failure_prevents_cluster_mutations(self):
         for operation in ("add", "update"):
             with self.subTest(operation=operation):
-                result, calls = self.execute("monitoring", repo_failure=operation)
+                result, calls = self.execute("jaeger", repo_failure=operation)
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn("repository " + operation + " failed", result.stderr)
                 self.assertFalse(any(call[0] == "kubectl" for call in calls))
                 self.assertFalse(any(call[:2] == ["helm", "upgrade"] for call in calls))
+
+    @staticmethod
+    def pulls(calls):
+        return [call for call in calls if call[:2] == ["helm", "pull"]]
+
+    @staticmethod
+    def archive(pull):
+        return pull[pull.index("--destination") + 1] + "/" + PROMETHEUS_ARCHIVE
+
+    @staticmethod
+    def mutations(calls):
+        return [call for call in calls if call[0] == "kubectl" and "get" not in call and "config" not in call
+                or call[:2] in (["helm", "upgrade"], ["helm", "install"], ["helm", "uninstall"])]
+
+    def test_monitoring_pull_uses_the_publisher_repository_and_exact_version(self):
+        result, calls = self.execute("monitoring")
+        self.assertEqual(0, result.returncode, result.stderr)
+        pull, = self.pulls(calls)
+        self.assertEqual(["helm", "pull", "kube-prometheus-stack", "--version", PROMETHEUS_VERSION,
+                          "--repo", "https://prometheus-community.github.io/helm-charts", "--destination"], pull[:-1])
+        destination = Path(pull[-1]).resolve()
+        self.assertFalse(destination.exists(), "the verified archive directory must be removed on exit")
+        self.assertFalse(destination.is_relative_to(self.last_root), "archives must not be written into the tree")
+
+    def test_archive_mismatch_or_pull_failure_prevents_any_cluster_mutation(self):
+        for scope, mode, failure in (("monitoring", "upgrade", {"chart_body": "tampered"}),
+                                     ("all", "upgrade", {"chart_body": "tampered"}),
+                                     ("all", "clean", {"chart_body": "tampered"}),
+                                     ("monitoring", "upgrade", {"pull_failure": "index unavailable"})):
+            with self.subTest(scope=scope, mode=mode, failure=failure):
+                result, calls = self.execute(scope, mode=mode, **failure)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("could not be verified against its reviewed archive", result.stderr)
+                self.assertEqual([], self.mutations(calls))
+                if "chart_body" in failure:
+                    self.assertIn("differs from approved SHA-256: " + PROMETHEUS_ARCHIVE, result.stderr)
+                    self.assertFalse(Path(self.pulls(calls)[0][-1]).exists())
+
+    def test_jaeger_dependency_mismatch_prevents_the_upgrade(self):
+        for status in ("deployed", "failed"):
+            with self.subTest(status=status):
+                result, calls = self.execute("jaeger", status=status, dependency_body="tampered")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("differs from approved SHA-256: kafka-", result.stderr)
+                self.assertTrue(any(call[:3] == ["helm", "dependency", "build"] for call in calls))
+                # A failed release would otherwise be uninstalled for reinstall; that waits for verification too.
+                self.assertEqual([], self.mutations(calls))
 
     def test_failed_monitoring_is_retried_without_uninstalling(self):
         result, calls = self.execute("monitoring", "failed")
@@ -232,8 +320,9 @@ elif command == "curl":
                           "--set", "allInOne.image.tag=latest", "--set", "allInOne.image.pullPolicy=Never",
                           "--set", "hotrod.image.repository=localhost:5000/jaegertracing/example-hotrod",
                           "--set", "hotrod.image.tag=latest", "--set", "hotrod.image.pullPolicy=Never"] + configs
-        prometheus = ["--timeout", "20m0s", "prometheus", "prometheus-community/kube-prometheus-stack",
-                      "--version", version, "--set", "crds.upgradeJob.enabled=true",
+        self.assertEqual(PROMETHEUS_VERSION, version)
+        # The chart token is the verified archive, filled in per run; a version flag would name a repository chart.
+        prometheus = ["--timeout", "20m0s", "prometheus", None, "--set", "crds.upgradeJob.enabled=true",
                       "--set", "crds.upgradeJob.forceConflicts=true", "-f", "monitoring-values.yaml"]
         cases = {
             "upgrade": ("workflow_dispatch", ["upgrade", "--install", "--wait", "--atomic"],
@@ -247,10 +336,31 @@ elif command == "curl":
                 result, calls = self.execute("all", event=event, mode=name.split()[-1])
                 self.assertEqual(0, result.returncode, result.stderr)
                 releases = [call for call in calls if call[:2] in (["helm", "upgrade"], ["helm", "install"])]
+                pull, = self.pulls(calls)
+                archive = self.archive(pull)
                 self.assertEqual([
                     ["helm", *jaeger_cmd, "--timeout", "10m0s", "jaeger", "./helm-charts/charts/jaeger", *jaeger_args],
-                    ["helm", *prometheus_cmd, *prometheus],
+                    ["helm", *prometheus_cmd, *[archive if arg is None else arg for arg in prometheus]],
                 ], releases)
+                # Both charts are verified before the first cluster mutation, including clean-mode uninstalls.
+                first = calls.index(self.mutations(calls)[0])
+                self.assertLess(calls.index(pull), first)
+                self.assertLess(next(i for i, c in enumerate(calls) if c[:3] == ["helm", "dependency", "build"]), first)
+
+    def test_no_release_command_references_a_remote_chart(self):
+        for mode in ("upgrade", "clean", "local"):
+            with self.subTest(mode=mode):
+                result, calls = self.execute("all", mode=mode)
+                self.assertEqual(0, result.returncode, result.stderr)
+                releases = [call for call in calls if call[:2] in (["helm", "upgrade"], ["helm", "install"])]
+                self.assertEqual(2, len(releases))
+                pull, = self.pulls(calls)
+                for release in releases:
+                    self.assertNotIn("--version", release)
+                    self.assertNotIn("--repo", release)
+                    self.assertFalse(any("prometheus-community" in arg for arg in release))
+                    chart = release[release.index("--timeout") + 3]
+                    self.assertIn(chart, ("./helm-charts/charts/jaeger", self.archive(pull)))
 
     def test_public_smoke_checks_bound_each_request(self):
         result, calls = self.execute("jaeger", smoke="true")

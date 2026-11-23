@@ -99,9 +99,11 @@ class AccessMatrixTests(unittest.TestCase):
         self.assertIn("  - opensearch / opensearch-dashboards: rbac.authorization.k8s.io/roles opensearch/extra (PROTECTED kind", out)
         self.assertIn("python3 scripts/demo/access_matrix.py --propose", err)
         self.assertIn(m.PROCEDURE, err)
-        self.assertIn("until a manual upgrade has established the new release", err)
+        self.assertIn("it fails when ops/rbac/deployer.yaml does not", err)
+        self.assertIn("docs/deployer-access.md#changing-the-role", err)
+        self.assertNotIn("executor image", err)
         self.assertNotIn("Draft records", out)
-        self.assertTrue((a.ROOT / "docs/releases.md").read_text().count("\n## Merging a change to guarded files\n"))
+        self.assertTrue((a.ROOT / "docs/deployer-access.md").read_text().count("\n## Changing the role\n"))
 
     def test_propose_drafts_records_in_the_matrix_shape_without_editing_it(self):
         renders = renders_from_matrix()

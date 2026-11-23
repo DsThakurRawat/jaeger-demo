@@ -15,6 +15,7 @@ Ensure the following tools are installed and configured:
 - [`kubectl`](https://kubernetes.io/docs/tasks/tools/)
 - [`Helm 3`](https://helm.sh/docs/intro/install/)
 - `git`
+- `python3`, which verifies each chart archive against `ops/executor/chart-archives.json` before the first cluster change
 
 ---
 

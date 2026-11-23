@@ -3,6 +3,8 @@
 
 # Daily executor permissions
 
+> **Retired design.** The daily update now runs `scripts/demo/deploy.py` directly from the deploy workflow ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). No workflow uses the executor described here. This document is kept until the executor objects are removed from the cluster ([executor retirement](executor-retirement.md)) and is then deleted. For current behavior see [releases](releases.md) and [deployer access](deployer-access.md).
+
 The [offline generator](../ops/executor/permissions.py) renders candidate Kubernetes permissions. The workload identities are `jaeger-demo-operations/jaeger-demo-preparer` and `jaeger-demo-operations/jaeger-demo-executor`. Every output is written to a new mode-0600 local file. Installing roles, binding principals, enabling the pods and enabling scheduling are separate production access decisions. [Deployment inventory](all-five-schedule-access.md) · [Request protocol](daily-update-request.md)
 
 A Deployment rollback checks the frozen workload fields even after the controller advances `deployment.kubernetes.io/revision`. The executor must preserve the current top-level revision annotation on each write. Other annotations, labels, Pod-template metadata and workload fields must match the approved variants. The native fixture advances the annotation between a real Helm upgrade and rollback under each stored apply method. [Approval rehearsal](../ops/executor/rehearsals/approvals.py)

@@ -4,7 +4,7 @@
 
 """Regenerate the reviewed chart archive checksums from the pinned chart versions.
 
-For each chart in scheduled_inputs.CHARTS this reads the version pinned in the
+For each chart in chart_archives.CHARTS this reads the version pinned in the
 deployment scripts, downloads the archive from the publisher, and requires its
 SHA-256 to equal the digest the publisher's index.yaml records for that version.
 It then rewrites the "charts" map of ops/executor/chart-archives.json and leaves
@@ -28,7 +28,7 @@ TIMEOUT = 300
 
 def load_inputs():
     sys.path.insert(0, str(ROOT / "scripts/demo"))
-    return importlib.import_module("scheduled_inputs")
+    return importlib.import_module("chart_archives")
 
 
 class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):

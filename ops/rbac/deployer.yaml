@@ -1,0 +1,349 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+# Kubernetes access for the two GitHub Actions identities that deploy the hosted
+# demo. docs/deployer-access.md explains each rule, how an administrator binds
+# the identities, and what this role can reach. scripts/demo/deployer_access.py
+# checks it against the six rendered charts and the commands the scripts run.
+#
+# jaeger-demo-deployer: both identities (demo-scheduled and demo-apply).
+# jaeger-demo-recovery: the reviewer-gated demo-apply identity only.
+#
+# No rule uses a wildcard. No rule grants access in the ingress controller or
+# cert-manager namespaces. docs/deployer-access.md lists what a holder can still
+# reach through the objects these rules do cover.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jaeger-demo-deployer
+rules:
+  # examples/otel-demo/deploy-all.sh looks up its three namespaces by name.
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [jaeger, opensearch, otel-demo]
+    verbs: [get]
+  # Helm waits on every rendered object by watching its kind, and creates the
+  # monitoring hook's ClusterRole and ClusterRoleBinding. A create or a watch
+  # cannot be limited to a name.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles, clusterrolebindings]
+    verbs: [list, watch, create]
+  # The seven ClusterRoles the monitoring and OTel demo charts own. bind lets a
+  # ClusterRoleBinding reference them. escalate lets Helm write rules this
+  # identity does not hold itself. Helm deletes the two hook roles on every
+  # upgrade, and any of them when a chart stops rendering it.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames:
+      - otel-collector
+      - prometheus-crds-upgrade
+      - prometheus-grafana-clusterrole
+      - prometheus-kube-prometheus-admission
+      - prometheus-kube-prometheus-operator
+      - prometheus-kube-prometheus-prometheus
+      - prometheus-kube-state-metrics
+    verbs: [get, patch, delete, bind, escalate]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterrolebindings]
+    resourceNames:
+      - otel-collector
+      - prometheus-crds-upgrade
+      - prometheus-grafana-clusterrolebinding
+      - prometheus-kube-prometheus-admission
+      - prometheus-kube-prometheus-operator
+      - prometheus-kube-prometheus-prometheus
+      - prometheus-kube-state-metrics
+    verbs: [get, patch, delete]
+  # Kubernetes checks escalation for a create against the collection, which has
+  # no name.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [""]
+    verbs: [escalate]
+  # The monitoring chart's admission webhook registrations.
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    resourceNames: [prometheus-kube-prometheus-admission]
+    verbs: [get, patch, delete]
+---
+# default: OCI Jaeger (default/jaeger) and monitoring (default/prometheus).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-deployer
+  namespace: default
+rules:
+  # Chart objects, the trace generator and the deployment-revisions ConfigMap.
+  # Secrets cover the monitoring chart's own, the Helm release records, and
+  # every other Secret in this namespace.
+  - apiGroups: [""]
+    resources: [configmaps, secrets, serviceaccounts, services]
+    verbs: [get, list, watch, create, patch, delete]
+  # Helm rewrites a release record when its status changes.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [update]
+  - apiGroups: [apps]
+    resources: [daemonsets, deployments]
+    verbs: [get, list, watch, create, patch, delete]
+  # Monitoring hook Jobs: created, awaited and deleted on each upgrade.
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [monitoring.coreos.com]
+    resources: [alertmanagers, prometheuses, prometheusrules, servicemonitors]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles]
+    resourceNames: [prometheus-kube-prometheus-admission]
+    verbs: [bind, escalate]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles]
+    resourceNames: [""]
+    verbs: [escalate]
+  # helm --wait follows each workload to its ReplicaSets and Pods. Read only.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+---
+# jaeger: OTel Jaeger (jaeger/jaeger), its query Service and trace generator.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-deployer
+  namespace: jaeger
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, serviceaccounts, services]
+    verbs: [get, list, watch, create, patch, delete]
+  # Helm release records. The rule cannot name them, so it reaches every Secret
+  # in this namespace.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, delete]
+  # Readiness and failure diagnostics. Read only.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # verify_trace.py sends one trace through a port-forward and reads it back.
+  # A port-forward can reach any Pod in this namespace.
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [get, create]
+  # deploy-all.sh reads certificate readiness. It changes no certificate.
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [list]
+---
+# opensearch: OpenSearch and OpenSearch Dashboards.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-deployer
+  namespace: opensearch
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, serviceaccounts, services]
+    verbs: [get, list, watch, create, patch, delete]
+  # Helm release records. The rule cannot name them, so it reaches every Secret
+  # in this namespace.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, watch, create, patch, delete]
+  # The Dashboards chart binds its service account to this Role name.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles]
+    resourceNames: [opensearch-dashboards-dashboards]
+    verbs: [bind]
+  # Readiness and failure diagnostics. Read only.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # deploy.py compares the data claim's binding before and after an upgrade.
+  # This role cannot change or delete a claim.
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  # verify_trace.py reads the running OpenSearch version inside this Pod. An
+  # exec can run any command there.
+  - apiGroups: [""]
+    resources: [pods/exec]
+    resourceNames: [opensearch-cluster-single-0]
+    verbs: [get, create]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [list]
+---
+# otel-demo: the OpenTelemetry Demo application.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-deployer
+  namespace: otel-demo
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, serviceaccounts, services]
+    verbs: [get, list, watch, create, patch, delete]
+  # Helm release records. The rule cannot name them, so it reaches every Secret
+  # in this namespace.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [apps]
+    resources: [daemonsets, deployments]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, patch, delete]
+  # Readiness and failure diagnostics. Read only.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
+    verbs: [list]
+  # kubectl describe svc otel-collector, in the failure diagnostics.
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+---
+# kube-system: the five scrape Services the monitoring chart owns. Helm watches
+# the kind while it waits, and kubectl cluster-info lists it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-deployer
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [services]
+    resourceNames:
+      - prometheus-kube-prometheus-coredns
+      - prometheus-kube-prometheus-kube-controller-manager
+      - prometheus-kube-prometheus-kube-etcd
+      - prometheus-kube-prometheus-kube-proxy
+      - prometheus-kube-prometheus-kube-scheduler
+    verbs: [get, patch, delete]
+---
+# Manual OpenSearch recovery and volume expansion (demo-apply only): storage
+# kinds that have no namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jaeger-demo-recovery
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    resourceNames: [oci-bv]
+    verbs: [get]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotclasses]
+    resourceNames: [jaeger-opensearch-oci-retain]
+    verbs: [get]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotclasses]
+    verbs: [create]
+  # The recovery test annotates the snapshot content it verified. The name is
+  # generated, so this reaches every snapshot content in the cluster.
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshotcontents]
+    verbs: [get, patch]
+---
+# Manual OpenSearch recovery and volume expansion (demo-apply only). It can
+# create a snapshot, a restore claim and a disposable restore Pod, and grow the
+# data claim. It cannot delete a claim or a snapshot.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jaeger-demo-recovery
+  namespace: opensearch
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [list, create, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, delete]
+  # The recovery test queries the disposable restore Pod, whose name is generated.
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, list, create, patch]
