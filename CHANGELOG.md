@@ -78,6 +78,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `adoption_bundle` or `helmfile_transaction`.
   ([#108](https://github.com/jaegertracing/jaeger-demo/pull/108),
   fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
+- `scripts/demo/release_phases.py` takes the selected releases and their current
+  Helm statuses, as `helm list --all` reports them, instead of a sealed bundle plan
+  and its approval-time baseline. It still refuses pending and unknown states
+  before any write, retries a failed release with `sync`, applies OCI before OTel
+  and checks OCI health on every run. `scripts/demo/live_observation.py` now prints
+  the fingerprints of named objects (`--object`) and the live image references of
+  each stack (`--stack`); its `--scope` and `--render-context` options are gone.
+  Neither module imports `adoption_bundle.py` any more.
+  (fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Removed
 
@@ -97,6 +106,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   on changelog entries.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The bundle-scope live observer: `live_observation.observe`, `live_reader` and
+  the Helm history readers, `release_phases.observation_scope` and `baseline_for`,
+  and `scripts/demo/live_observation_fixture.py`. `adoption_bundle.consume` keeps
+  its per-stack drift check until
+  [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) deletes that module.
+  (fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Security
 
