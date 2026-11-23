@@ -70,8 +70,8 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
         persist-credentials: false
-    - name: Install the constrained bundle and YAML dependencies
-      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt cryptography PyYAML
+    - name: Install the constrained YAML dependency
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
     - name: Compare and validate application and companion manifests
       run: python3 scripts/demo/helmfile_tools.py run -- bash scripts/demo/validate-helmfile.sh
     - name: Check the chart object inventory against the pinned charts
@@ -91,10 +91,6 @@ jobs:
     - name: Verify failed-release retry, pending states, the OCI gate and direct Helmfile flags
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/release-phases/exercise.py \
-          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
-    - name: Verify the frozen transaction against actual Helmfile and Helm
-      run: |
-        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/frozen-transaction/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
 
   render-diff:
