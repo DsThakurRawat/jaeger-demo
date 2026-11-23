@@ -88,7 +88,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Neither module imports `adoption_bundle.py` any more.
   The release-phases rehearsal reads those statuses from `helm list` and also checks
   that a missing application release stops the run before any write.
-  (fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+  ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
+  fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Removed
 
@@ -113,7 +114,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   and `scripts/demo/live_observation_fixture.py`. `adoption_bundle.consume` keeps
   its per-stack drift check until
   [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) deletes that module.
-  (fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+  ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
+  fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Security
 
