@@ -107,7 +107,10 @@ shows one.
 
 ### 4. Stop the executor
 
-Only when the request state is not `requested` or `running`:
+Only when step 3 let you continue: the request state is `succeeded`, `recovered`,
+`ready` or empty, or it is a `requested` record that has expired and that you
+verified as unclaimed with no lock holder. Never while a request is still live
+(`requested` and not yet expired) or `running`:
 
 ```bash
 kubectl -n jaeger-demo-operations scale deployment jaeger-demo-executor --replicas=0
