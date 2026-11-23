@@ -36,7 +36,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 - `docs/executor-retirement.md`: the ordered operator procedure for moving
   production to the direct deployment path and then removing the executor's
   objects from the cluster.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Changed
 
@@ -45,30 +46,36 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   no reviewer; a manual run still waits for a `demo-apply` reviewer. The job no
   longer signals the in-cluster executor, and a merged change takes effect at the
   next scheduled run without an executor image.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - The deploy, OpenSearch recovery and volume expansion workflows first check
   their credential against `ops/rbac/deployer.yaml` and stop before any cluster
   change when part of that access is missing. An administrator must apply the
   role before the first run after this change.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - A re-run of a scheduled deployment is refused unless it is at the current `main`
   commit, so an old scheduled run cannot redeploy an old configuration.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` replaces the plan-and-apply execution contract with direct
   deployment from the workflow and retires Helmfile bundle custody. README,
   release and handover documents describe the new path, and the executor
   documents are marked as a retired design.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Removed
 
 - The deployment lock on `default/jaeger-demo-deployment-revisions`. The three
   workflows that change the cluster share one concurrency group instead, and
   `deploy.py` records each component by patching only its own key.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - The CI notice for executor-guarded changes and the **Executor image.** marker
   on changelog entries.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Security
 
