@@ -52,6 +52,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the gates that remain before the executor objects are removed.
   ([#112](https://github.com/jaegertracing/jaeger-demo/pull/112),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `docs/MIGRATION.md` records operator acceptance of the manual component
+  upgrades (executor retirement step 7) and no longer lists it as an open gate.
+  Binding the scheduled identity is the next gate.
+  ([#117](https://github.com/jaegertracing/jaeger-demo/pull/117),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1. The chart no
   longer renders the `prometheus-grafana` Role, so `ops/rbac/deployer.yaml` drops
   its `bind` and `escalate` grant; Helm's delete of the old Role needs only the
