@@ -47,6 +47,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` records the retirement of the leftovers that executor
+  retirement step 16 lists: the Stage 1 handover grants, the `demo-plan`
+  environment with its identity, and the published executor images. The first
+  scheduled run after the removals is still to be recorded.
+  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 11 to 16
   (removing the executor objects) and lists the leftovers that still need their
   own approval.
