@@ -98,7 +98,7 @@ kubectl -n default get configmap jaeger-demo-deployment-revisions -o jsonpath='{
 | Request state | Action |
 | --- | --- |
 | `succeeded`, `recovered`, `ready` or empty | Continue |
-| `requested` | Wait until the record's `expiresAt` has passed, then read it again |
+| `requested` | Wait until the record's `expiresAt` has passed. An unclaimed request stays `requested` after it expires; nothing rewrites it. Continue once it has expired, step 3 shows no lock holder, and the executor's log shows it did not claim the request |
 | `running` | Stop. An update is in progress or was interrupted. Treat it as an incident and inspect the executor before anything else |
 | `failed` or `verified` | Reconcile it with the reviewed recovery command in [daily deployment requests](daily-update-request.md#concurrency-and-recovery), with approval |
 
@@ -107,7 +107,10 @@ shows one.
 
 ### 4. Stop the executor
 
-Only when the request state is not `requested` or `running`:
+Only when step 3 let you continue: the request state is `succeeded`, `recovered`,
+`ready` or empty, or it is a `requested` record that has expired and that you
+verified as unclaimed with no lock holder. Never while a request is still live
+(`requested` and not yet expired) or `running`:
 
 ```bash
 kubectl -n jaeger-demo-operations scale deployment jaeger-demo-executor --replicas=0
@@ -143,6 +146,14 @@ Rollback: delete the new bindings.
 
 ### 7. Upgrade each component manually
 
+Before each run, confirm that every release it touches has Helm status `deployed`
+(`helm status <release> -n <namespace>`). A manual run uninstalls and reinstalls a
+`default/jaeger` release that is in any other state, which replaces its Service
+addresses. It refuses a `default/prometheus` release that is neither `deployed`
+nor `failed`, such as the `pending-upgrade` revision that
+[#87](https://github.com/jaegertracing/jaeger-demo/issues/87) describes. Repair
+such a release as an administrator first.
+
 Dispatch **Deploy Jaeger Demo to OKE** from `main` once per component, in this
 order, and verify each before the next:
 
@@ -160,8 +171,12 @@ role stops before any change. Verify each component as in the
 These runs also record all five fingerprints, so the first scheduled run selects
 only the two Jaeger components unless something merged since.
 
-Rollback: `helm rollback <release> <revision> -n <namespace>` to the revision in
-the release record.
+Rollback, for every release except OpenSearch: `helm rollback <release> <revision>
+-n <namespace>` to the revision in the release record. Never roll OpenSearch back
+with Helm after its engine version has changed: the older engine would start on
+data the newer one has already upgraded. Use the tested recovery point and the
+[OpenSearch recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md)
+instead.
 
 ### 8. Bind the scheduled identity
 
@@ -187,6 +202,10 @@ gh variable set DEMO_SCHEDULE_ENABLED --repo jaegertracing/jaeger-demo --body tr
 Do not leave a manual run waiting for approval across 13:00 UTC: it would hold the
 concurrency group and delay or cancel the scheduled run.
 
+Do not re-run a scheduled run that was created before the direct path merged. A
+re-run uses the workflow file of its own commit, so it would signal the request
+record instead of deploying, and the re-run guard does not exist in that file.
+
 ### 10. Accept the first scheduled run
 
 After the next 13:00 UTC run, record its URL, the configuration commit, the six
@@ -208,7 +227,7 @@ executor objects stay in place until this run is accepted.
 ### 11. Export everything to private custody
 
 Keep the exports outside Git; they include Secrets. They are the only rollback for
-steps 12 and 13.
+steps 12 and 13, so save full manifests, not only names.
 
 ```bash
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings -o yaml > admission.yaml
@@ -217,6 +236,17 @@ kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings -o yam
 ```bash
 kubectl get all,configmaps,secrets,serviceaccounts,networkpolicies,persistentvolumeclaims,roles,rolebindings,dailyworkloadapprovals -n jaeger-demo-operations -o yaml > operations.yaml
 ```
+
+```bash
+kubectl get clusterroles,clusterrolebindings -o yaml > cluster-rbac.yaml
+```
+
+```bash
+kubectl get roles,rolebindings -A -o yaml > namespaced-rbac.yaml
+```
+
+Those two files hold every Role and binding in the cluster, so anything step 13
+deletes can be restored from them. This list selects the executor's objects:
 
 ```bash
 kubectl get rolebindings,clusterrolebindings -A -o json | jq -r '.items[] | select(any(.subjects[]?; .namespace == "jaeger-demo-operations")) | "\(.kind) \(.metadata.namespace // "-") \(.metadata.name) \(.roleRef.name)"' > executor-rbac.txt
@@ -280,6 +310,9 @@ namespace in the next step. Verify that `executor-rbac.txt`, generated again,
 lists only objects in that namespace, and that `check` for both identities still
 reports no difference.
 
+Rollback: apply the deleted objects again from `cluster-rbac.yaml` and
+`namespaced-rbac.yaml`.
+
 ### 14. Delete the namespace
 
 This removes the request record, the approval objects, both key Secrets, the
@@ -321,6 +354,8 @@ Then retire, each with its own approval:
   identities afterwards.
 - The published `jaeger-demo-executor` container images, after deciding how long
   to keep them.
+- The `demo-plan` GitHub environment, its OCI secrets and its identity's cluster
+  bindings. No workflow uses that environment.
 
 ## Record
 

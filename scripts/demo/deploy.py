@@ -17,6 +17,7 @@ import re
 import subprocess
 import tempfile
 
+import chart_archives
 import handover
 import recovery_policy
 
@@ -136,6 +137,15 @@ def opensearch_data_binding(get=None):
     return claims[0], uid, pv
 
 
+def verify_charts(component, env):
+    """Fail while nothing has changed if a chart this component installs differs from the lock."""
+    with tempfile.TemporaryDirectory() as archives:
+        for _, variable, chart, _ in chart_archives.CHARTS:
+            if variable in CHART_PINS.get(component, ()):
+                run(["python3", str(ROOT / "scripts/demo/chart_archives.py"), "pull", chart,
+                     chart_archives.pin(ROOT, variable), archives], env=env, stdout=subprocess.DEVNULL)
+
+
 def deploy_component(component, env):
     stack, scope, _ = COMPONENTS[component]
     directory = ROOT / "examples" / ("otel-demo" if stack == "otel" else "oci")
@@ -150,6 +160,9 @@ def deploy_component(component, env):
         if policy == "preserve-pvc":
             binding = opensearch_data_binding()
         elif policy == "required":
+            # The recovery test creates a snapshot, a restore volume and a Pod. deploy-all.sh
+            # verifies the charts again, but only after that, so check them here first.
+            verify_charts(component, child_env)
             if env.get("GITHUB_OUTPUT"):
                 with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                     output.write("recovery_started=true\n")
@@ -230,13 +243,18 @@ def reconcile(env, root=ROOT):
             deploy_component(name, env)
             # Write one key at a time, so a concurrent or earlier writer's other
             # keys and the object's annotations are never replaced.
+            patch = ["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p",
+                     json.dumps({"data": {name: desired[name]}})]
             if state_exists:
-                patch = json.dumps({"data": {name: desired[name]}})
-                run(["kubectl", "-n", "default", "patch", "configmap", STATE, "--type=merge", "-p", patch])
+                run(patch)
             else:
                 # Only a first manual install reaches this; a scheduled run requires the record above.
-                run(["kubectl", "-n", "default", "create", "configmap", STATE,
-                     "--from-literal=" + name + "=" + desired[name]])
+                try:
+                    run(["kubectl", "-n", "default", "create", "configmap", STATE,
+                         "--from-literal=" + name + "=" + desired[name]])
+                except subprocess.CalledProcessError:
+                    # Something created the record since it was read. Patching its key is still correct.
+                    run(patch)
                 state_exists = True
             print(f"{name}: deployed successfully", flush=True)
         except (subprocess.CalledProcessError, ScheduledReleaseError) as error:
