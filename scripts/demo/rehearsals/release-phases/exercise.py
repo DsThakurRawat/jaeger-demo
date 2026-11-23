@@ -7,7 +7,6 @@
 import argparse
 import base64
 import gzip
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -149,25 +148,29 @@ def exercise(cfg, context):
     subprocess.run(ctl + ["create", "namespace", namespaces[1]], check=True)
     helm_rows = [{"name": name, "namespace": ns, "chart": "./chart", "labels": {"testns": ns}}
                  for ns in namespaces]
-    rows = [{"id": ns + "/" + name, "observe": [], "rollback": {"revision": 1}} for ns in namespaces]
-    plan = {"releases": rows, "images": {}}
+    rows = [{"id": ns + "/" + name} for ns in namespaces]
 
     def latest(ns):
         return json.loads(subprocess.check_output(helm + ["-n", ns, "status", name, "-o", "json"]))
 
-    def observe(scope):
-        result = {"cluster": "fixture", "healthy": True, "capabilitiesSHA256": "fixture",
-                  "objects": {}, "rollbackTargets": {}, "releases": {}}
-        for rid in scope["releases"]:
-            record = latest(rid.split("/")[0])
-            checksum = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
-            result["releases"][rid] = {"status": record["info"]["status"], "revision": record["version"],
-                                       "recordSHA256": checksum}
-            result["rollbackTargets"][rid] = {"revision": 1}
-        return result
+    def listing():
+        # Helm 4 has no --all flag, and its default mask omits releases in the unknown state.
+        # --max 0 disables the 256-release page.
+        return json.loads(subprocess.check_output(helm + ["list", "--all-namespaces", "--max", "0", "-o", "json"]))
 
-    def baseline():
-        return observe(release_phases.observation_scope(rows, "fixture", {}))
+    def read_status(release):
+        ns, rel = release.split("/")
+        out = subprocess.run(helm + ["-n", ns, "history", rel, "--max", "1", "-o", "json"], capture_output=True, text=True)
+        if out.returncode:
+            if "release: not found" in out.stderr:
+                return None
+            raise RuntimeError(f"helm history failed for {release}")
+        (entry,) = json.loads(out.stdout)
+        return entry["status"]
+
+    def statuses(selected=rows):
+        # The same input the deploy workflow reads: the listing, confirmed by name for any omitted release.
+        return release_phases.selected_statuses(selected, listing(), read_status)
 
     def force_test_status(ns, status, name=name):
         # Construct states left by interrupted transactions, including Helm's
@@ -215,11 +218,11 @@ def exercise(cfg, context):
         diff = subprocess.run(["helm", "diff", "upgrade", name, str(chart), "-n", namespaces[0],
                                "--kubeconfig", str(cfg), "--kube-context", context, "--detailed-exitcode"])
         assert diff.returncode == 0, "The failed release must have an empty diff"
-        result = release_phases.run(plan, baseline(), observe, reconcile, healthy)
+        result = release_phases.run(rows, statuses(), reconcile, healthy)
         assert result["verifiedStacks"] == ["oci", "otel"] and revisions() == [2, 1]
         assert latest(namespaces[0])["info"]["status"] == "deployed"
         ran.clear()
-        release_phases.run(plan, baseline(), observe, reconcile, healthy)
+        release_phases.run(rows, statuses(), reconcile, healthy)
         assert revisions() == [2, 1] and ran == [("apply", namespaces[0]), ("verified", namespaces[0]),
                                                  ("apply", namespaces[1]), ("verified", namespaces[1])]
         ran.clear()
@@ -227,16 +230,44 @@ def exercise(cfg, context):
             assert stack == "oci"
             raise RuntimeError("fixture OCI health unavailable")
         try:
-            release_phases.run(plan, baseline(), observe, reconcile, unavailable)
+            release_phases.run(rows, statuses(), reconcile, unavailable)
         except RuntimeError as exc:
             assert str(exc) == "fixture OCI health unavailable"
         else:
             raise AssertionError("Failed OCI health accepted")
         assert ran == [("apply", namespaces[0])] and revisions() == [2, 1]
         ran.clear()
+        missing = {"id": namespaces[1] + "/jaeger-phase-missing"}
+        try:
+            release_phases.run(rows + [missing], statuses(rows + [missing]), reconcile, healthy)
+        except ValueError as exc:
+            assert "operator review" in str(exc), str(exc)
+        else:
+            raise AssertionError("Missing application release accepted")
+        assert not ran and revisions() == [2, 1]
+        # A companion in the unknown state is missing from the listing but must not be treated as absent.
+        companion = {"id": namespaces[1] + "/demo-resources"}
+        assert statuses(rows + [companion])[companion["id"]] == release_phases.ABSENT
+        companion_chart = root / "companion"
+        (companion_chart / "templates").mkdir(parents=True)
+        (companion_chart / "Chart.yaml").write_text("apiVersion: v2\nname: companion-fixture\nversion: 1.0.0\n")
+        (companion_chart / "templates" / "config.yaml").write_text(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: demo-resources-fixture}\ndata: {}\n")
+        subprocess.run(helm + ["-n", namespaces[1], "install", "demo-resources", str(companion_chart)],
+                       check=True, stdout=subprocess.DEVNULL)
+        force_test_status(namespaces[1], "unknown", "demo-resources")
+        assert companion["id"] not in release_phases.helm_statuses(listing()), "Helm listed an unknown release"
+        assert statuses(rows + [companion])[companion["id"]] == "unknown"
+        try:
+            release_phases.run(rows + [companion], statuses(rows + [companion]), reconcile, healthy)
+        except ValueError as exc:
+            assert "operator review" in str(exc)
+        else:
+            raise AssertionError("Unknown companion accepted as absent")
+        assert not ran and revisions() == [2, 1]
         force_test_status(namespaces[1], "pending-upgrade")
         try:
-            release_phases.run(plan, baseline(), observe, reconcile, healthy)
+            release_phases.run(rows, statuses(), reconcile, healthy)
         except ValueError as exc:
             assert "operator review" in str(exc)
         else:
@@ -244,7 +275,9 @@ def exercise(cfg, context):
         assert not ran and revisions() == [2, 1]
         direct = direct_transactions(cfg, context, root, force_test_status)
         print(json.dumps({"failedEmptyDiffRecovered": True, "noOpNewRevisions": 0,
-                          "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True, **direct}))
+                          "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True,
+                          "missingReleaseBlockedAllReleases": True, "unlistedUnknownCompanionBlocked": True,
+                          **direct}))
 
 
 if __name__ == "__main__":

@@ -676,16 +676,53 @@ def consume(path, cipher, approved, checkout, expected, render_frozen, read_live
     keys = {row["id"] for row in plan["releases"]}
     require(rendered.keys() == keys and all(rendered[key] == files[f"releases/{key}/rendered.yaml"] for key in keys),
             "Frozen inputs do not reproduce the reviewed renders")
-    scope = release_phases.observation_scope(plan["releases"], previous["cluster"], plan["images"])
+    scope = observation_scope(plan["releases"], previous["cluster"], plan["images"])
     current = read_live(scope)
     require(canonical(current) == canonical(previous), "Live state drifted since approval")
+    ids = [row["id"] for row in plan["releases"]]
+    if set(ids) != set(previous["releases"]) or len(set(ids)) != len(ids):
+        raise ValueError("Selected release scope differs from the verified baseline")
+    checked = set()
     def run_release(row, method):
+        stack = release_phases.stack_of(row["id"])
+        if stack not in checked:
+            # Compare only this stack. An earlier successful OCI release may
+            # have legitimately advanced its history and changed its objects.
+            checked.add(stack)
+            selected = [r for r in plan["releases"] if release_phases.stack_of(r["id"]) == stack]
+            stack_scope = observation_scope(selected, previous["cluster"], plan["images"])
+            if canonical(read_live(stack_scope)) != canonical(baseline_for(stack_scope, previous)):
+                raise ValueError(f"{stack} changed after the initial bundle verification")
         prefix = f"releases/{row['id']}/"
         inputs = {name: files[prefix + name] for name in ("chart.tgz", "values.yaml", "rendered.yaml")}
         inputs["postrender.yaml"] = without_private_errors(transaction_render, row, files)
         reconcile(row, method, MappingProxyType(inputs))
 
-    return release_phases.run(plan, previous, read_live, run_release, verify_stack)
+    # The approved baseline listed each release's Helm records by name, so its "absent" is confirmed.
+    statuses = {key: release["status"] for key, release in previous["releases"].items()}
+    return release_phases.run(plan["releases"], statuses, run_release, verify_stack)
+
+
+# Compatibility for the approval-time drift check, which direct deployment does not use.
+# Removed together with this module by the #99 deletion PR.
+def observation_scope(rows, cluster, images):
+    ids = [row["id"] for row in rows]
+    stacks = {stack for stack, key in (("oci", "default/jaeger"), ("otel", "jaeger/jaeger")) if key in ids}
+    return {
+        "cluster": cluster, "releases": ids, "objects": sorted({key for row in rows for key in row["observe"]}),
+        "imageStacks": sorted(stacks.intersection(images)),
+        "rollbackRevisions": {row["id"]: row["rollback"]["revision"] for row in rows},
+    }
+
+
+def baseline_for(scope, previous):
+    state = {k: previous[k] for k in ("cluster", "capabilitiesSHA256", "healthy")}
+    for k in ("releases", "rollbackTargets", "objects"):
+        ids = scope["objects" if k == "objects" else "releases"]
+        state[k] = {key: previous[k][key] for key in ids}
+    if "images" in previous:
+        state["images"] = {k: previous["images"][k] for k in scope["imageStacks"]}
+    return state
 
 
 def main():
