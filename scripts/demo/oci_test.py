@@ -42,7 +42,6 @@ class OciScopeTests(unittest.TestCase):
             shutil.copy(deploy.ROOT / "scripts/demo/handover.py", root / "scripts/demo")
             shutil.copy(deploy.ROOT / "scripts/demo/chart_archives.py", root / "scripts/demo")
             # The fake Helm writes "chart <file>" and "dependency <file>"; the fixture lock approves exactly those.
-            (root / "ops/executor").mkdir(parents=True)
             (root / chart_archives.LOCK).write_text(json.dumps({
                 "charts": {PROMETHEUS_ARCHIVE: fixture_sha("chart " + PROMETHEUS_ARCHIVE)},
                 "jaegerDependencies": {name: fixture_sha("dependency " + name) for name in DEPENDENCIES},

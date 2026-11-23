@@ -41,8 +41,8 @@ RELEASES = {
     *(f"{ns}/demo-resources" for ns in ("default", "jaeger", "opensearch", "otel-demo")),
 }
 COMMON = {"plan.json", "tools.lock.json", "live.json"}
-# Reviewed SHA-256 of each repository chart archive, shared with the daily executor.
-CHART_ARCHIVES = "ops/executor/chart-archives.json"
+# Reviewed SHA-256 of each repository chart archive, used by the deployment scripts.
+CHART_ARCHIVES = "scripts/demo/chart-archives.lock.json"
 HOOK_PREFIX = "helm.sh/hook"
 SHA = re.compile(r"[a-f0-9]{64}")
 COMMIT = re.compile(r"[a-f0-9]{40}")
@@ -188,7 +188,7 @@ def verify_frozen_source(checkout, expected, files, plan):
             require(row["needs"] == release.get("needs", []), "Prerequisites differ from the checked-in Helmfile")
             if "version" in release:
                 # The plan and the archive both come from the bundle. Bind the chart identity
-                # and its exact bytes to the reviewed tree, as the daily executor does.
+                # and its exact bytes to the reviewed tree, as the deployment scripts do.
                 name, version = release["chart"].rpartition("/")[2], str(release["version"])
                 require(row["chart"]["source"] == release["chart"] and row["chart"]["name"] == name and
                         row["chart"]["version"] == version, "Chart differs from checked-in Helmfile")

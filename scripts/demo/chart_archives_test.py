@@ -12,7 +12,6 @@ import unittest
 from unittest import mock
 
 import chart_archives
-import scheduled_inputs
 
 
 def sha(data):
@@ -24,7 +23,7 @@ class Fixture:
 
     def __init__(self, temp, body=b"reviewed chart"):
         self.root = Path(temp) / "root"
-        (self.root / "ops/executor").mkdir(parents=True)
+        (self.root / "scripts/demo").mkdir(parents=True)
         self.destination = Path(temp) / "archives"
         self.destination.mkdir()
         self.lock = {"charts": {"opensearch-3.10.0.tgz": sha(b"reviewed chart")},
@@ -67,14 +66,8 @@ class ChartArchiveTests(unittest.TestCase):
                   for _, variable, chart, _ in chart_archives.CHARTS}
         self.assertEqual(4, len(pinned))
         self.assertEqual(pinned, set(lock["charts"]),
-                         "ops/executor/chart-archives.json does not match the chart pins in the deploy-all.sh scripts. "
+                         "scripts/demo/chart-archives.lock.json does not match the chart pins in the deploy-all.sh scripts. "
                          "Run: python3 scripts/utils/update-chart-archives.py")
-
-    def test_executor_uses_the_same_definitions(self):
-        for name in ("CHARTS", "LOCK", "VERSION", "pin", "checked_archives"):
-            with self.subTest(name=name):
-                self.assertIs(getattr(chart_archives, name), getattr(scheduled_inputs, name))
-        self.assertIn("scripts/demo/chart_archives.py", scheduled_inputs.GUARDED)
 
     def test_pull_uses_the_publisher_repository_and_exact_version(self):
         with tempfile.TemporaryDirectory() as temp:

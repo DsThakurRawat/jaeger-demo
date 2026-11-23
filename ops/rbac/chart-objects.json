@@ -15,7 +15,7 @@
       "valuesSHA256": {
         "examples/otel-demo/otel-demo-values.yaml": "2f83df70c6bc76752c85ba48dd5dab32334c99f21c2bb52ab053f5989be72a82"
       },
-      "method": "python3 scripts/demo/access_matrix.py"
+      "method": "python3 scripts/demo/chart_objects.py --check"
     }
   ],
   "interpretation": "Proposed access requirements inferred from existing-object upgrades, hook lifecycle and example Helm history records. Live manifests, hook behavior, admission, rollback, and OCI restore capacity require separate verification.",

@@ -162,7 +162,7 @@ it installs no release and creates no namespace. Both Jaeger releases must have
 Helm status `deployed`. Any other release may be `deployed` or `failed`, and a
 failed one is upgraded in place. A release in a `pending-*` state is refused until
 an operator repairs it. Charts install only from archives whose SHA-256 matches
-`ops/executor/chart-archives.json`, checked before any cluster change. A change
+`scripts/demo/chart-archives.lock.json`, checked before any cluster change. A change
 that adds, removes or renames an object is applied like any other once the
 deployer role covers it. See
 [When a change alters a release's objects](#when-a-change-alters-a-releases-objects).
@@ -275,9 +275,9 @@ requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
 
-No workflow deploys through the in-cluster executor. Its code and documents stay
-in the repository until a later change removes them; the cluster-side removal of
-its objects is described in [executor retirement](executor-retirement.md).
+No workflow deploys through the in-cluster executor, and its code and documents
+are not part of this repository. The cluster-side removal of its objects is
+described in [executor retirement](executor-retirement.md).
 
 <a id="merging-a-change-to-guarded-files"></a>
 
@@ -303,7 +303,7 @@ role is applied.
 A chart change that adds, removes or renames an object, or alters a hook or an
 RBAC object, no longer needs a manual upgrade before the schedule accepts it. The
 next scheduled run upgrades the release in place like any other change. Before
-merging, `python3 scripts/demo/access_matrix.py` names the objects a chart adds
+merging, `python3 scripts/demo/chart_objects.py --check` names the objects a chart adds
 and the reviewed records it no longer renders, and the role must cover them.
 
 To apply such a change under review rather than unattended, pause the schedule

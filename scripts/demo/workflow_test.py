@@ -45,7 +45,7 @@ class WorkflowTests(unittest.TestCase):
             for job in (yaml.safe_load(path.read_text()).get('jobs') or {}).values():
                 steps += [(path.name, step) for step in job.get('steps') or []
                           if str(step.get('uses', '')).startswith('azure/setup-helm@')]
-        self.assertEqual(['ci-deploy-demo.yml', 'ci.yml', 'executor-ci.yml'], [name for name, _ in steps])
+        self.assertEqual(['ci-deploy-demo.yml', 'ci.yml'], [name for name, _ in steps])
         self.assertEqual(1, len({step['uses'] for _, step in steps}))
         for name, step in steps:
             with self.subTest(workflow=name):
@@ -346,6 +346,22 @@ class WorkflowTests(unittest.TestCase):
         source = (WORKFLOWS / 'ci.yml').read_text()
         self.assertNotIn('guarded_changes.py', source)
         self.assertNotIn('executor image', source)
+
+    def test_no_workflow_builds_releases_or_rehearses_the_retired_executor(self):
+        for name in ('executor-ci.yml', 'release-executor.yml'):
+            self.assertFalse((WORKFLOWS / name).exists(), name)
+        self.assertFalse((ROOT / 'ops/executor').exists())
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            source = path.read_text()
+            for retired in ('ops/executor', 'scheduled_adapter', 'scheduled_inputs', 'rehearse-executor',
+                            'executor-runtime', 'access_matrix', 'helm-history'):
+                with self.subTest(workflow=path.name, retired=retired):
+                    self.assertNotIn(retired, source)
+
+    def test_adoption_job_checks_the_chart_object_inventory_against_the_pinned_charts(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check', runs)
 
     def test_demo_tests_job_checks_the_chart_archive_lock_against_the_publishers(self):
         jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']

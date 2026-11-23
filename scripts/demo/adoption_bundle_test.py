@@ -82,7 +82,7 @@ class BundleTests(unittest.TestCase):
                                   "chart":"./.tools/helm-charts/charts/jaeger","needs":["default/prometheus"]})
         (self.checkout / "helmfile.yaml").write_bytes(b.canonical(state))
         self.archives = self.checkout / b.CHART_ARCHIVES
-        self.archives.parent.mkdir(parents=True)
+        self.archives.parent.mkdir(parents=True, exist_ok=True)
         self.archives.write_bytes(b.canonical({"charts": {"kube-prometheus-stack-82.10.4.tgz": b.digest(self.chart)}}))
         (self.checkout / "scripts/demo/jaeger-chart.sh").write_text('JAEGER_CHART_COMMIT="' + "c"*40 + '"\n')
         for cmd in (["git", "init", "-q"], ["git", "add", "."], ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
