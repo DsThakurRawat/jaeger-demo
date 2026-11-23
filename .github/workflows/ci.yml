@@ -97,6 +97,46 @@ jobs:
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/frozen-transaction/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
 
+  deployer-access:
+    name: Deployer role against a real API server
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Install the YAML and cryptography dependencies
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt cryptography PyYAML
+    - name: Install kubectl
+      working-directory: ${{ runner.temp }}
+      run: |
+        curl --fail --location --silent --show-error --output kubectl https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl
+        echo "$(curl --fail --location --silent --show-error https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl.sha256)  kubectl" | sha256sum --check
+        chmod u+x kubectl
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+    - name: Create the disposable Kubernetes fixture
+      working-directory: ${{ runner.temp }}
+      run: |
+        curl --fail --location --silent --show-error --output kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+        echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind' | sha256sum --check
+        chmod u+x kind
+        ./kind create cluster --name jaeger-demo-deployer-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Fetch the pinned monitoring chart and verify its reviewed digest
+      env:
+        PYTHONPATH: scripts/demo
+      run: |
+        mkdir -p "$RUNNER_TEMP/charts"
+        version=$(python3 -c 'from pathlib import Path; from chart_archives import pin; print(pin(Path.cwd(), "PROMETHEUS_STACK_CHART_VERSION"))')
+        # helmfile_tools puts the lock-pinned Helm on PATH; chart_archives verifies the digest against the lock.
+        chart=$(python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_archives.py pull kube-prometheus-stack "$version" "$RUNNER_TEMP/charts")
+        echo "MONITORING_CHART=$chart" >> "$GITHUB_ENV"
+    - name: Exercise the deployer role against the live API server
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/deployer-access/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-deployer-fixture \
+          --chart "$MONITORING_CHART" --wait-upgrade --receipt "$RUNNER_TEMP/deployer-access-receipt.json"
+
   render-diff:
     name: Rendered resource changes
     if: github.event_name == 'pull_request'

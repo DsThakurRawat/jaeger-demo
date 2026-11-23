@@ -27,6 +27,23 @@ namespaces cover a kind, because charts add and rename objects. Rules anywhere
 else name each object, except where Kubernetes cannot limit a create, list or
 watch by name.
 
+## CI coverage
+
+The `deployer-access` job in
+[ci.yml](../.github/workflows/ci.yml) proves this role against a real API
+server on every change. It applies the manifest to a disposable kind cluster,
+binds two fixture identities through `deployer_access.py bindings`, runs
+`deployer_access.py check` for both identities against the cluster's live
+SubjectAccessReview answers, and upgrades the pinned monitoring chart with
+`helm upgrade --wait` as the scheduled identity holding only this role. The job
+fails when the API server rejects the role, when a live answer differs from the
+offline model, or when the upgrade is refused a request. It needs no production
+credentials.
+[scripts/demo/rehearsals/deployer-access/exercise.py](../scripts/demo/rehearsals/deployer-access/exercise.py)
+runs the same checks locally; without a kubelet it replaces the waiting upgrade
+with a server dry-run plus a real create and delete of every rendered hook
+object.
+
 ## What the deployer role grants
 
 | Scope | Access | Needed by |

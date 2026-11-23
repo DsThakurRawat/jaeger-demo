@@ -24,6 +24,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- Deployer-role CI coverage: a `deployer-access` job applies the committed
+  roles to a disposable cluster, checks both deployment identities against
+  live authorization answers, and upgrades the pinned monitoring chart as
+  the scheduled identity holding only the deployer role.
+  (refs [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
 - Workspaces and Explore (the new Discover, with PPL) on the public OpenSearch
   Dashboards. Visitors land in an Observability workspace with the Jaeger span
   index pattern selected. A sidecar recreates both within a minute because any
