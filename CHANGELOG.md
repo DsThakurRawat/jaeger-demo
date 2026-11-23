@@ -47,6 +47,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` records the evidence for executor retirement steps 8 to 10,
+  including the first accepted scheduled run, and the monitoring chart 93.6.1
+  upgrade, and narrows the remaining gates to removing the executor objects.
+  ([#119](https://github.com/jaegertracing/jaeger-demo/pull/119),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 2 to 7
   (cluster state, deployer role binding and the manual component runs) and lists
   the gates that remain before the executor objects are removed.
