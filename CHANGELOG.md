@@ -86,6 +86,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the fingerprints of named objects (`--object`) and the live image references of
   each stack (`--stack`); its `--scope` and `--render-context` options are gone.
   Neither module imports `adoption_bundle.py` any more.
+  The release-phases rehearsal reads those statuses from `helm list` and also checks
+  that a missing application release stops the run before any write.
   (fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
 ### Removed
