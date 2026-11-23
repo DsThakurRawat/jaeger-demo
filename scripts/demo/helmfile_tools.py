@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
-"""Run adoption tools from the reviewed release archives in helmfile-tools.lock.json."""
+"""Run the pinned Helmfile tools from the reviewed release archives in helmfile-tools.lock.json."""
 
 import argparse
 import hashlib
@@ -168,10 +168,8 @@ def main():
         directory = Path(temp)
         for tool, entry in tools.items():
             install(tool, entry, system, CACHE, directory)
-        guard = LOCK.parent / "helm-plugins" / "verify-frozen-manifests"
-        shutil.copytree(guard, directory / "plugins" / guard.name)
         env = dict(os.environ, PATH=str(directory / "bin") + os.pathsep + os.environ["PATH"],
-                   HELM_PLUGINS=str(directory / "plugins"), JAEGER_HELMFILE_TOOLCHAIN=str(directory))
+                   HELM_PLUGINS=str(directory / "plugins"))
         env.setdefault("HELM_CACHE_HOME", str(CACHE.parent / "helm-cache"))
         if args.operation == "check":
             check_versions(tools, env)

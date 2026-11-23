@@ -378,7 +378,7 @@ Do not remove the legacy fingerprint ConfigMap during handover.
 > The [migration plan](MIGRATION.md#execution-contract) retires the deployment
 > bundle and the separate read-only plan identity, so the steps below that depend
 > on them do not apply as written. The identity, ownership and no-op requirements
-> still hold. [#99](https://github.com/jaegertracing/jaeger-demo/issues/99) tracks
+> still hold. [#74](https://github.com/jaegertracing/jaeger-demo/issues/74) tracks
 > the rewrite.
 
 Helmfile conversion starts only after the script handover succeeds and the parallel
@@ -387,7 +387,7 @@ core HotROD fixture has merged. Before production adoption:
 - Complete render/inventory equivalence and live drift checks, confirm the last
   release-writer Helm major and digest support, and pass the credential-free tests.
 - Rehearse adoption and rollback in kind. Obtain a fresh healthy live baseline.
-- Review the immutable deployment bundle and exact supplemental allowlist. Freeze
+- Review the adoption render and exact supplemental allowlist. Freeze
   existing application chart/config/image references during ownership adoption.
 - Adopt only allowed ingresses, supplemental Services and generator resources into
   namespace-local companion releases. Reject foreign ownership; keep resource
@@ -405,13 +405,13 @@ OpenSearch downgrade as a generic rollback. The old scripts can be a fallback on
 after de-adoption has completed.
 
 The commands for the ownership patches and for the companion rollback follow. The
-commands that run an approved bundle belong to the executor integration, which is
-not complete. See the [bundle contract](helmfile-bundles.md#verify-and-consume).
+deploy workflow does not run Helmfile yet, so the companion installs and the
+adoption apply have no production commands here.
 
 ### Apply the ownership patches
 
 Run this with the schedule paused and no writer workflow queued or running,
-after the bundle is approved and before the first companion install. The planner
+after the adoption render is reviewed and before the first companion install. The planner
 reads the twelve allowlisted objects by name with the read-only plan identity. Each patch adds only the Helm ownership label,
 the two release annotations and the keep policy, and tests the UID and resource
 version it was planned for.
