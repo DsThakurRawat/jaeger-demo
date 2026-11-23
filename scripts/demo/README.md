@@ -18,8 +18,7 @@ run of the same `deploy` job on main uses `demo-scheduled`, which has no
 reviewer, and runs only while the repository variable `DEMO_SCHEDULE_ENABLED` is
 `true`. Activation follows the
 [handover runbook](../../docs/cutover.md#review-scheduled-scope). A merged change
-takes effect at the next scheduled run; no executor image is published or
-installed for it.
+takes effect at the next scheduled run.
 
 The Kubernetes access both environments' identities need is defined in
 `ops/rbac/deployer.yaml` and explained in

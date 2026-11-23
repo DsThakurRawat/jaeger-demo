@@ -64,6 +64,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   documents are marked as a retired design.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The chart archive lock moved to `scripts/demo/chart-archives.lock.json` and the
+  chart object inventory to `ops/rbac/chart-objects.json`. The new
+  `scripts/demo/chart_objects.py --check` renders the six pinned releases and fails
+  when a chart renders an object with no record, and `--write` adds the records.
+  It runs in the `Helmfile render and adoption rehearsal` CI job and replaces
+  `access_matrix.py`. The Helm and Kubernetes version test now reads
+  `scripts/demo/helmfile-tools.lock.json`.
+  (PR_LINK,
+  fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Removed
 
@@ -76,6 +85,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   on changelog entries.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- The in-cluster executor from the repository: the preparer and receiver code, the
+  container image build and release workflow, the CI rehearsals and admission and
+  permission generators, and the documents that described them. The deployment no
+  longer uses it. What it installed in the cluster is removed by
+  `docs/executor-retirement.md`, which must be recorded before this merges.
+  (PR_LINK,
+  fixes [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ### Security
 

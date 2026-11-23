@@ -274,9 +274,9 @@ requires a successful scheduled refresh, a reviewed Renovate chart bump, another
 healthy no-op result, and at least 24 hours of observation. Core removal waits for
 that acceptance and the separate post-adoption refactors to merge.
 
-No workflow deploys through the in-cluster executor. Its code and documents stay
-in the repository until a later change removes them; the cluster-side removal of
-its objects is described in [executor retirement](executor-retirement.md).
+No workflow deploys through the in-cluster executor, and its code and documents
+are not part of this repository. The cluster-side removal of its objects is
+described in [executor retirement](executor-retirement.md).
 
 <a id="merging-a-change-to-guarded-files"></a>
 

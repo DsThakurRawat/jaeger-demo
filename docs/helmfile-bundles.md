@@ -319,4 +319,4 @@ a separate read-only identity and real Helm release Secrets on the loopback
 API server. It verifies status churn, field and Secret value drift, missing
 objects, failed Helm revisions, intervening gaps and rollback selection. The
 fixture injects its own health callback. The test sets a Pod status on the private API and verifies its Deployment
-ownership chain against synthetic registry digests. [Local fixture instructions](../scripts/demo/rehearsals/helm-history/README.md)
+ownership chain against synthetic registry digests. [Local fixture instructions](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/scripts/demo/rehearsals/helm-history/README.md)

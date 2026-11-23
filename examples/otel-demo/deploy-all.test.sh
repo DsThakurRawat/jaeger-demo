@@ -589,7 +589,7 @@ testPinnedChartRendersReviewedApplicationShape() {
   assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
   [[ "$render_rc" -eq 0 ]] || return
 
-  # The agent's recorded responses do not fit the daily executor's approval partitions.
+  # The agent's recorded responses render an 828 KB ConfigMap, which the assistant stack leaves out.
   count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(agent|mcp|chatbot)'?\$" || true)
   assertEquals "the assistant stack should stay disabled" 0 "$count"
   assertNotContains "$rendered" "name: agent-fixtures"

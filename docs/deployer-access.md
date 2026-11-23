@@ -8,7 +8,7 @@ two GitHub Actions identities that deploy the hosted demo. It is the reviewed
 definition, not a record of what the cluster holds: an administrator applies it
 and binds the identities, and records that in the release record. Until then the
 identities keep the access described in
-[all-five-schedule-access.md](all-five-schedule-access.md) and
+[the access reviewed for the executor design](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/all-five-schedule-access.md) and
 [#87](https://github.com/jaegertracing/jaeger-demo/issues/87). Every run of the
 deploy, recovery and volume expansion workflows starts by checking its own
 credential against this role and stops before any change if part of it is
