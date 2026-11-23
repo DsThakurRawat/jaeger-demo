@@ -68,13 +68,23 @@ routes is therefore not the same operation as changing the externally managed
 issuer/controller configuration.
 
 Under direct deployment, the [deployer role](../ops/rbac/deployer.yaml)
-scopes the scheduled and manual deployment identities to the six releases and
-grants no access in the ingress-controller or cert-manager namespaces. The
-[chart object inventory](../ops/rbac/chart-objects.json) records the objects
-those identities may touch, and the
-[denied-access list](../scripts/demo/deployer_access.py) proves against a live
-cluster that neither identity can reach outside that scope. The
-[companion adoption procedure](helmfile-companions.md) also depends on the
+defines the scheduled and manual identities' direct permissions. The
+[chart object inventory](../ops/rbac/chart-objects.json) and script requests in
+[`deployer_access.py`](../scripts/demo/deployer_access.py) explain those rules;
+they are not an object-level allowlist. The same script can compare live
+SubjectAccessReview answers with required requests and a finite denied-request
+list. This inventory reports no cluster execution of that check.
+
+These are guardrails against mistakes, not strong identity isolation. As
+[What a holder can reach](deployer-access.md#what-a-holder-can-reach) explains,
+RBAC bind/escalate permissions, workloads and admission webhooks can let a
+hostile holder reach cluster-administrator access. The
+[live-access check caveats](deployer-access.md#verify-the-live-access) also apply:
+group-derived access is not evaluated unless the groups are supplied, and the
+self-check covers required access only. A clean result does not prove that an
+identity cannot reach beyond the listed requests.
+
+The [companion adoption procedure](helmfile-companions.md) also depends on the
 named objects. A replacement proposal must account for these controls and any
 new API kinds; it must not weaken the deployment guardrails to make a
 migration pass.
