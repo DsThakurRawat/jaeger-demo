@@ -47,15 +47,20 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
-- `docs/MIGRATION.md` records the evidence for executor retirement steps 8 and 9
-  and the monitoring chart 93.6.1 upgrade, and narrows the remaining gates to the
-  first scheduled run and the removal of the executor objects.
+- `docs/MIGRATION.md` records the evidence for executor retirement steps 8 to 10,
+  including the first accepted scheduled run, and the monitoring chart 93.6.1
+  upgrade, and narrows the remaining gates to removing the executor objects.
   ([#119](https://github.com/jaegertracing/jaeger-demo/pull/119),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 2 to 7
   (cluster state, deployer role binding and the manual component runs) and lists
   the gates that remain before the executor objects are removed.
   ([#112](https://github.com/jaegertracing/jaeger-demo/pull/112),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `docs/MIGRATION.md` records operator acceptance of the manual component
+  upgrades (executor retirement step 7) and no longer lists it as an open gate.
+  Binding the scheduled identity is the next gate.
+  ([#117](https://github.com/jaegertracing/jaeger-demo/pull/117),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1. The chart no
   longer renders the `prometheus-grafana` Role, so `ops/rbac/deployer.yaml` drops
@@ -118,6 +123,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   listing omits, stops the run before any write.
   ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
   fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+- The OpenTelemetry Demo values now give the reason the assistant stack is
+  disabled as the migration's AI activation constraint, not the retired
+  executor's size limit, and note the endpoint override the agent would need.
+  No rendered object changes.
+  ([#118](https://github.com/jaegertracing/jaeger-demo/pull/118),
+  fixes [#55](https://github.com/jaegertracing/jaeger-demo/issues/55))
 
 ### Fixed
 

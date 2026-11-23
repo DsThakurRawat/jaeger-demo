@@ -589,7 +589,8 @@ testPinnedChartRendersReviewedApplicationShape() {
   assertEquals "pinned OTel Demo chart should render" 0 "$render_rc"
   [[ "$render_rc" -eq 0 ]] || return
 
-  # The agent's recorded responses render an 828 KB ConfigMap, which the assistant stack leaves out.
+  # AI activation is outside the migration, so the assistant stack stays off. That
+  # leaves out the agent's 828 KB ConfigMap of recorded responses.
   count=$(printf '%s\n' "$rendered" | grep -c -E "image: .*/demo:[0-9.]+-(agent|mcp|chatbot)'?\$" || true)
   assertEquals "the assistant stack should stay disabled" 0 "$count"
   assertNotContains "$rendered" "name: agent-fixtures"
