@@ -153,8 +153,8 @@ components:
         command: ["sh", "-c", "until nc -z -v -w30 flagd 8013; do echo waiting for flagd; sleep 2; done;"]
 
   # The assistant stack stays off. Enabling the agent makes the chart render an
-  # 828 KB ConfigMap of recorded LLM responses, and the daily executor's
-  # approval partitions hold at most 640 KiB. The load generator still asks the
+  # 828 KB ConfigMap of recorded LLM responses, which exceeded the 640 KiB
+  # approval partitions of the retired executor. The load generator still asks the
   # agent on about one request in eleven; those requests fail and appear as
   # error spans from the load-generator service.
   agent:

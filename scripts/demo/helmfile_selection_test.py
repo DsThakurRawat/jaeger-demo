@@ -53,7 +53,7 @@ class HelmfileSelectionTest(unittest.TestCase):
 
     def test_every_repository_chart_pin_has_a_reviewed_archive_checksum(self):
         # Bundle verification refuses a chart without one. Fail here, in CI, and not at build time.
-        reviewed = json.loads((STATE.parent / "ops/executor/chart-archives.json").read_text())["charts"]
+        reviewed = json.loads((STATE.parent / "scripts/demo/chart-archives.lock.json").read_text())["charts"]
         pinned = [r for r in self.releases if "version" in r]
         self.assertEqual(4, len(pinned))
         for release in pinned:

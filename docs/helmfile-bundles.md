@@ -41,7 +41,7 @@ and `component`. Each release entry has an `id` of `namespace/name`, ordered
 The application dependency graph and chart pins come from the reviewed Git tree.
 For each of the four repository charts, the checker requires the chart name from
 `helmfile.yaml` and the archive SHA-256 that the same commit records for that name
-and version in [`ops/executor/chart-archives.json`](../ops/executor/chart-archives.json).
+and version in [`scripts/demo/chart-archives.lock.json`](../scripts/demo/chart-archives.lock.json).
 A Helmfile chart version without a reviewed checksum in that file cannot be
 bundled. Update both in the same reviewed change.
 For a locally packaged Jaeger chart, use its upstream repository URL followed by
@@ -319,4 +319,4 @@ a separate read-only identity and real Helm release Secrets on the loopback
 API server. It verifies status churn, field and Secret value drift, missing
 objects, failed Helm revisions, intervening gaps and rollback selection. The
 fixture injects its own health callback. The test sets a Pod status on the private API and verifies its Deployment
-ownership chain against synthetic registry digests. [Local fixture instructions](../scripts/demo/rehearsals/helm-history/README.md)
+ownership chain against synthetic registry digests. [Local fixture instructions](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/scripts/demo/rehearsals/helm-history/README.md)

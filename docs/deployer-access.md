@@ -8,7 +8,7 @@ two GitHub Actions identities that deploy the hosted demo. It is the reviewed
 definition, not a record of what the cluster holds: an administrator applies it
 and binds the identities, and records that in the release record. Until then the
 identities keep the access described in
-[all-five-schedule-access.md](all-five-schedule-access.md) and
+[the access reviewed for the executor design](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/all-five-schedule-access.md) and
 [#87](https://github.com/jaegertracing/jaeger-demo/issues/87). Every run of the
 deploy, recovery and volume expansion workflows starts by checking its own
 credential against this role and stops before any change if part of it is
@@ -197,7 +197,7 @@ the upgrade that failed in #87.
 ## Changing the role
 
 `scripts/demo/deployer_access.py` builds the required access from two sources: the
-object inventory in [all-five-chart-access.json](all-five-chart-access.json), and
+object inventory in [chart-objects.json](../ops/rbac/chart-objects.json), and
 a table in the module of the commands the scripts run beyond those objects.
 `scripts/demo/deployer_access_test.py` fails in both directions:
 
@@ -206,9 +206,15 @@ a table in the module of the commands the scripts run beyond those objects.
 - A rule that no chart object or listed command explains fails as unexplained.
 
 The inventory is kept equal to the pinned charts by
-`python3 scripts/demo/access_matrix.py`, which the `In-cluster executor rehearsal`
-workflow runs on every pull request. It compares object identities; the chart
-archive list in the inventory's header is not part of that comparison. So a chart
+`python3 scripts/demo/chart_objects.py --check`, which the `Helmfile render and
+adoption rehearsal` job runs on every pull request. It renders the six releases
+the way the scripts install them, without cluster access, and compares object
+identities and hook events; the chart archive list in the inventory's header is
+not part of that comparison. It fails when a rendered object has no record.
+`--write` adds the missing records and corrects hook events. It never removes a
+record that no pinned chart renders any more, because Helm deletes that object on
+the next upgrade and needs the access to do so; remove the record by hand once no
+release needs it. So a chart
 bump that adds a kind, a hook or a cluster-scoped object changes the inventory and
 the role in the same pull request, and the reviewer sees the access change. A new
 `kubectl` or `helm` call in a script needs a row in the module's table. After the

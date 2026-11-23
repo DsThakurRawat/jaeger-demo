@@ -7,7 +7,7 @@
 For each chart in chart_archives.CHARTS this reads the version pinned in the
 deployment scripts, downloads the archive from the publisher, and requires its
 SHA-256 to equal the digest the publisher's index.yaml records for that version.
-It then rewrites the "charts" map of ops/executor/chart-archives.json and leaves
+It then rewrites the "charts" map of scripts/demo/chart-archives.lock.json and leaves
 "jaegerDependencies" untouched. Use --check to change nothing and fail on drift.
 """
 

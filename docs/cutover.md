@@ -295,7 +295,7 @@ or runner. Manual runs continue to use `demo-apply`.
    repeats the version and trace checks afterward. Existing synthetic trace
    history can be lost. Any destructive reset needs its own approval.
 2. Review the [deployer access](deployer-access.md) and the
-   [chart inventory](all-five-chart-access.json). Verify that the main-only
+   [chart inventory](../ops/rbac/chart-objects.json). Verify that the main-only
    `demo-scheduled` environment has no reviewer and that an administrator has
    applied `ops/rbac/deployer.yaml` and bound the scheduled identity. Run
    `deployer_access.py check --identity scheduled --user <scheduled user OCID>`

@@ -74,6 +74,8 @@ jobs:
       run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt cryptography PyYAML
     - name: Compare and validate application and companion manifests
       run: python3 scripts/demo/helmfile_tools.py run -- bash scripts/demo/validate-helmfile.sh
+    - name: Check the chart object inventory against the pinned charts
+      run: python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check
     - name: Create the disposable Kubernetes fixture
       working-directory: ${{ runner.temp }}
       run: |

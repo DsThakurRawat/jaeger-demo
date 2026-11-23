@@ -5,8 +5,12 @@
 
 The daily update runs `scripts/demo/deploy.py` directly from the deploy workflow
 ([#95](https://github.com/jaegertracing/jaeger-demo/issues/95)). This runbook moves
-production from the [in-cluster executor](in-cluster-executor.md) to that path
-and then removes what the executor design installed in the cluster.
+production from the [in-cluster executor](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/in-cluster-executor.md) to that
+path and then removes what the executor design installed in the cluster. The
+executor's code, manifests and documents are removed from `main`; they stay
+readable at commit
+[`f9b54fe`](https://github.com/jaegertracing/jaeger-demo/tree/f9b54fe60b039633d00b5ea91dba6a40722e8fad)
+for anyone who needs to see what was installed.
 
 A cluster administrator runs every cluster command here from a shell with a
 kubeconfig for the demo cluster. No workflow identity can run them, and none
@@ -100,7 +104,7 @@ kubectl -n default get configmap jaeger-demo-deployment-revisions -o jsonpath='{
 | `succeeded`, `recovered`, `ready` or empty | Continue |
 | `requested` | Wait until the record's `expiresAt` has passed. An unclaimed request stays `requested` after it expires; nothing rewrites it. Continue once it has expired, step 3 shows no lock holder, and the executor's log shows it did not claim the request |
 | `running` | Stop. An update is in progress or was interrupted. Treat it as an incident and inspect the executor before anything else |
-| `failed` or `verified` | Reconcile it with the reviewed recovery command in [daily deployment requests](daily-update-request.md#concurrency-and-recovery), with approval |
+| `failed` or `verified` | Reconcile it with the reviewed recovery command in [daily deployment requests](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/daily-update-request.md#concurrency-and-recovery), with approval |
 
 Record the value of `jaegertracing.io/deployment-lock-holder` if the second command
 shows one.
@@ -369,5 +373,5 @@ In [docs/MIGRATION.md](MIGRATION.md): the dates of the switch to the direct path
 the approvals, the accepted first run and the removal of the executor objects.
 Production state does not go in the changelog, the README or a diagram.
 
-After step 16 is recorded, the executor code and documents can be removed from the
-repository.
+Merge the change that removes the executor code and documents from the repository
+only after step 16 is recorded.
