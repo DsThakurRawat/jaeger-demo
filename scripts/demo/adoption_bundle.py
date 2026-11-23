@@ -698,7 +698,8 @@ def consume(path, cipher, approved, checkout, expected, render_frozen, read_live
         inputs["postrender.yaml"] = without_private_errors(transaction_render, row, files)
         reconcile(row, method, MappingProxyType(inputs))
 
-    statuses = {key: release["status"] for key, release in previous["releases"].items() if release["status"] != "absent"}
+    # The approved baseline listed each release's Helm records by name, so its "absent" is confirmed.
+    statuses = {key: release["status"] for key, release in previous["releases"].items()}
     return release_phases.run(plan["releases"], statuses, run_release, verify_stack)
 
 

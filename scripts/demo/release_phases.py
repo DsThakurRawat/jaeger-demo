@@ -6,6 +6,8 @@
 # Sync upgrades a release whatever its diff, so a failed release is retried with
 # sync even when its rendered objects are unchanged.
 METHODS = {"deployed": "apply", "failed": "sync"}
+# Set only when a named Helm read reports the release not found, never because a listing omits it.
+ABSENT = "absent"
 
 
 def stack_of(release):
@@ -26,14 +28,36 @@ def helm_statuses(listing):
     return statuses
 
 
+def selected_statuses(rows, listing, read_status):
+    """Return the latest Helm status of every selected release.
+
+    listing is parsed `helm list --all-namespaces --max 0 -o json`. Helm 4's default list
+    mask omits a release whose status is unknown, so an omitted release is read by name:
+    read_status("namespace/name") returns the status that `helm history <name> -n <namespace>
+    --max 1 -o json` reports, or None only when Helm reports the release not found.
+    """
+    listed = helm_statuses(listing)
+    statuses = {}
+    for row in rows:
+        key = row["id"]
+        if key in listed:
+            statuses[key] = listed[key]
+        else:
+            status = read_status(key)
+            statuses[key] = ABSENT if status is None else status
+    return statuses
+
+
 def run(rows, statuses, reconcile, verify_stack):
     """Reconcile the selected releases, OCI before OTel. Callbacks raise on failure.
 
     rows lists the selected releases as {"id": "namespace/name", ...} in execution order.
-    statuses maps each existing release to its latest Helm status; a release missing from
-    it is absent. reconcile(row, method) runs Helmfile for one release. verify_stack(stack)
-    returns True only when every required check passes. Every state is checked before the
-    first write, and a receipt is returned only after all operations and health checks.
+    statuses maps every selected release to its latest Helm status, or to ABSENT once a named
+    read confirmed that Helm has no such release (see selected_statuses). A selected release
+    without a status is refused. reconcile(row, method) runs Helmfile for one release.
+    verify_stack(stack) returns True only when every required check passes. Every state is
+    checked before the first write, and a receipt is returned only after all operations and
+    health checks.
     """
     ids = [row["id"] for row in rows]
     if len(set(ids)) != len(ids):
@@ -41,9 +65,10 @@ def run(rows, statuses, reconcile, verify_stack):
     methods = {}
     for key in ids:
         if key not in statuses:
+            # A listing omits some states, so a missing entry proves nothing about the release.
+            raise ValueError(f"{key} has no confirmed Helm status")
+        if statuses[key] == ABSENT and key.endswith("/demo-resources"):
             # Only a namespace-local companion release may be installed for the first time.
-            if not key.endswith("/demo-resources"):
-                raise ValueError(f"{key} requires operator review before reconciliation")
             methods[key] = "apply"
         elif statuses[key] in METHODS:
             methods[key] = METHODS[statuses[key]]

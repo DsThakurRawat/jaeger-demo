@@ -153,11 +153,24 @@ def exercise(cfg, context):
     def latest(ns):
         return json.loads(subprocess.check_output(helm + ["-n", ns, "status", name, "-o", "json"]))
 
-    def statuses():
-        # The same input the deploy workflow reads: every release's latest status, from Helm's storage.
-        # Helm 4 lists every status by default and has no --all flag; --max 0 disables the 256-release page.
-        listing = json.loads(subprocess.check_output(helm + ["list", "--all-namespaces", "--max", "0", "-o", "json"]))
-        return release_phases.helm_statuses(listing)
+    def listing():
+        # Helm 4 has no --all flag, and its default mask omits releases in the unknown state.
+        # --max 0 disables the 256-release page.
+        return json.loads(subprocess.check_output(helm + ["list", "--all-namespaces", "--max", "0", "-o", "json"]))
+
+    def read_status(release):
+        ns, rel = release.split("/")
+        out = subprocess.run(helm + ["-n", ns, "history", rel, "--max", "1", "-o", "json"], capture_output=True, text=True)
+        if out.returncode:
+            if "release: not found" in out.stderr:
+                return None
+            raise RuntimeError(f"helm history failed for {release}")
+        (entry,) = json.loads(out.stdout)
+        return entry["status"]
+
+    def statuses(selected=rows):
+        # The same input the deploy workflow reads: the listing, confirmed by name for any omitted release.
+        return release_phases.selected_statuses(selected, listing(), read_status)
 
     def force_test_status(ns, status, name=name):
         # Construct states left by interrupted transactions, including Helm's
@@ -232,6 +245,26 @@ def exercise(cfg, context):
         else:
             raise AssertionError("Missing application release accepted")
         assert not ran and revisions() == [2, 1]
+        # A companion in the unknown state is missing from the listing but must not be treated as absent.
+        companion = {"id": namespaces[1] + "/demo-resources"}
+        assert statuses(rows + [companion])[companion["id"]] == release_phases.ABSENT
+        companion_chart = root / "companion"
+        (companion_chart / "templates").mkdir(parents=True)
+        (companion_chart / "Chart.yaml").write_text("apiVersion: v2\nname: companion-fixture\nversion: 1.0.0\n")
+        (companion_chart / "templates" / "config.yaml").write_text(
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: demo-resources-fixture}\ndata: {}\n")
+        subprocess.run(helm + ["-n", namespaces[1], "install", "demo-resources", str(companion_chart)],
+                       check=True, stdout=subprocess.DEVNULL)
+        force_test_status(namespaces[1], "unknown", "demo-resources")
+        assert companion["id"] not in release_phases.helm_statuses(listing()), "Helm listed an unknown release"
+        assert statuses(rows + [companion])[companion["id"]] == "unknown"
+        try:
+            release_phases.run(rows + [companion], statuses(rows + [companion]), reconcile, healthy)
+        except ValueError as exc:
+            assert "operator review" in str(exc)
+        else:
+            raise AssertionError("Unknown companion accepted as absent")
+        assert not ran and revisions() == [2, 1]
         force_test_status(namespaces[1], "pending-upgrade")
         try:
             release_phases.run(rows, statuses(), reconcile, healthy)
@@ -243,7 +276,8 @@ def exercise(cfg, context):
         direct = direct_transactions(cfg, context, root, force_test_status)
         print(json.dumps({"failedEmptyDiffRecovered": True, "noOpNewRevisions": 0,
                           "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True,
-                          "missingReleaseBlockedAllReleases": True, **direct}))
+                          "missingReleaseBlockedAllReleases": True, "unlistedUnknownCompanionBlocked": True,
+                          **direct}))
 
 
 if __name__ == "__main__":

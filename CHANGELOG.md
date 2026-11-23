@@ -80,14 +80,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   fixes [#105](https://github.com/jaegertracing/jaeger-demo/issues/105))
 - `scripts/demo/release_phases.py` takes the selected releases and their current
   Helm statuses, as `helm list` reports them, instead of a sealed bundle plan
-  and its approval-time baseline. It still refuses pending and unknown states
+  and its approval-time baseline. A release the listing omits counts as absent only
+  after `helm history` reports it not found. It still refuses pending and unknown states
   before any write, retries a failed release with `sync`, applies OCI before OTel
   and checks OCI health on every run. `scripts/demo/live_observation.py` now prints
   the fingerprints of named objects (`--object`) and the live image references of
   each stack (`--stack`); its `--scope` and `--render-context` options are gone.
   Neither module imports `adoption_bundle.py` any more.
   The release-phases rehearsal reads those statuses from `helm list` and also checks
-  that a missing application release stops the run before any write.
+  that a missing application release, or a companion in the unknown state that the
+  listing omits, stops the run before any write.
   ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
   fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
 
