@@ -232,9 +232,12 @@ are available for integrating the read-only planner and the restricted executor.
 Production authentication, live observation, stack health checks, artifact
 transport and key custody remain the responsibility of those integrations.
 The credential-free monitoring rehearsal sealed a chart and
-139 rendered objects including ten CRDs and three Secret objects. It reproduced
-the full render, compared the 129 templated objects and hooks in the real Helm
+its rendered objects, including ten CRDs and three Secret objects. It reproduced
+the full render, compared the templated objects and hooks in the real Helm
 post-renderer, and rejected a later revision drift in the local test executor.
+It expects as many templated objects as the reviewed access matrix records for
+the monitoring release: 129 with chart 82.10.4 (139 rendered objects in all)
+and 128 with 93.6.1 (138).
 
 Reproduce the test with a clean checkout containing the Helmfile, the toolchain
 lock and this library. Supply the reviewed monitoring chart package:

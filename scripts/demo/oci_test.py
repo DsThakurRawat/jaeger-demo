@@ -394,6 +394,32 @@ elif command == "curl":
         self.assertIn("initialDelaySeconds: 600", liveness)
         self.assertIn("path: /api/health", liveness)
 
+    def test_monitoring_render_keeps_its_hooks_secrets_and_hook_role(self):
+        values_file = deploy.ROOT / "examples/oci/monitoring-values.yaml"
+        objects = [obj for obj in yaml.safe_load_all(self.render_monitoring("--values", str(values_file))) if obj]
+        # Some chart objects render "annotations: null".
+        hooks = [obj for obj in objects if "helm.sh/hook" in (obj["metadata"].get("annotations") or {})]
+        # The release keeps its twelve hooks, and none of them is a Helm test.
+        self.assertEqual(12, len(hooks))
+        self.assertFalse([obj["metadata"]["name"] for obj in hooks
+                          if set(obj["metadata"]["annotations"]["helm.sh/hook"].split(",")) & {"test", "test-success"}])
+        # No long-lived service-account-token Secret: the scrape class uses the projected token.
+        self.assertFalse([obj["metadata"]["name"] for obj in objects
+                          if obj["kind"] == "Secret" and obj.get("type") == "kubernetes.io/service-account-token"])
+        scraped = [obj for obj in objects if obj["kind"] == "ServiceMonitor" and obj["spec"].get("scrapeClass")]
+        self.assertIn("prometheus-kube-prometheus-kubelet", [obj["metadata"]["name"] for obj in scraped])
+        prometheus, = (obj for obj in objects if obj["kind"] == "Prometheus")
+        self.assertEqual([{"name": scraped[0]["spec"]["scrapeClass"],
+                           "authorization": {"type": "Bearer", "credentialsFile": "/var/run/secrets/kubernetes.io/serviceaccount/token"}}],
+                         prometheus["spec"]["scrapeClasses"])
+        self.assertFalse([obj["metadata"]["name"] for obj in objects
+                          if obj["kind"] == "ServiceMonitor" and "prometheus-token" in yaml.safe_dump(obj)])
+        # The certificate hook keeps its Opaque Secret, so its Role needs no delete rule.
+        role, = (obj for obj in hooks if obj["kind"] == "Role")
+        self.assertEqual([{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get", "create"]}], role["rules"])
+        create, = (obj for obj in hooks if obj["kind"] == "Job" and obj["metadata"]["name"].endswith("-admission-create"))
+        self.assertFalse([arg for arg in create["spec"]["template"]["spec"]["containers"][0]["args"] if arg.startswith("--secret-type")])
+
     def test_monitoring_hook_images_are_pinned_to_reviewed_chart_tags(self):
         def hook_images(rendered):
             refs = {}
