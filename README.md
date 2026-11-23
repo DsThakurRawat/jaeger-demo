@@ -188,10 +188,8 @@ and AI activation are outside this migration.
 ## Development
 
 Local checks need Bash, Git, jq, Helm, ShellCheck, actionlint, shunit2, ruff and
-Python 3 with PyYAML and cryptography. Use Python 3.11 or later: the
-`pycparser` pin in
-[oci-cli-constraints.txt](scripts/demo/oci-cli-constraints.txt), which
-`cryptography` pulls in through `cffi`, requires it. The tests use mocks and
+Python 3.9 or later with PyYAML, installed from the pin in
+[oci-cli-constraints.txt](scripts/demo/oci-cli-constraints.txt). The tests use mocks and
 render public Helm charts without production credentials. Chart rendering
 requires network access.
 

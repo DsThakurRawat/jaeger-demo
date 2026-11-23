@@ -47,7 +47,7 @@ python3 scripts/demo/changelog_check.py origin/main HEAD
 
 ## Local checks
 
-Install Bash, Python 3.11 or later with PyYAML and cryptography, Git, jq, Helm, ShellCheck, actionlint and ruff
+Install Bash, Python 3.9 or later with PyYAML, Git, jq, Helm, ShellCheck, actionlint and ruff
 (`python3 -m pip install -r scripts/utils/lint-requirements.txt`). Keep production
 kubeconfig and cloud credentials out of the test environment. Obtain shunit2:
 
@@ -63,10 +63,12 @@ make test
 The tests mock deployment commands and render pinned public charts. Public network
 access is required for the chart repositories, but no production credentials are
 used. Install the constrained Python libraries in a virtual environment with
-`python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML cryptography`.
-The constrained `pycparser`, which `cryptography` pulls in through `cffi`, sets the
-Python 3.11 minimum. If regenerated constraints change it, update this section and
-the README Development section.
+`python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML`.
+The suite passes on Python 3.9 with only the constrained PyYAML installed. The
+full constrained OCI CLI, which the `Demo tests` CI check installs, needs Python
+3.11 or later for its `pycparser` and `multidict` pins; local checks do not install
+it. If a change or regenerated constraints raise either minimum, update this
+section and the README Development section.
 The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 

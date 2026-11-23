@@ -165,8 +165,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `adoption_bundle.py`, `helmfile_transaction.py`, the `verify-frozen-manifests`
   Helm post-renderer, the `frozen-transaction` and `adoption-bundle` rehearsals,
   their CI step and `docs/helmfile-bundles.md`. `helmfile_tools.py` no longer adds
-  the post-renderer to the toolchain, and the `adoption` CI job no longer installs
-  `cryptography`.
+  the post-renderer to the toolchain. No script imports `cryptography` any more: the
+  `adoption` CI job no longer installs it, and local checks need only PyYAML on
+  Python 3.9 or later instead of Python 3.11.
   (fixes [#99](https://github.com/jaegertracing/jaeger-demo/issues/99))
 
 ### Security
