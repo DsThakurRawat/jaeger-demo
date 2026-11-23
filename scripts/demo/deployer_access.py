@@ -82,6 +82,9 @@ def chart_requests(records):
             verbs.add("patch")  # Helm applies a hook by patch when the release uses server-side apply
         if name.startswith("sh.helm.release.v1."):
             verbs.add("list")  # helm status, history and upgrade list the release records
+            # Helm numbers every revision. Access that names today's revisions passes
+            # until the next upgrade and then fails part-way, so ask for the kind.
+            name = ""
         else:
             verbs |= {"list", "watch"}  # helm --wait and kubectl rollout watch the kind
             verbs.add("delete")  # Helm deletes an object when a chart stops rendering it
@@ -259,13 +262,20 @@ def documents(text):
     return items
 
 
+def create(reviews, run=subprocess.run):
+    """Send the reviews through kubectl and return the cluster's answers in order."""
+    # One request per review. The timeout bounds each one, so a hung API cannot hold the job.
+    result = run(["kubectl", "create", "--request-timeout=30s", "-f", "-", "-o", "json"], text=True,
+                 capture_output=True, input=json.dumps({"apiVersion": "v1", "kind": "List", "items": reviews}))
+    if result.returncode != 0:
+        # Say why: an expired credential, an unreachable API and a throttled client look alike otherwise.
+        raise ValueError("kubectl could not complete the access reviews: "
+                         + (result.stderr.strip() or "exit status %d" % result.returncode))
+    return documents(result.stdout)
+
+
 def check(identity, user, run=None, groups=(), only_required=False):
     """Return the requests whose live answer differs from the committed role."""
-    def create(reviews):
-        result = subprocess.run(["kubectl", "create", "-f", "-", "-o", "json"], check=True, text=True,
-                                capture_output=True, input=json.dumps({"apiVersion": "v1", "kind": "List", "items": reviews}))
-        return documents(result.stdout)
-
     expected = [(request, True) for request in required(identity)]
     if not only_required:
         expected += [(request, False) for request in denied(identity)]
