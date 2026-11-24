@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import yaml
+
 import chart_archives
 
 
@@ -150,6 +152,109 @@ class ChartArchiveTests(unittest.TestCase):
             (charts / "kafka-26.6.2.tgz").unlink()
             self.assertIn("set differs", check()[1])
             self.assertEqual(1, chart_archives.main(["dependencies", str(Path(temp) / "missing")]))
+
+
+class LockedStateTests(unittest.TestCase):
+    """locked_state() on a copy of the real Helmfile and pins, with a fake Helm pull."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "root"
+        for path in ("helmfile.yaml", "examples/oci/deploy-all.sh", "examples/otel-demo/deploy-all.sh"):
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_bytes((chart_archives.ROOT / path).read_bytes())
+        (self.root / "scripts/demo").mkdir(parents=True)
+        self.dest = self.root / ".tools/chart-archives"
+        self.dest.mkdir(parents=True)
+        self.tampered = set()
+        names = {f"{name}-{chart_archives.pin(self.root, variable)}.tgz" for _, variable, name, _ in chart_archives.CHARTS}
+        self.lock = {"charts": {n: sha(b"archive " + n.encode()) for n in names}, "jaegerDependencies": {}}
+        self.write_lock()
+
+    def write_lock(self):
+        (self.root / chart_archives.LOCK).write_text(json.dumps(self.lock))
+
+    def run_helm(self, args, **kwargs):
+        chart, version = args[2], args[args.index("--version") + 1]
+        name = f"{chart}-{version}.tgz"
+        body = b"tampered" if chart in self.tampered else b"archive " + name.encode()
+        (Path(args[args.index("--destination") + 1]) / name).write_bytes(body)
+        return subprocess.CompletedProcess(args, 0)
+
+    def state(self):
+        return chart_archives.locked_state(self.root, self.dest, run=self.run_helm)
+
+    def test_only_chart_fields_and_repositories_differ_from_helmfile(self):
+        original = yaml.safe_load((self.root / "helmfile.yaml").read_text())
+        derived = yaml.safe_load(self.state().read_text())
+        self.assertEqual((self.root / chart_archives.LOCKED_STATE).resolve(), self.state())
+        self.assertNotIn("repositories", derived)
+        self.assertEqual({k: v for k, v in original.items() if k not in ("repositories", "releases")},
+                         {k: v for k, v in derived.items() if k != "releases"})
+        self.assertEqual(len(original["releases"]), len(derived["releases"]))
+        locked = 0
+        for before, after in zip(original["releases"], derived["releases"]):
+            self.assertEqual({k: v for k, v in before.items() if k != "chart"},
+                             {k: v for k, v in after.items() if k != "chart"})
+            if before["chart"].startswith("./"):
+                self.assertEqual(before["chart"], after["chart"])
+                continue
+            locked += 1
+            name = before["chart"].split("/")[1]
+            archive = self.root / after["chart"]
+            self.assertTrue(after["chart"].startswith("./") and after["chart"].endswith(f"/{name}-{before['version']}.tgz"))
+            self.assertEqual(b"archive " + archive.name.encode(), archive.read_bytes())
+        self.assertEqual(4, locked)
+
+    def test_local_jaeger_chart_path_is_unchanged(self):
+        derived = yaml.safe_load(self.state().read_text())
+        jaegers = [r["chart"] for r in derived["releases"] if r["name"] == "jaeger"]
+        self.assertEqual(["./.tools/helm-charts/charts/jaeger"] * 2, jaegers)
+
+    def test_version_mismatch_between_helmfile_lock_and_pin_is_refused(self):
+        for label, mutate in (("helmfile", lambda: self.edit_helmfile('version: "3.10.0"', 'version: "3.9.0"')),
+                              ("pin", lambda: self.edit_pin("examples/oci/deploy-all.sh", "93.6.1", "93.6.0")),
+                              ("lock", lambda: self.drop_lock("opensearch-dashboards-3.10.0.tgz"))):
+            with self.subTest(label), self.assertRaisesRegex(ValueError, "differs from its deploy-all.sh pin or lock entry"):
+                self.setUp()
+                mutate()
+                self.state()
+
+    def edit_helmfile(self, old, new):
+        path = self.root / "helmfile.yaml"
+        path.write_text(path.read_text().replace(old, new, 1))
+
+    def edit_pin(self, name, old, new):
+        path = self.root / name
+        path.write_text(path.read_text().replace(old, new, 1))
+
+    def drop_lock(self, name):
+        del self.lock["charts"][name]
+        self.write_lock()
+
+    def test_unlocked_chart_or_repository_is_refused(self):
+        self.edit_helmfile("chart: opensearch/opensearch\n", "chart: opensearch/other\n")
+        with self.assertRaisesRegex(ValueError, "unlocked chart"):
+            self.state()
+        self.setUp()
+        self.edit_helmfile("https://opensearch-project.github.io/helm-charts", "https://example.com/charts")
+        with self.assertRaisesRegex(ValueError, "not the locked publisher"):
+            self.state()
+
+    def test_an_archive_with_another_hash_is_refused_deleted_and_no_state_written(self):
+        self.tampered.add("opensearch-dashboards")
+        with self.assertRaisesRegex(ValueError, "differs from approved SHA-256: opensearch-dashboards-3.10.0.tgz"):
+            self.state()
+        self.assertEqual([], [p for p in self.dest.rglob("opensearch-dashboards-*.tgz")])
+        self.assertFalse((self.root / chart_archives.LOCKED_STATE).exists())
+
+    def test_state_subcommand_writes_the_derived_state(self):
+        stdout = io.StringIO()
+        with mock.patch.object(chart_archives, "ROOT", self.root), \
+                mock.patch.object(chart_archives.subprocess, "run", self.run_helm), contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, chart_archives.main(["state", str(self.dest)]))
+        self.assertEqual(str((self.root / chart_archives.LOCKED_STATE).resolve()), stdout.getvalue().strip())
 
 
 if __name__ == "__main__":

@@ -47,6 +47,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
+  pulls each repository chart through the existing SHA-256 check, requires its
+  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
+  `.helmfile-locked.yaml` with local archive paths and no repositories;
+  `make validate` renders from it. A changed archive is refused and deleted.
+  (PR link to be added,
+  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
+
 - `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
   owner and record that it is the retired community ingress-nginx, installed from
   its static manifest, without publishing the exact version. The replacement and

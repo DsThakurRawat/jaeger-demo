@@ -13,6 +13,8 @@ mkdir -p .tools
 # shellcheck source=./scripts/demo/jaeger-chart.sh
 source scripts/demo/jaeger-chart.sh
 prepare_jaeger_chart "$root/.tools/helm-charts"
+# The script-era reference renders use these repository aliases. The Helmfile side
+# renders from .helmfile-locked.yaml, which equivalence.py derives from the chart lock.
 helmfile -f helmfile.yaml repos
 python3 scripts/demo/rehearsals/helmfile-applications/equivalence.py --validate
 

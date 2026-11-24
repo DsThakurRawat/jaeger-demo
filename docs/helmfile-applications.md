@@ -13,7 +13,7 @@
 | OTel Jaeger | `jaeger/jaeger` | `opensearch/opensearch` stores traces |
 | OTel application | `otel-demo/otel-demo` | `opensearch/opensearch` and `jaeger/jaeger` supply storage and ingestion |
 
-The chart pins match the extracted deployment scripts. Both Jaeger releases use the Git revision declared in `scripts/demo/jaeger-chart.sh`, plus its chart's locked dependencies. The state reads the existing Jaeger config and UI files with Helm's `--set-file` handling. Both Jaeger releases retain atomic upgrades. OpenSearch and Dashboards retain their non-atomic upgrade behavior and existing namespace and storage settings.
+The chart pins match the extracted deployment scripts. Helmfile installs only archives whose SHA-256 equals `scripts/demo/chart-archives.lock.json`: `python3 scripts/demo/chart_archives.py state .tools/chart-archives` derives the ignored `.helmfile-locked.yaml` from `helmfile.yaml`, replacing only each repository `chart:` with the verified local archive and dropping `repositories:`. Use `-f .helmfile-locked.yaml` to render or apply the locked charts; an archive with another digest is refused and deleted. Both Jaeger releases use the Git revision declared in `scripts/demo/jaeger-chart.sh`, plus its chart's locked dependencies. The state reads the existing Jaeger config and UI files with Helm's `--set-file` handling. Both Jaeger releases retain atomic upgrades. OpenSearch and Dashboards retain their non-atomic upgrade behavior and existing namespace and storage settings.
 
 ## Render a component
 
@@ -24,7 +24,8 @@ export KUBECONFIG=/dev/null
 mkdir -p .tools
 source scripts/demo/jaeger-chart.sh
 prepare_jaeger_chart "$PWD/.tools/helm-charts"
-helmfile -f helmfile.yaml repos
+mkdir -p .tools/chart-archives
+python3 scripts/demo/chart_archives.py state .tools/chart-archives
 ```
 
 Pass the exact image values from the reviewed inputs. The following example illustrates the OTel stack with synthetic tags suitable for rendering.
@@ -46,7 +47,7 @@ Save the example as `.tools/images.yaml`. For an OCI or all-stack render, supply
 
 ```bash
 python3 scripts/demo/helmfile_selection.py --stack otel --component otel-demo
-helmfile --file helmfile.yaml --state-values-file .tools/images.yaml \
+helmfile --file .helmfile-locked.yaml --state-values-file .tools/images.yaml \
   --selector stack=otel,component=otel-demo --skip-deps template \
   --include-transitive-needs --include-crds --kube-version 1.37.0
 ```
