@@ -20,6 +20,17 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-24
+
+### Changed
+
+- `docs/MIGRATION.md` records the retirement of the leftovers that executor
+  retirement step 16 lists (the Stage 1 handover grants, the `demo-plan`
+  environment with its identity, and the published executor images) and the
+  evidence for the first scheduled run after the removals.
+  ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
 ## 2026-11-23
 
 ### Added
