@@ -66,6 +66,11 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
     the hosted Dashboards route is public, so the Dev Tools console and Index
     Management are disabled. Other bundled plugins can still write to the
     cluster; do not treat the hosted Dashboards as read-only.
+    The Dashboards container is Ready only when its status API
+    (`/api/status` on port 5601) answers 200. While Dashboards starts, a
+    placeholder server on that port answers every path with 503, so the
+    chart's port check reported Ready too early. Only the readiness probe
+    changes; the startup and liveness probes keep the chart's port check.
     Workspaces and Explore (the new Discover, with PPL) are enabled. A
     `workspace-bootstrap` sidecar in the Dashboards pod checks every minute
     (every 15 seconds while waiting) that the Observability workspace and its
@@ -184,6 +189,9 @@ OpenSearch inputs change, it upgrades the existing OpenSearch StatefulSet and
 Dashboards Deployment in that order. It checks the live source PVC binding
 before and after the operation, waits for readiness, verifies the running
 database and public Dashboards versions, and sends a fresh trace through Jaeger.
+The public Dashboards status is read up to 30 times, two seconds apart, while
+the route answers 502, 503 or 504 or the connection fails; after that the
+OpenSearch component fails with the last status.
 The job creates no snapshot, restore PVC or restore Pod. Routine upgrades
 preserve storage. If an incompatible database change makes historical traces
 unusable, recovery of those traces is not guaranteed. Pause further updates

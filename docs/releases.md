@@ -147,7 +147,7 @@ first manual install creates the ConfigMap.
 
 | Component | Helm releases | Daily action and checks |
 | --- | --- | --- |
-| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. Check the database and Dashboards versions against each chart's application version and write/read a fresh trace before recording success. After a Dashboards rollout, also run the [console and menu check](../examples/otel-demo/README.md#verifying-the-deployment). |
+| OpenSearch | `opensearch/opensearch`, `opensearch/opensearch-dashboards` | On input changes, upgrade OpenSearch on its existing PVC, wait for the StatefulSet, then upgrade Dashboards and wait for its Deployment. The Dashboards Pod is Ready only when its status API answers 200. Check the database and Dashboards versions against each chart's application version and write/read a fresh trace before recording success. The public Dashboards status is read up to 30 times, two seconds apart, while the route answers 502, 503 or 504 or the connection fails. After a Dashboards rollout, also run the [console and menu check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OTel Jaeger and HotROD | `jaeger/jaeger` | Refresh published snapshots, verify collector and HotROD endpoints, generator rollout, public query and UI. Check Helm ownership and update HotROD in place. An immutable selector change needs a separate reviewed migration. |
 | OTel sample application | `otel-demo/otel-demo` | On input changes, upgrade the reviewed chart and values, then verify the collector agent, frontend and load generator. After a rollout, also run the [control-interface check](../examples/otel-demo/README.md#verifying-the-deployment). |
 | OCI Jaeger and HotROD | `default/jaeger` | Refresh published snapshots, verify Jaeger, HotROD and generator rollouts, public HotROD dispatch and the Jaeger services API. Check the UI during post-run verification. |
@@ -230,6 +230,11 @@ What a failed run leaves behind:
 - A failed component's fingerprint is not recorded, so the next run selects and
   retries it. Components that succeeded in the same run keep their new keys.
 - An OpenSearch failure blocks the dependent OTel components in that run.
+- An OpenSearch component that fails with `Public Dashboards status was
+  unavailable after 30 attempts` had already upgraded both releases: the public
+  route kept answering 502, 503 or 504, or the connection failed, for the whole
+  wait. The message ends with the last status. Check the Dashboards Pod's
+  readiness and the ingress before a rerun.
 - A scheduled run refuses a release in a `pending-*` state, and a failed Jaeger
   release, until an operator repairs it.
 - A run that stops at **Verify the deployment identity's access** changed

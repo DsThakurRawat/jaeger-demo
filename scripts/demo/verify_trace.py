@@ -59,6 +59,26 @@ def check_trace(collector, query, attempts=30):
     raise RuntimeError("Fresh deployment trace could not be written and retrieved")
 
 
+def dashboards_status(url, attempts=30):
+    """Read the public Dashboards status, waiting while the route does not serve it yet."""
+    # A Ready Pod serves the status API, but the ingress controller and the load
+    # balancer can still answer 502, 503 or 504, or drop the connection, until
+    # they route to it. Any other HTTP status is an answer and fails at once.
+    last = None
+    for _ in range(attempts):
+        try:
+            return request(url)
+        except urllib.error.HTTPError as error:
+            if error.code not in (502, 503, 504):
+                raise
+            last = f"HTTP {error.code} {error.reason}"
+        except OSError as error:
+            # URLError, connection resets and timeouts are all OSError.
+            last = f"{type(error).__name__}: {error}"
+        time.sleep(2)
+    raise RuntimeError(f"Public Dashboards status was unavailable after {attempts} attempts; last result: {last}")
+
+
 def deployed_app_version(release, chart_version):
     # A chart release can repackage an unchanged application, so the chart pin
     # identifies the release and its recorded appVersion identifies the software.
@@ -79,7 +99,7 @@ def verify(opensearch_chart, dashboards_chart):
     if json.loads(output.stdout)["version"]["number"] != version:
         raise RuntimeError("Live OpenSearch version does not match the deployed chart's application version")
     version = deployed_app_version("opensearch-dashboards", dashboards_chart)
-    if request("https://opensearch.demo.jaegertracing.io/api/status")["version"]["number"] != version:
+    if dashboards_status("https://opensearch.demo.jaegertracing.io/api/status")["version"]["number"] != version:
         raise RuntimeError("Public Dashboards version does not match the deployed chart's application version")
     with ExitStack() as stack:
         for service, ports in (("jaeger-collector", "14318:4318"), ("jaeger-query", "16687:16686")):
