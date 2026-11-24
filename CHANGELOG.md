@@ -30,6 +30,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/releases.md` states that a waiting writer replaced by a newer one in the
+  shared concurrency group is accepted behavior, and what an operator does when
+  the run observer reports a scheduled run cancelled that way. The workflows are
+  unchanged: GitHub's `queue: max` setting would keep every waiting run, but no
+  released actionlint accepts the key yet. A workflow test asserts the setting on
+  all three writers.
+  ([#129](https://github.com/jaegertracing/jaeger-demo/pull/129),
+  refs [#102](https://github.com/jaegertracing/jaeger-demo/issues/102))
+
 - A manual **Deploy Jaeger Demo to OKE** run that leaves `image_tag` empty and finds
   no published snapshot for upstream `main` HEAD still fails each selected Jaeger
   component before its release is changed, but the error now says that HEAD has no
