@@ -32,6 +32,9 @@ OCI_ENV = {name: '${{ secrets.%s }}' % name for name in (
 KUBECTL_CONFIGURATION = re.compile(r'oracle-actions/configure-kubectl-oke@[0-9a-f]{40}')
 WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml')
 PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
+# Both constructs hand over every secret without naming one. Expression functions
+# ignore case, and so does this search.
+WHOLE_SECRETS = re.compile(r'tojson\(\s*secrets\s*\)|secrets\s*:\s*inherit', re.IGNORECASE)
 HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML '
                   '-r scripts/demo/oci-cli-hashes.txt')
 
@@ -39,7 +42,8 @@ HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --
 def oci_credential_violations(workflow):
     """List each place a parsed workflow passes an OCI secret other than the env of a step that may hold it."""
     def mentions(value):
-        return 'OCI_CLI_' in str(value)
+        # GitHub resolves secret names without regard to case, so secrets.oci_cli_key_content is the key too.
+        return 'OCI_CLI_' in str(value).upper()
 
     found = []
     if mentions({key: value for key, value in workflow.items() if key != 'jobs'}):
@@ -231,8 +235,7 @@ class WorkflowTests(unittest.TestCase):
                 source = path.read_text()
                 workflow = yaml.safe_load(source)
                 self.assertEqual([], oci_credential_violations(workflow))
-                # Neither construct names a secret, and both hand over all of them.
-                self.assertIsNone(re.search(r'toJSON\(\s*secrets\s*\)|secrets\s*:\s*inherit', source))
+                self.assertIsNone(WHOLE_SECRETS.search(source))
                 steps = [step for job in workflow['jobs'].values() for step in job.get('steps') or []]
                 holders = [step for step in steps if 'OCI_CLI_KEY_CONTENT' in (step.get('env') or {})]
                 self.assertEqual(receiving.get(path.name, []), [step['name'] for step in holders])
@@ -287,13 +290,35 @@ class WorkflowTests(unittest.TestCase):
         def crossed_names(candidate):
             step(candidate, 'Reconcile demo components')['env']['OCI_CLI_USER'] = OCI_ENV['OCI_CLI_TENANCY']
 
+        # Secret names resolve without regard to case.
+        def lowercase_job_env(candidate):
+            candidate['jobs']['deploy']['env']['SIGNING_KEY'] = '${{ secrets.oci_cli_key_content }}'
+
+        def mixed_case_notification_action(candidate):
+            step(candidate, 'Send detailed Slack notification on failure')['env']['SIGNING_KEY'] = (
+                '${{ secrets.Oci_Cli_Key_Content }}')
+
+        def lowercase_script_interpolation(candidate):
+            step(candidate, 'Verify OCI CLI version')['run'] += ' "${{ secrets.oci_cli_user }}"'
+
+        def lowercase_reference_in_a_holder(candidate):
+            step(candidate, 'Reconcile demo components')['env']['OCI_CLI_USER'] = '${{ secrets.oci_cli_user }}'
+
         for change in (job_env, job_env_under_another_name, workflow_env, job_container, notification_action,
                        helm_action, checkout_input, unpinned_configuration, script_interpolation, renamed_variable,
-                       partial_block, crossed_names):
+                       partial_block, crossed_names, lowercase_job_env, mixed_case_notification_action,
+                       lowercase_script_interpolation, lowercase_reference_in_a_holder):
             with self.subTest(change=change.__name__):
                 candidate = copy.deepcopy(workflow)
                 change(candidate)
                 self.assertNotEqual([], oci_credential_violations(candidate))
+
+    def test_whole_secrets_search_ignores_case(self):
+        for text in ('${{ toJSON(secrets) }}', '${{ tojson(secrets) }}', '${{ TOJSON( secrets ) }}',
+                     'secrets: inherit', 'Secrets : Inherit'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(WHOLE_SECRETS.search(text))
+        self.assertIsNone(WHOLE_SECRETS.search('${{ secrets.SLACK_WEBHOOK }}'))
 
     def test_oci_cli_is_installed_with_required_hashes_before_any_step_holds_the_api_key(self):
         for filename in WRITERS:
