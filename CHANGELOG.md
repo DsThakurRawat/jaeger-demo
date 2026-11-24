@@ -28,7 +28,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   retirement step 16 lists (the Stage 1 handover grants, the `demo-plan`
   environment with its identity, and the published executor images) and the
   evidence for the first scheduled run after the removals.
-  (refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+  ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
 ## 2026-11-23
 
