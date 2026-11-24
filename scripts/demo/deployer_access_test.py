@@ -202,7 +202,7 @@ class DeployerAccessTests(unittest.TestCase):
                 self.assertEqual({subject["kind"] for subject in item["subjects"]}, {"User"})
                 expected = [SCHEDULED_USER, MANUAL_USER] if item["metadata"]["name"] == d.DEPLOYER else [MANUAL_USER]
                 self.assertEqual(users, expected)
-        # Until the schedule deploys directly, only the reviewer-gated identity is bound.
+        # Without a scheduled user, every binding names the reviewer-gated identity only.
         manual_only = d.bindings(MANUAL_USER)["items"]
         self.assertEqual(len(manual_only), len(ROLES))
         for item in manual_only:
