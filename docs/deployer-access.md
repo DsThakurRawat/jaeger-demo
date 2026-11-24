@@ -289,6 +289,43 @@ record. The first manual upgrade of each component through **Deploy Jaeger Demo 
 OKE** is the acceptance of the role, starting with `oci` / `monitoring`, which is
 the upgrade that failed in #87.
 
+### Tested against a real API server
+
+The `deployer-access` job in [ci.yml](../.github/workflows/ci.yml) runs
+[the deployer access rehearsal](../scripts/demo/rehearsals/deployer-access/exercise.py)
+on every pull request and push to `main`, on a disposable kind cluster at the
+Kubernetes version of the toolchain lock. It uses no production credential.
+As the cluster administrator it:
+
+1. creates the `jaeger`, `opensearch` and `otel-demo` namespaces and applies
+   `ops/rbac/deployer.yaml`, first with `--dry-run=server`, so the API server
+   accepts every rule, including the empty resource name of the `escalate` rules;
+2. binds a fixture manual user and a fixture scheduled user with the `bindings`
+   output, and requires `check --user` to report `0 difference(s)` for both
+   identities, required and denied requests alike;
+3. under a kubeconfig that impersonates each user, requires `kubectl auth whoami`
+   to name that user, `check --self` to report `0 difference(s)`, and Helm to be
+   refused as that user;
+4. removes the rule for the five named `kube-system` Services and requires
+   `check` to report exactly those requests as `missing`, then grants an extra
+   `get` on `kube-system` Secrets and requires it as `must not be allowed`;
+5. applies the two Services of `examples/oci/prometheus-svc.yaml` and installs
+   `default/prometheus` from the lock-verified archive with the values and flags
+   of `examples/oci/deploy-all.sh`, as production already holds them.
+
+Then, as the scheduled user holding only this role, it runs
+`examples/oci/deploy-all.sh upgrade` with the environment `deploy.py` gives a
+scheduled `oci` / `monitoring` run, public smoke checks off. That is Helm's
+default `helm upgrade --wait` with the chart's hooks, and revision 2 must be
+`deployed`. Last, Helm must be refused, as that user, an install into
+`kube-system` and an upgrade that adds a ConfigMap there, both with
+`--dry-run=server`. The test matches the refusal on the user, verb, resource and
+namespace, and the release history must not change.
+
+The job does not prove the production cluster: it shows nothing about the
+bindings an administrator applied, OCI IAM policies, or group grants. The
+production check above still applies.
+
 ## Changing the role
 
 `scripts/demo/deployer_access.py` builds the required access from two sources: the
@@ -312,9 +349,13 @@ the next upgrade and needs the access to do so; remove the record by hand once n
 release needs it. So a chart
 bump that adds a kind, a hook or a cluster-scoped object changes the inventory and
 the role in the same pull request, and the reviewer sees the access change. A new
-`kubectl` or `helm` call in a script needs a row in the module's table. After the
-change merges, an administrator applies the file again and reruns `check`. A merge
-alone does not change the cluster.
+`kubectl` or `helm` call in a script needs a row in the module's table. The
+`deployer-access` CI job then applies the changed file to a real API server and
+runs the scheduled monitoring upgrade under it
+([tested against a real API server](#tested-against-a-real-api-server)), so a
+rule the server rejects, or a monitoring upgrade the role cannot complete, fails
+the pull request. After the change merges, an administrator applies the file again and
+reruns `check`. A merge alone does not change the cluster.
 
 The order depends on the direction of the change:
 

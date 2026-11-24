@@ -675,6 +675,54 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(job_limit - step_limit, 30)
         self.assertLess(job_limit, 360)
 
+    def test_deployer_access_job_follows_adoption_with_a_limit_and_no_helm_action(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        names = list(jobs)
+        self.assertEqual(names.index('adoption') + 1, names.index('deployer-access'))
+        job = jobs['deployer-access']
+        self.assertIsInstance(job['timeout-minutes'], int)
+        for step in job['steps']:
+            with self.subTest(step=step.get('name', step.get('uses'))):
+                # Helm comes from the toolchain lock through helmfile_tools.py run.
+                self.assertFalse(str(step.get('uses', '')).startswith('azure/setup-helm'))
+                if 'uses' in step:
+                    self.assertIs(False, step['with']['persist-credentials'])
+        self.assertNotIn('cryptography', yaml.safe_dump(job))
+
+    def test_deployer_access_job_uses_the_pinned_kind_node_and_a_literal_kubectl_digest(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+
+        def runs(name):
+            return '\n'.join(step.get('run', '') for step in jobs[name]['steps'])
+
+        image = re.compile(r'kindest/node:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}')
+        kind = re.compile(r"releases/download/(v\d+\.\d+\.\d+)/kind-linux-amd64\n.*echo '([0-9a-f]{64})  kind'")
+        self.assertEqual(1, len(set(image.findall(runs('deployer-access')))))
+        self.assertEqual(set(image.findall(runs('adoption'))), set(image.findall(runs('deployer-access'))))
+        self.assertEqual(kind.findall(runs('adoption')), kind.findall(runs('deployer-access')))
+        self.assertEqual([('v0.33.0', 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d')],
+                         kind.findall(runs('deployer-access')))
+        self.assertIn('--name jaeger-demo-deployer-fixture', runs('deployer-access'))
+        install, = [step for step in jobs['deployer-access']['steps'] if '/bin/linux/amd64/kubectl' in step.get('run', '')]
+        self.assertRegex(install['run'], r"echo '[0-9a-f]{64}  bin/kubectl' \| sha256sum --check")
+        # A digest fetched beside the binary proves nothing about the binary.
+        self.assertNotIn('.sha256', install['run'])
+
+    def test_deployer_access_job_runs_the_rehearsal_on_its_fixed_context(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['deployer-access']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        rehearsal, = [run for run in runs if 'rehearsals/deployer-access/exercise.py' in run]
+        self.assertTrue(rehearsal.startswith('python3 scripts/demo/helmfile_tools.py run -- python3 '
+                                             'scripts/demo/rehearsals/deployer-access/exercise.py'))
+        self.assertIn('--context kind-jaeger-demo-deployer-fixture', rehearsal)
+        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
+        step, = [step for step in job['steps'] if step.get('run') == rehearsal]
+        self.assertIsInstance(step.get('timeout-minutes'), int)
+        self.assertLess(step['timeout-minutes'], job['timeout-minutes'])
+        source = (ROOT / 'scripts/demo/rehearsals/deployer-access/exercise.py').read_text()
+        self.assertIn('CONTEXT = "kind-jaeger-demo-deployer-fixture"', source)
+        self.assertIn('choices=(CONTEXT,)', source)
+
 
 if __name__ == '__main__':
     unittest.main()

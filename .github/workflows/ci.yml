@@ -107,6 +107,43 @@ jobs:
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/opensearch-reset/exercise.py \
           --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" --context kind-jaeger-demo-reset-fixture
 
+  # The committed deployer role on a real API server: its check against live answers,
+  # and the scheduled monitoring upgrade as an identity that holds only the role.
+  deployer-access:
+    name: Deployer role against a real API server
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      with:
+        persist-credentials: false
+    - name: Install the constrained YAML dependency
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
+    # The digest is written here, so the download origin cannot vouch for itself.
+    - name: Install the pinned kubectl
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 5
+      run: |
+        mkdir -p bin
+        curl --fail --location --silent --show-error --output bin/kubectl https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl
+        echo '6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f  bin/kubectl' | sha256sum --check
+        chmod u+x bin/kubectl
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+    - name: Create the disposable Kubernetes fixture
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 10
+      run: |
+        curl --fail --location --silent --show-error --output kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+        echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind' | sha256sum --check
+        chmod u+x kind
+        ./kind create cluster --name jaeger-demo-deployer-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Check the role and run the scheduled monitoring upgrade as its holder
+      timeout-minutes: 30
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/deployer-access/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-deployer-fixture
+
   render-diff:
     name: Rendered resource changes
     if: github.event_name == 'pull_request'

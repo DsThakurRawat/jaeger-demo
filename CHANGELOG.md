@@ -24,6 +24,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
+  kind cluster without production credentials: the API server accepts the role,
+  `deployer_access.py check` finds no difference for either identity and catches
+  a removed rule and an extra grant, and the scheduled `oci` / `monitoring`
+  upgrade through `examples/oci/deploy-all.sh`, Helm's default `--wait` and hooks
+  included, succeeds as a user holding only the role. A role change that breaks
+  that upgrade now fails its pull request.
+  (fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
 - **Reset OTel Demo OpenSearch Trace Data**, a manual workflow for the disposable
   traces of the OTel demo. `list` prints what a reset would delete. `reset` needs
   a typed acknowledgment and a `demo-apply` reviewer, deletes only the daily
