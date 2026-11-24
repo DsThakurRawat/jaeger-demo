@@ -36,7 +36,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   fix: dispatch again with `image_tag=latest` or an explicit published SHA.
   `docs/releases.md` describes the failure. A missing explicit tag keeps its
   earlier message.
-  (fixes [#110](https://github.com/jaegertracing/jaeger-demo/issues/110))
+  ([#127](https://github.com/jaegertracing/jaeger-demo/pull/127),
+  fixes [#110](https://github.com/jaegertracing/jaeger-demo/issues/110))
 
 - The runbooks no longer read as if the executor retirement that
   `docs/MIGRATION.md` records were still ahead, or ask for the retired read-only
