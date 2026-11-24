@@ -30,6 +30,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The `deployer_access.py bindings --scheduled-user` help says what omitting the
+  flag does instead of telling the operator to omit it, and
+  `docs/deployer-access.md` warns that applying the manual-only bindings where
+  both identities are bound removes the scheduled identity.
+  (fixes [#125](https://github.com/jaegertracing/jaeger-demo/issues/125))
+
 - The runbooks no longer read as if the executor retirement that
   `docs/MIGRATION.md` records were still ahead, or ask for the retired read-only
   plan identity: `docs/cutover.md` drops the
