@@ -30,6 +30,9 @@ def step_script(name):
 OCI_ENV = {name: '${{ secrets.%s }}' % name for name in (
     'OCI_CLI_USER', 'OCI_CLI_TENANCY', 'OCI_CLI_FINGERPRINT', 'OCI_CLI_KEY_CONTENT', 'OCI_CLI_REGION')}
 KUBECTL_CONFIGURATION = re.compile(r'oracle-actions/configure-kubectl-oke@[0-9a-f]{40}')
+SLACK_NOTIFICATION = re.compile(r'rtCamp/action-slack-notify@[0-9a-f]{40}')
+EXPRESSION = re.compile(r'\$\{\{(.*?)\}\}', re.DOTALL)
+USES_SECRETS = re.compile(r'\bsecrets\b', re.IGNORECASE)
 WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml')
 PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
 # Both constructs hand over every secret without naming one. Expression functions
@@ -39,13 +42,48 @@ HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --
                   '-r scripts/demo/oci-cli-hashes.txt')
 
 
+def secret_references(node, path=()):
+    """Yield (path, value) for every string whose expression reads the secrets context, in any form."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from secret_references(value, path + (key,))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from secret_references(value, path + (index,))
+    elif isinstance(node, str) and any(USES_SECRETS.search(expression) for expression in EXPRESSION.findall(node)):
+        yield path, node
+
+
+def allowed_secret_reference(step, place, key, value):
+    """The only secret references the workflows need. A new one needs a reason here."""
+    uses = step.get('uses', '')
+    if place == 'env' and OCI_ENV.get(key) == value:
+        return True  # the five OCI secrets, which the checks below confine to the steps that may hold them
+    if place == 'with' and key == 'cluster' and value == '${{ secrets.OKE_CLUSTER_OCID }}':
+        return bool(KUBECTL_CONFIGURATION.fullmatch(uses))
+    if place == 'env' and key == 'SLACK_WEBHOOK' and value == '${{ secrets.SLACK_WEBHOOK_URL }}':
+        return bool(SLACK_NOTIFICATION.fullmatch(uses))
+    return False
+
+
 def oci_credential_violations(workflow):
-    """List each place a parsed workflow passes an OCI secret other than the env of a step that may hold it."""
+    """List each place a parsed workflow passes an OCI secret other than the env of a step that may hold it.
+
+    Searching for the OCI names alone misses a name built at run time, such as
+    secrets[format('{0}_CLI_KEY_CONTENT', 'OCI')], so every read of the secrets
+    context must also be one that allowed_secret_reference names.
+    """
     def mentions(value):
         # GitHub resolves secret names without regard to case, so secrets.oci_cli_key_content is the key too.
         return 'OCI_CLI_' in str(value).upper()
 
     found = []
+    jobs = workflow.get('jobs') or {}
+    for path, value in secret_references(workflow):
+        is_step_value = len(path) == 6 and path[0] == 'jobs' and path[2] == 'steps' and path[4] in ('env', 'with')
+        step = jobs[path[1]]['steps'][path[3]] if is_step_value else {}
+        if not (is_step_value and allowed_secret_reference(step, path[4], path[5], value)):
+            found.append('/'.join(str(part) for part in path) + ': a secret reference outside the allowed places')
     if mentions({key: value for key, value in workflow.items() if key != 'jobs'}):
         found.append('workflow level')
     for job_name, job in (workflow.get('jobs') or {}).items():
@@ -333,10 +371,30 @@ class WorkflowTests(unittest.TestCase):
         def lowercase_reference_in_a_holder(candidate):
             step(candidate, 'Reconcile demo components')['env']['OCI_CLI_USER'] = '${{ secrets.oci_cli_user }}'
 
+        # A name built at run time does not spell OCI_CLI_ anywhere.
+        def name_built_with_format(candidate):
+            candidate['jobs']['deploy']['env']['K'] = "${{ secrets[format('{0}_CLI_KEY_CONTENT', 'OCI')] }}"
+
+        def name_built_with_format_in_a_script(candidate):
+            step(candidate, 'Verify OCI CLI version')['run'] += (
+                " \"${{ secrets[format('{0}_CLI_{1}', 'OCI', 'KEY_CONTENT')] }}\"")
+
+        def lowercase_index_in_the_notification(candidate):
+            step(candidate, 'Send detailed Slack notification on failure')['env']['K'] = (
+                "${{ secrets['oci_cli_key_content'] }}")
+
+        def cluster_secret_given_to_another_action(candidate):
+            step(candidate, 'Install Helm')['with']['cluster'] = '${{ secrets.OKE_CLUSTER_OCID }}'
+
+        def webhook_secret_given_to_a_script(candidate):
+            step(candidate, 'Reconcile demo components')['env']['SLACK_WEBHOOK'] = '${{ secrets.SLACK_WEBHOOK_URL }}'
+
         for change in (job_env, job_env_under_another_name, workflow_env, job_container, notification_action,
                        helm_action, checkout_input, unpinned_configuration, script_interpolation, renamed_variable,
                        partial_block, crossed_names, lowercase_job_env, mixed_case_notification_action,
-                       lowercase_script_interpolation, lowercase_reference_in_a_holder):
+                       lowercase_script_interpolation, lowercase_reference_in_a_holder, name_built_with_format,
+                       name_built_with_format_in_a_script, lowercase_index_in_the_notification,
+                       cluster_secret_given_to_another_action, webhook_secret_given_to_a_script):
             with self.subTest(change=change.__name__):
                 candidate = copy.deepcopy(workflow)
                 change(candidate)

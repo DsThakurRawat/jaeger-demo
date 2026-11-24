@@ -92,7 +92,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   Helm setup and Slack notification actions no longer receive it. They install the
   OCI CLI before any of those steps with `pip install --require-hashes` from the
   new `scripts/demo/oci-cli-hashes.txt`, and the kubectl configuration action can
-  no longer download packages. The PyYAML source build stays outside hash checking
+  no longer download packages. The PyYAML source build and the action's `kubectl`
+  download stay outside hash checking
   ([deployer access](docs/deployer-access.md#oci-cli-installation)).
   ([#130](https://github.com/jaegertracing/jaeger-demo/pull/130),
   fixes [#103](https://github.com/jaegertracing/jaeger-demo/issues/103))

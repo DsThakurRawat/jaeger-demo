@@ -199,6 +199,10 @@ Hash checking does not cover the following:
   checked.
 - **Python before 3.13.** Three pins need `typing_extensions` there. The files
   do not pin it, so the install stops.
+- **kubectl.** The pinned `oracle-actions/configure-kubectl-oke` action downloads
+  `kubectl` from `dl.k8s.io` without checking a checksum, inside the step that
+  holds the key, and the later steps that hold the key run that binary. The
+  OCI CLI hashes do not cover it.
 - **The origin of the hashes.** They are what PyPI recorded when
   `scripts/utils/update-oci-cli-hashes.py` ran. They detect a later change. They
   do not show that a release was sound when it was pinned.
