@@ -12,12 +12,17 @@ readable at commit
 [`f9b54fe`](https://github.com/jaegertracing/jaeger-demo/tree/f9b54fe60b039633d00b5ea91dba6a40722e8fad)
 for anyone who needs to see what was installed.
 
+> **Carried out.** [docs/MIGRATION.md](MIGRATION.md#current-evidence-and-unresolved-gates)
+> records each step below, and each leftover that step 16 lists, as done, with its
+> time, approval and evidence. Read this document as the reference for what was
+> done and in what order, not as work still to do.
+
 A cluster administrator runs every cluster command here from a shell with a
 kubeconfig for the demo cluster. No workflow identity can run them, and none
 should: deleting admission policies and a namespace is outside the
 [deployer role](deployer-access.md). Each step names its approval. Record each
-step in the release record as it is done. Nothing in this document states that a
-step has happened.
+step in the release record as it is done. The steps themselves do not state that
+they have happened; the migration plan does.
 
 ## The rule that orders everything
 

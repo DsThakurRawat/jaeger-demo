@@ -43,10 +43,13 @@ upgrades, DNS changes or AI activation.
   for the ownership transition; tag-to-digest conversion can roll pods even when
   the image bytes match.
 - Verify the access/security plan, then provision fresh new-repository OCI access.
-  Do not copy the old private key. Prepare separate read-only plan and write-capable
-  apply identities in `demo-plan` and `demo-apply`, restricted to main. The extraction
-  workflows use the apply environment; a generated read-only plan workflow is later
-  Helmfile work. Verify permissions without deployment writes before retiring access.
+  Do not copy the old private key. Prepare the write-capable apply identity in
+  `demo-apply`, restricted to main; the extraction workflows use that environment.
+  Do not prepare a separate read-only plan identity or a `demo-plan` environment.
+  Earlier versions of this runbook asked for both, for a generated plan workflow
+  that the [migration plan](MIGRATION.md#execution-contract) retires, and no
+  workflow uses them. Verify permissions without deployment writes before retiring
+  access.
 
 The current workflows refer to these secrets: `OCI_CLI_USER`, `OCI_CLI_TENANCY`,
 `OCI_CLI_FINGERPRINT`, `OCI_CLI_KEY_CONTENT`, `OCI_CLI_REGION`,

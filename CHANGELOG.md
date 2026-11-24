@@ -24,6 +24,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The runbooks no longer read as if the executor retirement that
+  `docs/MIGRATION.md` records were still ahead, or ask for the retired read-only
+  plan identity: `docs/cutover.md` drops the
+  `demo-plan` environment from the Stage 1 access step, `docs/deployer-access.md`
+  describes the deployer role without the transition from the earlier grants,
+  `docs/executor-retirement.md` points to the evidence in `docs/MIGRATION.md`, and
+  `docs/helmfile-companions.md` marks its ownership commands as under revision.
+  ([#124](https://github.com/jaegertracing/jaeger-demo/pull/124),
+  fixes [#123](https://github.com/jaegertracing/jaeger-demo/issues/123))
+
 - `docs/MIGRATION.md` records the retirement of the leftovers that executor
   retirement step 16 lists (the Stage 1 handover grants, the `demo-plan`
   environment with its identity, and the published executor images) and the
