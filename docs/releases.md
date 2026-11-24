@@ -45,12 +45,13 @@ Do not convert image reference syntax during the ownership transition.
 A manual run that leaves the tags empty requires a published snapshot for upstream
 `main` HEAD. When there is none, typically because the upstream CI run for that
 commit did not finish, each selected Jaeger component fails before its release is
-changed, and the error names the cause. Other components selected in the same run
-still deploy, as after any component failure, so a run with more than one component
-does not leave the cluster unchanged. Dispatch again with `image_tag=latest`, which
-the resolver verifies and turns into the newest published commit tag, or with an
-explicit published commit tag. A missing explicit tag fails without this hint. Only
-the daily schedule falls back to the newest published tag on its own.
+changed, and the error names the cause. The run continues with the other selected
+components, as after any component failure, so a run that also selects a component
+other than Jaeger may change the cluster even though it fails. Dispatch again with
+`image_tag=latest`, which the resolver verifies and turns into the newest published
+commit tag, or with an explicit published commit tag. A missing explicit tag fails
+without this hint. Only the daily schedule falls back to the newest published tag
+on its own.
 
 The script reconciler can deploy OTel before OCI and continue independent
 components after a failure. The stricter OCI-before-OTel failure gate is a Helmfile
