@@ -39,7 +39,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `docs/node-pool.md` to inspect the pool, set the script without dropping other
   node metadata, and verify the next new node. Nothing applies it automatically;
   setting it on the pool is a separately approved operator action.
-  (PR link to follow, refs [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
+  ([#138](https://github.com/jaegertracing/jaeger-demo/pull/138),
+  refs [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
   ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
