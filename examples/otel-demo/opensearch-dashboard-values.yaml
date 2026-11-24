@@ -11,6 +11,22 @@ securityContext:
   runAsUser: 1000
   runAsGroup: 1000
 
+# While Dashboards starts, a placeholder server on port 5601 answers every
+# path with 503. The chart's readiness probe only checks the port, so Helm's
+# --wait returned and the Service routed visitors to a Pod that was not
+# serving yet. The status API answers 200 as soon as the real server runs,
+# whatever state its body reports, so the probe does not follow OpenSearch
+# outages. The null removes the chart's default handler, because a probe
+# accepts only one; the chart's timing stays in force. The startup and
+# liveness probes keep the chart's port check: startup includes saved object
+# migrations of no fixed length, and neither probe should restart a Pod that
+# is still starting.
+readinessProbe:
+  tcpSocket: null
+  httpGet:
+    path: /api/status
+    port: 5601
+
 config:
   opensearch_dashboards.yml: |
     server.host: 0.0.0.0

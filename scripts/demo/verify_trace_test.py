@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
+import http.client
+import io
 import json
 import unittest
 from unittest.mock import MagicMock, patch
@@ -21,6 +23,16 @@ def commands(live="3.9.0", releases=RELEASES, status="deployed"):
             return MagicMock(stdout=json.dumps({"name": args[3], "version": chart, "appVersion": app, "status": status}))
         return MagicMock(stdout=json.dumps({"version": {"number": live}}))
     return run
+
+
+def http_error(code, reason):
+    return urllib.error.HTTPError("https://opensearch.demo.jaegertracing.io/api/status", code, reason, {}, io.BytesIO())
+
+
+def http_ok(body):
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = json.dumps(body).encode()
+    return response
 
 
 class TraceVerificationTests(unittest.TestCase):
@@ -70,6 +82,73 @@ class TraceVerificationTests(unittest.TestCase):
         request.return_value = {"version": {"number": "3.7.0"}}
         with self.assertRaisesRegex(RuntimeError, "Dashboards"):
             verify_trace.verify("3.9.0", "3.9.0")
+
+    @patch("verify_trace.check_trace")
+    @patch("verify_trace.subprocess.Popen")
+    @patch("verify_trace.subprocess.run")
+    @patch("verify_trace.time.sleep")
+    @patch("verify_trace.urllib.request.urlopen")
+    def test_waits_for_a_dashboards_route_that_answers_503_after_the_rollout(self, urlopen, sleep, run, popen, check):
+        # The public route answered 503 for a short time after Helm reported the Deployment ready (#111).
+        run.side_effect = commands(live="3.9.0")
+        urlopen.side_effect = [http_error(503, "Service Unavailable"), http_ok({"version": {"number": "3.9.0"}})]
+        verify_trace.verify("3.9.0", "3.9.0")
+        self.assertEqual(["https://opensearch.demo.jaegertracing.io/api/status"] * 2,
+                         [c.args[0].full_url for c in urlopen.call_args_list])
+        sleep.assert_called_once_with(2)
+        check.assert_called_once()
+        # The version is still compared once the route answers.
+        urlopen.side_effect = [http_error(503, "Service Unavailable"), http_ok({"version": {"number": "3.7.0"}})]
+        with self.assertRaisesRegex(RuntimeError, "Dashboards version does not match"):
+            verify_trace.verify("3.9.0", "3.9.0")
+        check.assert_called_once()
+
+    @patch("verify_trace.check_trace")
+    @patch("verify_trace.subprocess.Popen")
+    @patch("verify_trace.subprocess.run")
+    @patch("verify_trace.time.sleep")
+    @patch("verify_trace.urllib.request.urlopen")
+    def test_fails_with_the_last_status_when_dashboards_stays_unavailable(self, urlopen, sleep, run, popen, check):
+        run.side_effect = commands(live="3.9.0")
+        urlopen.side_effect = lambda *args, **kwargs: (_ for _ in ()).throw(http_error(503, "Service Unavailable"))
+        with self.assertRaisesRegex(RuntimeError, r"unavailable after 30 attempts; last result: HTTP 503 Service Unavailable$"):
+            verify_trace.verify("3.9.0", "3.9.0")
+        self.assertEqual(30, urlopen.call_count)
+        self.assertEqual(30, sleep.call_count)
+        check.assert_not_called()
+        popen.assert_not_called()
+
+    @patch("verify_trace.time.sleep")
+    @patch("verify_trace.request")
+    def test_dashboards_status_retry_is_bounded_and_limited_to_unavailable_routes(self, request, sleep):
+        # Gateway statuses and connection failures are retried, and the failure names the last one.
+        request.side_effect = [http_error(502, "Bad Gateway"), urllib.error.URLError("connection refused"),
+                               http.client.RemoteDisconnected("closed"), TimeoutError("timed out"),
+                               http_error(504, "Gateway Timeout")]
+        with self.assertRaisesRegex(RuntimeError, r"after 5 attempts; last result: HTTP 504 Gateway Timeout$"):
+            verify_trace.dashboards_status("https://dashboards.test/api/status", attempts=5)
+        self.assertEqual(5, request.call_count)
+        self.assertEqual(5, sleep.call_count)
+        request.side_effect = [http_error(503, "Service Unavailable"), ConnectionResetError("reset")]
+        with self.assertRaisesRegex(RuntimeError, r"after 2 attempts; last result: ConnectionResetError: reset$"):
+            verify_trace.dashboards_status("https://dashboards.test/api/status", attempts=2)
+        request.side_effect = [urllib.error.URLError("connection refused"), {"version": {"number": "3.9.0"}}]
+        self.assertEqual({"version": {"number": "3.9.0"}},
+                         verify_trace.dashboards_status("https://dashboards.test/api/status", attempts=2))
+        # Any other HTTP status is an answer from the route, and so is an invalid body.
+        for code, reason in ((401, "Unauthorized"), (404, "Not Found"), (500, "Internal Server Error")):
+            with self.subTest(code=code):
+                request.reset_mock()
+                request.side_effect = [http_error(code, reason), {"version": {"number": "3.9.0"}}]
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    verify_trace.dashboards_status("https://dashboards.test/api/status", attempts=2)
+                self.assertEqual(code, raised.exception.code)
+                self.assertEqual(1, request.call_count)
+        request.reset_mock()
+        request.side_effect = [ValueError("not JSON"), {"version": {"number": "3.9.0"}}]
+        with self.assertRaisesRegex(ValueError, "not JSON"):
+            verify_trace.dashboards_status("https://dashboards.test/api/status", attempts=2)
+        self.assertEqual(1, request.call_count)
 
     @patch("verify_trace.check_trace")
     @patch("verify_trace.subprocess.Popen")
