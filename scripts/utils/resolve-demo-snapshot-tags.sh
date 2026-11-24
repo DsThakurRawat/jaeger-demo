@@ -14,7 +14,10 @@
 # a concrete SHA tag.
 #
 # Manual workflow_dispatch runs use the requested tag (default MAIN_SHA) and
-# fail if that tag is missing.
+# fail if that tag is missing. When the missing tag is the MAIN_SHA default, the
+# error says that upstream HEAD has no published snapshot and names the fix:
+# dispatch again with image_tag=latest or an explicit published SHA. The run still
+# fails; only a scheduled run falls back on its own.
 #
 # Jaeger and HotROD tags are resolved independently; each image is
 # published to its own repository and may fall back to a different SHA.
@@ -164,7 +167,12 @@ resolve_snapshot_tag() {
   fi
 
   if [[ "$GITHUB_EVENT_NAME" != "schedule" || -n "$override" ]]; then
-    echo "::error::Snapshot image tag not found on Docker Hub: ${repo}:${preferred} (${label})" >&2
+    if [[ -z "$override" ]]; then
+      # No tag was requested, so the missing tag is the MAIN_SHA default.
+      echo "::error::Snapshot image tag not found on Docker Hub: ${repo}:${preferred} (${label}). Upstream jaegertracing/jaeger main HEAD has no published snapshot yet, typically because its CI did not finish. Dispatch again with image_tag=latest (resolved to the newest published SHA) or an explicit published SHA." >&2
+    else
+      echo "::error::Snapshot image tag not found on Docker Hub: ${repo}:${preferred} (${label})" >&2
+    fi
     return 1
   fi
 
