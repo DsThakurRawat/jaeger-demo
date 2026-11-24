@@ -31,7 +31,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   and verifies a fresh trace. It deletes no Kubernetes object, keeps the data
   volume and needs no new access. It does not help when OpenSearch cannot start.
   `docs/releases.md` has the runbook.
-  (fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
+  ([#131](https://github.com/jaegertracing/jaeger-demo/pull/131),
+  fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
   ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
@@ -97,7 +98,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `otel-jaeger` and `otel-demo`, so the next scheduled run upgrades those releases
   in place with unchanged charts and values. `docs/releases.md` lists the operator
   steps, including the objects the tooling may have left in the cluster.
-  (fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
+  ([#131](https://github.com/jaegertracing/jaeger-demo/pull/131),
+  fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 
 ### Fixed
 
