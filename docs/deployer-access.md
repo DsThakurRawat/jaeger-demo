@@ -6,19 +6,22 @@
 [ops/rbac/deployer.yaml](../ops/rbac/deployer.yaml) is the Kubernetes access for the
 two GitHub Actions identities that deploy the hosted demo. It is the reviewed
 definition, not a record of what the cluster holds: an administrator applies it
-and binds the identities, and records that in the release record. Until then the
-identities keep the access described in
-[the access reviewed for the executor design](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/all-five-schedule-access.md) and
-[#87](https://github.com/jaegertracing/jaeger-demo/issues/87). Every run of the
+and binds the identities, and records that in the release record. Every run of the
 deploy, recovery and volume expansion workflows starts by checking its own
 credential against this role and stops before any change if part of it is
-missing, so apply the role before the first run after
-[#95](https://github.com/jaegertracing/jaeger-demo/issues/95) merges.
-[Executor retirement](executor-retirement.md) gives the order.
+missing, so a run changes nothing until the role is applied and its identity bound.
+
+The role replaces
+[the access reviewed for the executor design](https://github.com/jaegertracing/jaeger-demo/blob/f9b54fe60b039633d00b5ea91dba6a40722e8fad/docs/all-five-schedule-access.md) and
+the handover grants that fell short in
+[#87](https://github.com/jaegertracing/jaeger-demo/issues/87).
+[Executor retirement](executor-retirement.md) gives the order of that change, and
+the [migration plan](MIGRATION.md#current-evidence-and-unresolved-gates) records
+when the role was applied and the earlier grants were removed.
 
 | Role | Bound to | Purpose |
 | --- | --- | --- |
-| `jaeger-demo-deployer` | `demo-apply` identity now; `demo-scheduled` identity once the schedule deploys directly | Upgrade the six Helm releases and run their checks |
+| `jaeger-demo-deployer` | `demo-apply` and `demo-scheduled` identities | Upgrade the six Helm releases and run their checks |
 | `jaeger-demo-recovery` | `demo-apply` identity only | Manual OpenSearch recovery test and volume expansion |
 
 Each role is one ClusterRole for kinds that have no namespace, plus one Role per
