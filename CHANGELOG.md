@@ -73,6 +73,24 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
+### Removed
+
+- The OpenSearch backup and restore tooling and the recovery gate: the **Verify
+  OTel Demo OpenSearch Recovery** workflow, `opensearch-recovery.sh`,
+  `OPENSEARCH_RECOVERY.md`, the snapshot class manifest, `recovery_policy.py` and
+  the `opensearch_recovery` input of **Deploy Jaeger Demo to OKE**, which a
+  dispatch can no longer pass. Generated traces are disposable: a manual
+  OpenSearch upgrade takes and requires no recovery point, a scheduled one still
+  fails if the data claim or its volume changed, and volume expansion is kept. The
+  `jaeger-demo-recovery` role keeps its name and loses the access only that
+  tooling used. Runs pass before an administrator applies the reduced
+  `ops/rbac/deployer.yaml`; until then the administrator's `check` reports the
+  removed access. The change alters the fingerprints of `opensearch`,
+  `otel-jaeger` and `otel-demo`, so the next scheduled run upgrades those releases
+  in place with unchanged charts and values. `docs/releases.md` lists the operator
+  steps, including the objects the tooling may have left in the cluster.
+  (refs [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
+
 ### Fixed
 
 - An `otel` / `opensearch` deployment no longer fails verification when the

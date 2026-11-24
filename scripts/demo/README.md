@@ -44,7 +44,7 @@ and refuse a release in a `pending-*` state. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 
-Deployment, manual recovery and volume expansion share the workflow concurrency
+Deployment and volume expansion share the workflow concurrency
 group `jaeger-otel-demo-opensearch-recovery`, so one runs at a time and a running
 one is never cancelled. GitHub keeps one waiting run per group: a newer waiting
 run cancels an older waiting one, which is accepted
@@ -60,14 +60,13 @@ answers 502, 503 or 504 or the connection fails, and then fails with the last
 status. Historical
 synthetic traces are disposable. A destructive reset needs explicit approval.
 
-An OpenSearch deployment requested manually defaults to a retained snapshot and
-isolated restore test. Failure diagnostics and restore Pod cleanup belong to
-manual runs that started recovery. An isolated manual OpenSearch upgrade from
-main can explicitly waive this test. The standalone [recovery
-procedure](../../examples/otel-demo/OPENSEARCH_RECOVERY.md) describes the
-storage, access and capacity it uses.
+A manual OpenSearch upgrade takes the same path. No workflow or script takes or
+restores a backup, and the `opensearch_recovery` input and the recovery policy
+are removed ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)).
+[OpenSearch storage maintenance](../../docs/releases.md#opensearch-storage-maintenance)
+covers volume expansion and what the removed tooling may have left in the cluster.
 
-The manual `demo_stack`, `otel_deploy_scope`, image overrides and recovery
+The manual `demo_stack`, `otel_deploy_scope` and image override
 inputs are preserved. The `deploy_mode` input is removed: the workflow always
 runs `upgrade`, and `deploy.py` refuses `clean` inside GitHub Actions. The
 historical `otel_deploy_scope` input also accepts `monitoring` for an isolated OCI monitoring upgrade. Invalid stack/scope

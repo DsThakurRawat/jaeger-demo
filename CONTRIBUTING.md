@@ -124,7 +124,8 @@ deployment.
   two files pin different versions. The install command builds only PyYAML from
   source ([deployer access](docs/deployer-access.md#oci-cli-installation)); when
   the pinned PyYAML has a wheel for the runner's Python, remove
-  `--no-binary PyYAML` from the four workflows and `scripts/demo/workflow_test.py`.
+  `--no-binary PyYAML` from the workflows that install the OCI CLI and
+  `scripts/demo/workflow_test.py`.
 
 ## Renovate discovery
 

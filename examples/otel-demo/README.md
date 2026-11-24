@@ -15,7 +15,7 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 
 ## Prerequisites
 - Kubernetes cluster reachable via `kubectl`
-- Install `bash`, `git`, `curl`, `kubectl`, `helm`, `python3` and `jq`. The deployment script uses Python for recovery policy selection and to verify each chart archive against `scripts/demo/chart-archives.lock.json` before the first cluster change, and the manual recovery and structured diagnostics use jq.
+- Install `bash`, `git`, `curl`, `kubectl`, `helm`, `python3` and `jq`. The deployment script uses Python to verify each chart archive against `scripts/demo/chart-archives.lock.json` before the first cluster change, and volume expansion and the structured diagnostics use jq.
 - Network access to Helm repositories
 
 ## Quick start
@@ -35,17 +35,16 @@ It is driven by `deploy-all.sh`, which supports both clean installs and upgrades
 ./deploy-all.sh upgrade latest
 ```
 - Full-stack upgrade of an existing installation (OpenSearch, Jaeger and the
-  OpenTelemetry Demo). Direct script use applies the `required` recovery policy,
-  so the OpenSearch step first verifies a recent tested recovery point. See
-  [Manual recovery option](#manual-recovery-option). This is not fresh-cluster
-  setup:
+  OpenTelemetry Demo). The OpenSearch step upgrades in place on the existing
+  volume and takes no backup; see [OpenSearch updates](#opensearch-updates). This
+  is not fresh-cluster setup:
 ```bash path=null start=null
 JAEGER_DEMO_DEPLOY_SCOPE=all ./deploy-all.sh upgrade
 ```
 - Clean install (removes previous releases/namespaces, then installs everything):
 
 > **Warning: `clean` is destructive. Do not run it against the hosted demo cluster.** The deploy workflow does not offer it, and its identities cannot create or delete namespaces; only an administrator runs it from a shell ([deployer access](../../docs/deployer-access.md)).
-> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim. It also removes any VolumeSnapshot and restored recovery PersistentVolumeClaim in that namespace. VolumeSnapshotContent objects with `deletionPolicy: Retain`, and the OCI backups behind them, survive, while content with `Delete` is removed together with its backup; see [OpenSearch recovery](./OPENSEARCH_RECOVERY.md#restore-after-namespace-or-workload-replacement). The script takes no backup first, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
+> `./deploy-all.sh clean` uninstalls the `opensearch`, `opensearch-dashboards`, `jaeger` and `otel-demo` Helm releases, deletes all ingress resources in the `jaeger`, `opensearch` and `otel-demo` namespaces, then deletes those three namespaces. Deleting the `opensearch` namespace removes the OpenSearch data PersistentVolumeClaim and the stored traces. It also removes any VolumeSnapshot and restored PersistentVolumeClaim that the removed backup tooling left in that namespace. VolumeSnapshotContent objects with `deletionPolicy: Retain`, and the OCI backups behind them, survive, while content with `Delete` is removed together with its backup; see [what the removed tooling may have left](../../docs/releases.md#after-the-backup-tooling-was-removed). The script takes no backup, no backup tooling exists, and whether the underlying volume survives depends on the reclaim policy of the bound PersistentVolume. A destructive reset of the hosted installation requires explicit maintainer approval. See [Operations and releases](../../README.md#operations-and-releases) and [Failure handling](../../docs/releases.md#failure-handling).
 
 ```bash path=null start=null
 ./deploy-all.sh clean
@@ -182,64 +181,28 @@ in GA4 Realtime, then verify the Hostname breakdown after the data is processed.
 A hostname may only become selectable for a saved comparison after GA4 has
 received events for it.
 
-### Scheduled OpenSearch updates
+### OpenSearch updates
 
-The 13:00 UTC hosted job treats generated demo traces as disposable. When
-OpenSearch inputs change, it upgrades the existing OpenSearch StatefulSet and
-Dashboards Deployment in that order. It checks the live source PVC binding
-before and after the operation, waits for readiness, verifies the running
-database and public Dashboards versions, and sends a fresh trace through Jaeger.
-The public Dashboards status is read up to 30 times, two seconds apart, while
-the route answers 502, 503 or 504 or the connection fails; after that the
-OpenSearch component fails with the last status.
-The job creates no snapshot, restore PVC or restore Pod. Routine upgrades
-preserve storage. If an incompatible database change makes historical traces
-unusable, recovery of those traces is not guaranteed. Pause further updates
-and get approval before resetting or replacing a volume.
+Generated demo traces are disposable. No workflow or script takes or restores a
+backup, and no upgrade waits for a recovery point
+([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)). When
+OpenSearch inputs change, the 13:00 UTC hosted job upgrades the existing
+OpenSearch StatefulSet and Dashboards Deployment in that order. It checks the
+live source PVC binding before and after the operation, waits for readiness,
+verifies the running database and public Dashboards versions, and sends a fresh
+trace through Jaeger. The public Dashboards status is read up to 30 times, two
+seconds apart, while the route answers 502, 503 or 504 or the connection fails;
+after that the OpenSearch component fails with the last status. A manual `demo_stack=otel`, `otel_deploy_scope=opensearch`
+dispatch from `main` runs the same upgrade and checks after a `demo-apply`
+reviewer approves it, without the binding comparison. Routine upgrades
+preserve storage. An OpenSearch engine upgrade cannot be rolled back with Helm.
+If an incompatible database change makes historical traces unusable, those
+traces are lost. Pause further updates and get approval before resetting or
+replacing a volume
+([OpenSearch storage maintenance](../../docs/releases.md#opensearch-storage-maintenance)).
 
-### Manual recovery option
-
-A manual OpenSearch deployment defaults to `opensearch_recovery=required`. The
-reconciler runs a retained OCI CSI backup and an isolated restore test against
-the live OpenSearch and Jaeger image digests, then checks that the tested
-recovery point matches the live engine before upgrading. The standalone
-`Verify OTel Demo OpenSearch Recovery` workflow can also prepare a recovery
-point. It uses independently authorized storage access and follows these steps:
-
-1. verifies that the live volume uses the OCI Block Volume CSI driver;
-2. flushes OpenSearch and creates a retained `VolumeSnapshot`;
-3. restores it to a new PVC;
-4. boots the exact live OpenSearch and Jaeger image digests without a Service
-   or ingress. The OpenSearch image entrypoint reads `DISABLE_SECURITY_PLUGIN`
-   and supplies the setting for the loopback-only database.
-5. validates cluster recovery, every pre-snapshot Jaeger index, template, and
-   alias mapping, document floors, and representative service and trace queries
-   before marking the snapshot tested.
-
-Ingestion remains active, so the flushed provider backup is crash-consistent,
-not application-consistent. Always run the isolated restore test when a manual operation requires a recovery point.
-The restore pod requests the target OpenSearch memory sizing and must run on a
-different worker from the live OpenSearch pod, so it also proves that current
-cluster capacity can host the recovery test without colocating both databases.
-
-The snapshot and restored PVC are retained deliberately. The workflow removes
-only the exact run-specific disposable restore pod after the test, including on
-failure, so it does not expose restored data or reserve capacity needed by the
-live rollout. Removing either retained storage object is a separate operational
-action. Never use the demo's `clean` mode as a database rollback. Restore the
-retained volume into a fresh installation of the prior OpenSearch version
-instead. See the
-[OpenSearch recovery procedure](./OPENSEARCH_RECOVERY.md) for both intact- and
-replaced-namespace recovery.
-
-During a manual dispatch from `main`, a maintainer can explicitly select
-`opensearch_recovery=waive` for `demo_stack=otel` and
-`otel_deploy_scope=opensearch`; the workflow always runs `upgrade`. Direct script use defaults to required recovery.
-The hosted daily job derives its own disposable-trace policy. A failure of a
-requested manual restore test blocks that protected upgrade.
-
-Check the existing database workload's memory and disk headroom before either
-upgrade path.
+Check the existing database workload's memory and disk headroom before an
+upgrade.
 
 ### OpenSearch volume expansion
 
@@ -281,9 +244,9 @@ persistent-storage wiring, while the Jaeger runtime config points at OpenSearch.
 
 ## Clean-up
 
-> These teardown examples delete workloads and namespaced recovery objects.
-> Use them only for an explicitly approved teardown. If the operator needs a
-> retained backup, verify its content and private recovery record beforehand.
+> These teardown examples delete workloads and the stored traces.
+> Use them only for an explicitly approved teardown. No backup tooling exists,
+> so nothing they delete can be restored.
 
 - Clean uninstall using cleanup.sh :
 ```bash path=null start=null

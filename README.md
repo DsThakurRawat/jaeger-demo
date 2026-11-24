@@ -143,8 +143,8 @@ and the stack scripts install charts only from archives that match
 steps that configure cluster access or call the cluster receive the OCI API key,
 and the OCI CLI is installed before them from files that match
 [scripts/demo/oci-cli-hashes.txt](scripts/demo/oci-cli-hashes.txt)
-([where the workflows use the API key](docs/deployer-access.md#where-the-workflows-use-the-api-key)). The deployment,
-OpenSearch recovery and volume-expansion workflows share one concurrency group, so
+([where the workflows use the API key](docs/deployer-access.md#where-the-workflows-use-the-api-key)). The deployment
+and volume-expansion workflows share one concurrency group, so
 one of them runs at a time.
 
 ```mermaid
@@ -160,7 +160,7 @@ flowchart TB
     end
 
     state[("ConfigMap<br/>default/jaeger-demo-deployment-revisions")]
-    writers["ci-opensearch-recovery.yml<br/>ci-opensearch-volume-expand.yml<br/>environment demo-apply"]
+    writers["ci-opensearch-volume-expand.yml<br/>environment demo-apply"]
     group{{"Concurrency group<br/>jaeger-otel-demo-opensearch-recovery"}}
     slack["Slack #jaeger-operations"]
     observer["demo-run-observer.yml<br/>runs that ended before any job started"]
@@ -212,11 +212,13 @@ agent work.
 - [OTel stack commands](examples/otel-demo/README.md)
 
 Use the handover and release runbooks for the existing installation. Do not run
-historical installation, `clean`, recovery or cleanup commands merely to complete
-the migration. The daily OpenSearch upgrade preserves its existing PVC and
-verifies new trace ingestion and query. Generated trace history is disposable.
-During Stage 1, maintainers can separately request a manual tested backup. Retirement of that
-tooling and the narrow manual reset belong to [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
+historical installation, `clean` or cleanup commands merely to complete
+the migration. Every OpenSearch upgrade preserves its existing PVC and
+verifies new trace ingestion and query. Generated trace history is disposable:
+the backup and restore tooling and the recovery gate are removed, and volume
+expansion remains
+([OpenSearch storage maintenance](docs/releases.md#opensearch-storage-maintenance)).
+The narrow manual reset is still part of [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
 
 ## Extraction provenance
 
@@ -238,9 +240,9 @@ is included in the cutoff.
 | Core PR | Relevant work |
 | --- | --- |
 | [#10131](https://github.com/jaegertracing/jaeger/pull/10131) | Bounded AI assistant; activation remains outside migration scope |
-| [#10174](https://github.com/jaegertracing/jaeger/pull/10174) | Routine disposable-trace policy for the hosted schedule is implemented in [demo #15](https://github.com/jaegertracing/jaeger-demo/pull/15). Manual recovery has its own opt-in path. |
-| [#10180](https://github.com/jaegertracing/jaeger/pull/10180) | Manual restore Pod startup, rehomed in [demo #14](https://github.com/jaegertracing/jaeger-demo/pull/14) |
+| [#10174](https://github.com/jaegertracing/jaeger/pull/10174) | Routine disposable-trace policy for the hosted schedule is implemented in [demo #15](https://github.com/jaegertracing/jaeger-demo/pull/15). The manual recovery path it kept was later removed ([demo #76](https://github.com/jaegertracing/jaeger-demo/issues/76)). |
+| [#10180](https://github.com/jaegertracing/jaeger/pull/10180) | Manual restore Pod startup, rehomed in [demo #14](https://github.com/jaegertracing/jaeger-demo/pull/14) and later removed with the recovery tooling |
 | [#10031](https://github.com/jaegertracing/jaeger/pull/10031) | Grafana probes and demo smoke checks |
-| [#10172](https://github.com/jaegertracing/jaeger/pull/10172) | Ported the recovery API helpers and their regression tests. See the [recovery procedure](examples/otel-demo/OPENSEARCH_RECOVERY.md). |
+| [#10172](https://github.com/jaegertracing/jaeger/pull/10172) | Ported the recovery API helpers and their regression tests, later removed with the recovery tooling ([demo #76](https://github.com/jaegertracing/jaeger-demo/issues/76)). |
 | [#10155](https://github.com/jaegertracing/jaeger/pull/10155) | Hosted configuration portions of the batch migration; core configuration stays in core |
 | [#9149](https://github.com/jaegertracing/jaeger/pull/9149) | Inspect only its `ci-deploy-demo.yml` hunk; the critical-path work stays in core |

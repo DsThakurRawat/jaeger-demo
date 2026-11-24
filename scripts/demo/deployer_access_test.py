@@ -18,8 +18,7 @@ MANUAL_USER = "ocid1.user.oc1..aaaaexamplemanual"
 # it may only name these.
 CLUSTER_KINDS = {
     "namespaces", "clusterroles", "clusterrolebindings", "mutatingwebhookconfigurations",
-    "validatingwebhookconfigurations", "persistentvolumes", "storageclasses", "volumesnapshotclasses",
-    "volumesnapshotcontents",
+    "validatingwebhookconfigurations", "persistentvolumes", "storageclasses",
 }
 
 
@@ -133,28 +132,48 @@ class DeployerAccessTests(unittest.TestCase):
 
     def test_storage_changes_need_the_manual_identity_and_no_role_deletes_storage(self):
         for request in [R("opensearch", "", "persistentvolumeclaims", "patch", "data"),
-                        R("opensearch", "", "persistentvolumeclaims", "create", ""),
-                        R("opensearch", "", "pods", "create", ""),
-                        R("opensearch", "", "pods/exec", "create", "jaeger-os-verify-1-1"),
-                        R("opensearch", d.SNAPSHOTS, "volumesnapshots", "create", ""),
-                        R("", d.SNAPSHOTS, "volumesnapshotcontents", "patch", "snapcontent-1"),
+                        R("", "storage.k8s.io", "storageclasses", "get", "oci-bv"),
                         R("", "", "persistentvolumes", "get", "pv-1")]:
             with self.subTest(request=request):
                 self.assertFalse(d.allowed("scheduled", request, ROLES))
                 self.assertTrue(d.allowed("manual", request, ROLES))
-        # The scheduled identity runs a command in the OpenSearch Pod and no other.
-        self.assertTrue(d.allowed("scheduled", R("opensearch", "", "pods/exec", "create", d.OPENSEARCH_POD), ROLES))
-        self.assertFalse(d.allowed("scheduled", R("opensearch", "", "pods/exec", "create", "opensearch-dashboards-1"), ROLES))
-        # Everything the recovery role adds is on the scheduled identity's denied list.
+        # Both identities run a command in the OpenSearch Pod and no other.
+        for identity in d.IDENTITIES:
+            self.assertTrue(d.allowed(identity, R("opensearch", "", "pods/exec", "create", d.OPENSEARCH_POD), ROLES))
+            self.assertFalse(d.allowed(identity, R("opensearch", "", "pods/exec", "create", "opensearch-dashboards-1"), ROLES))
+        # Everything the second role adds is on the scheduled identity's denied list, and it is
+        # exactly what volume expansion needs.
         manual_only = set(d.script_requests("manual")) - set(d.script_requests("scheduled"))
-        self.assertGreater(len(manual_only), 15)
+        self.assertEqual(manual_only, {R("", "", "persistentvolumes", "get", ""),
+                                       R("", "storage.k8s.io", "storageclasses", "get", "oci-bv"),
+                                       R("opensearch", "", "persistentvolumeclaims", "patch", "")})
         self.assertLessEqual(manual_only, set(d.denied("scheduled")))
-        # The recovery role names the storage and snapshot classes it reads.
-        for request in [R("", "storage.k8s.io", "storageclasses", "get", "other"),
-                        R("", d.SNAPSHOTS, "volumesnapshotclasses", "get", "other"),
-                        R("", d.SNAPSHOTS, "volumesnapshotclasses", "delete", "jaeger-opensearch-oci-retain")]:
-            with self.subTest(request=request):
-                self.assertFalse(d.allowed("manual", request, ROLES))
+        self.assertEqual({(rule["apiGroups"][0], resource, verb) for key in ((d.RECOVERY, ""), (d.RECOVERY, "opensearch"))
+                          for rule in ROLES[key] for resource in rule["resources"] for verb in rule["verbs"]},
+                         {("", "persistentvolumes", "get"), ("storage.k8s.io", "storageclasses", "get"),
+                          ("", "persistentvolumeclaims", "patch")})
+        # The role names the storage class it reads.
+        self.assertFalse(d.allowed("manual", R("", "storage.k8s.io", "storageclasses", "get", "other"), ROLES))
+        # What the removed backup and restore tooling held is denied to both identities (#76).
+        retired = [R("opensearch", "", "persistentvolumeclaims", "create", ""),
+                   R("opensearch", "", "persistentvolumeclaims", "list", ""),
+                   R("opensearch", "", "pods", "create", ""),
+                   R("opensearch", "", "pods", "delete", ""),
+                   R("opensearch", "", "pods/exec", "create", ""),
+                   R("opensearch", d.SNAPSHOTS, "volumesnapshots", "create", ""),
+                   R("opensearch", d.SNAPSHOTS, "volumesnapshots", "list", ""),
+                   R("", d.SNAPSHOTS, "volumesnapshotcontents", "patch", ""),
+                   R("", d.SNAPSHOTS, "volumesnapshotclasses", "create", ""),
+                   R("", d.SNAPSHOTS, "volumesnapshotclasses", "get", "jaeger-opensearch-oci-retain")]
+        self.assertLessEqual(set(retired), set(d.retired_requests()))
+        for identity in d.IDENTITIES:
+            self.assertLessEqual(set(d.retired_requests()), set(d.denied(identity)))
+            for request in retired + [R("opensearch", "", "pods/exec", "create", "jaeger-os-verify-1-1"),
+                                      R("", d.SNAPSHOTS, "volumesnapshotcontents", "patch", "snapcontent-1"),
+                                      R("", d.SNAPSHOTS, "volumesnapshotclasses", "get", "other")]:
+                with self.subTest(identity=identity, request=request):
+                    self.assertFalse(d.allowed(identity, request, ROLES))
+            self.assertFalse(set(d.retired_requests()) & set(d.required(identity)))
         for identity in d.IDENTITIES:
             for request in [R("opensearch", "", "persistentvolumeclaims", "delete", "data"),
                             R("", "", "persistentvolumes", "delete", "pv"),
@@ -173,22 +192,15 @@ class DeployerAccessTests(unittest.TestCase):
                                                  "describe svc otel-collector"],
             "scripts/demo/verify_trace.py": ['"exec", "' + d.OPENSEARCH_POD + '"', '"port-forward"'],
             "scripts/demo/deploy.py": ['"get", kind, name', '"pvc"'],
-            "examples/otel-demo/opensearch-recovery.sh": ["get volumesnapshotclass", "get volumesnapshotcontent",
-                                                          "get volumesnapshots", "annotate", "delete pod",
-                                                          'kubectl create -f "$SNAPSHOT_CLASS_FILE"', "get pv ",
-                                                          'exec "$pod"', "render_restore_pvc", "render_snapshot ",
-                                                          ":-jaeger-opensearch-oci-retain}"],
             "examples/otel-demo/opensearch-expand-volume.sh": ["patch pvc", "get storageclass", "get pv ",
                                                                'STORAGE_CLASS="oci-bv"'],
-            ".github/workflows/ci-deploy-demo.yml": ["kubectl -n opensearch get pvc", "kubectl -n opensearch delete pod",
-                                                     "kubectl -n opensearch get volumesnapshots"],
         }.items():
             text = (root / path).read_text()
             for command in commands:
                 with self.subTest(path=path, command=command):
                     self.assertIn(command, text)
 
-    def test_bindings_name_both_users_and_keep_recovery_for_the_manual_identity(self):
+    def test_bindings_name_both_users_and_keep_the_second_role_for_the_manual_identity(self):
         items = d.bindings(MANUAL_USER, SCHEDULED_USER)["items"]
         self.assertEqual(len(items), len(ROLES))
         for item in items:

@@ -33,7 +33,7 @@ KUBECTL_CONFIGURATION = re.compile(r'oracle-actions/configure-kubectl-oke@[0-9a-
 SLACK_NOTIFICATION = re.compile(r'rtCamp/action-slack-notify@[0-9a-f]{40}')
 EXPRESSION = re.compile(r'\$\{\{(.*?)\}\}', re.DOTALL)
 USES_SECRETS = re.compile(r'\bsecrets\b', re.IGNORECASE)
-WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml')
+WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-volume-expand.yml')
 PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
 # Both constructs hand over every secret without naming one. Expression functions
 # ignore case, and so does this search.
@@ -138,8 +138,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
 
     def test_maintenance_workflows_constrain_and_verify_oci_cli_before_cluster_access(self):
-        for filename, script in (('ci-opensearch-recovery.yml', '    - name: Create and verify OpenSearch recovery point\n'),
-                                 ('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n')):
+        for filename, script in (('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n'),):
             with self.subTest(workflow=filename):
                 source = (WORKFLOWS / filename).read_text()
                 configure_header = '    - name: Configure kubectl with OKE\n'
@@ -152,23 +151,8 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(sorted(order), order)
                 self.assertEqual(1, source.count('verify_oci_cli.py'))
 
-    def test_recovery_diagnostics_and_cleanup_need_the_access_check(self):
-        source = (WORKFLOWS / 'ci-opensearch-recovery.yml').read_text()
-        for name, trigger in (('Collect failure diagnostics', 'failure()'), ('Remove disposable restore pod', 'always()')):
-            step = source.split('    - name: %s\n' % name, 1)[1].split('\n    - name:', 1)[0]
-            condition = re.search(r'^      if: (.+)$', step, re.MULTILINE)[1]
-            # A rejected OCI CLI check skips the access check; kubectl must not run after it.
-            self.assertNotIn('writer-lock', condition)
-            for access in ('success', 'failure', 'cancelled', 'skipped'):
-                for job_failed in (True, False):
-                    with self.subTest(step=name, access=access, job_failed=job_failed):
-                        expression = condition.replace(trigger, repr(job_failed if trigger == 'failure()' else True))
-                        expression = expression.replace('steps.access.outcome', repr(access)).replace('&&', 'and')
-                        expected = access == 'success' and (job_failed or trigger == 'always()')
-                        self.assertEqual(expected, eval(expression, {'__builtins__': {}}, {}))
-
     def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
-        for filename in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
+        for filename in ('ci-opensearch-volume-expand.yml',):
             with self.subTest(workflow=filename):
                 source = (WORKFLOWS / filename).read_text()
                 events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
@@ -212,12 +196,9 @@ class WorkflowTests(unittest.TestCase):
         # The guard runs under the shell the tests use, with pipefail.
         guard = next(step for step in job['steps'] if step['name'] == 'Verify the reviewed configuration revision')
         self.assertEqual('bash', guard['shell'])
-        # Scheduled runs take no manual input, so the recovery policy stays empty and resolves to preserve-pvc.
-        self.assertEqual('${{ inputs.opensearch_recovery }}', job['env']['JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY'])
 
     def test_all_writers_share_one_concurrency_group_and_take_no_lock(self):
         for workflow, operation in [('ci-deploy-demo.yml','Reconcile demo components'),
-                                   ('ci-opensearch-recovery.yml','Create and verify OpenSearch recovery point'),
                                    ('ci-opensearch-volume-expand.yml','Expand and verify the OpenSearch volume')]:
             with self.subTest(workflow=workflow):
                 source = (WORKFLOWS / workflow).read_text()
@@ -233,7 +214,7 @@ class WorkflowTests(unittest.TestCase):
                 jobs = yaml.safe_load(source)['jobs']
                 access, = [step for job in jobs.values() for step in job['steps'] if step.get('id') == 'access']
                 self.assertLessEqual(access['timeout-minutes'], 15)
-        for workflow in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
+        for workflow in ('ci-opensearch-volume-expand.yml',):
             self.assertIn('deployer_access.py check --self --identity manual\n', (WORKFLOWS / workflow).read_text())
 
     def test_the_writer_group_keeps_one_waiting_run_and_never_cancels_a_running_one(self):
@@ -241,7 +222,7 @@ class WorkflowTests(unittest.TestCase):
         # which a newer waiting run replaces. `queue: max` would keep every waiting
         # run, but no released actionlint accepts the key
         # (https://github.com/rhysd/actionlint/issues/657). docs/releases.md states
-        # the operator action. Change all three workflows and this test together.
+        # the operator action. Change every workflow in the group and this test together.
         group = 'jaeger-otel-demo-opensearch-recovery'
         chosen = {'group': group, 'cancel-in-progress': False}
         declared = {}
@@ -262,11 +243,10 @@ class WorkflowTests(unittest.TestCase):
                     with self.subTest(workflow=path.name, job=name):
                         self.assertTrue('environment' not in job or 'job ' + name in levels)
         self.assertEqual({'ci-deploy-demo.yml': {'job deploy': chosen},
-                          'ci-opensearch-recovery.yml': {'workflow': chosen},
                           'ci-opensearch-volume-expand.yml': {'workflow': chosen}}, declared)
 
     def test_only_the_writer_workflows_use_a_deployment_environment(self):
-        writers = {'ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'}
+        writers = {'ci-deploy-demo.yml', 'ci-opensearch-volume-expand.yml'}
         for path in sorted(WORKFLOWS.glob('*.yml')):
             source = path.read_text()
             with self.subTest(workflow=path.name):
@@ -286,12 +266,7 @@ class WorkflowTests(unittest.TestCase):
         # secrets. No other step, and no action but the kubectl configuration, gets them.
         receiving = {
             'ci-deploy-demo.yml': [
-                'Configure kubectl with OKE', "Verify the deployment identity's access", 'Reconcile demo components',
-                'Collect OpenSearch recovery diagnostics', 'Remove disposable restore pod'],
-            'ci-opensearch-recovery.yml': [
-                'Configure kubectl with OKE', "Verify the deployment identity's access",
-                'Create and verify OpenSearch recovery point', 'Collect failure diagnostics',
-                'Remove disposable restore pod'],
+                'Configure kubectl with OKE', "Verify the deployment identity's access", 'Reconcile demo components'],
             'ci-opensearch-volume-expand.yml': [
                 'Configure kubectl with OKE', "Verify the deployment identity's access",
                 'Expand and verify the OpenSearch volume'],
@@ -518,54 +493,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(all('github.sha' not in line for line in image_lines))
         self.assertNotIn('      MAIN_SHA: ${{ github.sha }}', source)
         self.assertIn('    - name: Configure kubectl with OKE\n      id: configure-oke\n', source)
-        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
-        self.assertIn("      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
 
-    def test_restore_cleanup_runs_only_after_recovery_started(self):
-        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
-        self.assertIn('    - name: Reconcile demo components\n      id: reconcile\n', source)
-        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
-        condition = re.search(r'^      if: (.+)$', cleanup, re.MULTILINE)[1]
-        for configure in ('success', 'failure', 'cancelled', 'skipped', ''):
-            for reconcile in ('success', 'failure', 'cancelled', 'skipped', ''):
-                for recovery in ('true', 'false', ''):
-                    with self.subTest(configure=configure, reconcile=reconcile, recovery=recovery):
-                        expression = condition.replace('always()', 'True')
-                        expression = expression.replace('steps.configure-oke.outcome', repr(configure))
-                        expression = expression.replace('steps.reconcile.outcome', repr(reconcile))
-                        expression = expression.replace('steps.reconcile.outputs.recovery_started', repr(recovery))
-                        expression = expression.replace('&&', 'and').replace('||', 'or')
-                        for event in ('workflow_dispatch', 'schedule'):
-                            result = eval(expression.replace('github.event_name', repr(event)), {'__builtins__': {}}, {})
-                            self.assertEqual(event == 'workflow_dispatch' and configure == 'success' and recovery == 'true'
-                                             and reconcile in ('success', 'failure', 'cancelled'), result)
-
-    def test_recovery_input_stays_manual_and_policy_validates_before_cluster_access(self):
-        source = (WORKFLOWS / 'ci-deploy-demo.yml').read_text()
-        self.assertIn('      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY: ${{ inputs.opensearch_recovery }}', source)
-        self.assertIn('    - name: Validate OpenSearch recovery policy\n      run: |\n        python3 scripts/demo/recovery_policy.py', source)
-        self.assertLess(source.index('    - name: Validate OpenSearch recovery policy'),
-                        source.index('    - name: Configure kubectl with OKE'))
-
-    def test_workflow_recovery_policy_matches_event_and_scope(self):
-        script = step_script('Validate OpenSearch recovery policy')
-        for event, ref, stack, mode, scope, requested, expected in (
-                ('schedule', 'main', 'oci', 'upgrade', 'jaeger', '', 'preserve-pvc'),
-                ('schedule', 'main', 'oci', 'upgrade', 'jaeger', 'required', None),
-                ('schedule', 'main', 'otel', 'clean', 'opensearch', '', None),
-                ('schedule', 'feature', 'otel', 'upgrade', 'opensearch', '', None),
-                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', '', 'required'),
-                ('workflow_dispatch', 'main', 'all', 'upgrade', 'all', 'required', 'required'),
-                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', 'waive', 'waive'),
-                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'all', 'waive', None),
-                ('workflow_dispatch', 'main', 'otel', 'upgrade', 'opensearch', 'preserve-pvc', None)):
-            env = dict(os.environ, GITHUB_EVENT_NAME=event, GITHUB_REF='refs/heads/' + ref, JAEGER_DEMO_STACK=stack,
-                       JAEGER_DEMO_DEPLOY_MODE=mode, JAEGER_OTEL_DEMO_DEPLOY_SCOPE=scope,
-                       JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=requested)
-            with self.subTest(event=event, ref=ref, stack=stack, mode=mode, scope=scope, requested=requested):
-                result = subprocess.run(['bash', '-e', '-c', script], cwd=ROOT, env=env, text=True, capture_output=True)
-                self.assertEqual(expected is not None, result.returncode == 0, result.stderr)
-                self.assertEqual(expected or '', result.stdout.strip())
+    def test_no_workflow_or_script_takes_or_restores_a_backup(self):
+        # Generated traces are disposable (#76): the backup and restore tooling and the recovery gate are gone.
+        for path in ('.github/workflows/ci-opensearch-recovery.yml', 'examples/otel-demo/opensearch-recovery.sh',
+                     'examples/otel-demo/opensearch-recovery.test.sh', 'examples/otel-demo/OPENSEARCH_RECOVERY.md',
+                     'examples/otel-demo/opensearch-volume-snapshot-class.yaml', 'scripts/demo/recovery_policy.py',
+                     'scripts/demo/recovery_test.py'):
+            self.assertFalse((ROOT / path).exists(), path)
+        inputs = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())[True]['workflow_dispatch']['inputs']
+        self.assertEqual({'expected_config_sha', 'image_tag', 'jaeger_image_tag', 'hotrod_image_tag', 'demo_stack',
+                          'otel_deploy_scope'}, set(inputs))
+        # Tests are left out, and so is deployer_access.py: its denied list names the snapshot kinds
+        # so that `check` can show neither identity holds them.
+        sources = sorted(WORKFLOWS.glob('*.yml'))
+        sources += [path for path in sorted((ROOT / 'examples').rglob('*.sh')) + sorted((ROOT / 'scripts').rglob('*'))
+                    if path.suffix in ('.py', '.sh') and not path.name.endswith(('_test.py', '.test.sh'))
+                    and path.name != 'deployer_access.py']
+        self.assertGreater(len(sources), 30)
+        for path in sources:
+            text = path.read_text().lower()
+            for retired in ('volumesnapshot', 'snapshot.storage.k8s.io', 'opensearch_recovery', 'recovery_policy',
+                            'opensearch-recovery.sh', 'backup-test', 'recovery_started', 'jaeger-os-verify'):
+                with self.subTest(path=str(path.relative_to(ROOT)), retired=retired):
+                    self.assertNotIn(retired, text)
 
     def test_dispatch_cannot_select_a_clean_run(self):
         # The deployer role cannot create or delete namespaces (docs/deployer-access.md),
@@ -664,12 +615,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(step_limit, 300)
         self.assertGreaterEqual(job_limit - step_limit, 30)
         self.assertLess(job_limit, 360)
-        cleanup = source.split('    - name: Remove disposable restore pod\n', 1)[1].split('\n    - name:', 1)[0]
-        self.assertIn('\n      timeout-minutes: 2\n', cleanup)
-        diagnostics = source.split('    - name: Collect OpenSearch recovery diagnostics\n', 1)[1].split('\n    - name:', 1)[0]
-        self.assertIn('\n      timeout-minutes: 5\n', diagnostics)
-        self.assertEqual(3, diagnostics.count(' --request-timeout=30s || true'))
-        self.assertIn(' --request-timeout=30s ', cleanup)
 
 
 if __name__ == '__main__':

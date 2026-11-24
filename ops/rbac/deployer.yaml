@@ -7,7 +7,9 @@
 # checks it against the six rendered charts and the commands the scripts run.
 #
 # jaeger-demo-deployer: both identities (demo-scheduled and demo-apply).
-# jaeger-demo-recovery: the reviewer-gated demo-apply identity only.
+# jaeger-demo-recovery: the reviewer-gated demo-apply identity only. It holds
+# what OpenSearch volume expansion adds. The name predates the removal of the
+# backup and restore tooling and is kept so that the bindings stay valid.
 #
 # No rule uses a wildcard. No rule grants access in the ingress controller or
 # cert-manager namespaces. docs/deployer-access.md lists what a holder can still
@@ -298,8 +300,9 @@ rules:
       - prometheus-kube-prometheus-kube-scheduler
     verbs: [get, patch, delete]
 ---
-# Manual OpenSearch recovery and volume expansion (demo-apply only): storage
-# kinds that have no namespace.
+# Manual OpenSearch volume expansion (demo-apply only): storage kinds that have
+# no namespace. opensearch-expand-volume.sh reads the bound volume and the
+# storage class before it grows the claim.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -312,22 +315,9 @@ rules:
     resources: [storageclasses]
     resourceNames: [oci-bv]
     verbs: [get]
-  - apiGroups: [snapshot.storage.k8s.io]
-    resources: [volumesnapshotclasses]
-    resourceNames: [jaeger-opensearch-oci-retain]
-    verbs: [get]
-  - apiGroups: [snapshot.storage.k8s.io]
-    resources: [volumesnapshotclasses]
-    verbs: [create]
-  # The recovery test annotates the snapshot content it verified. The name is
-  # generated, so this reaches every snapshot content in the cluster.
-  - apiGroups: [snapshot.storage.k8s.io]
-    resources: [volumesnapshotcontents]
-    verbs: [get, patch]
 ---
-# Manual OpenSearch recovery and volume expansion (demo-apply only). It can
-# create a snapshot, a restore claim and a disposable restore Pod, and grow the
-# data claim. It cannot delete a claim or a snapshot.
+# Manual OpenSearch volume expansion (demo-apply only). It can grow the data
+# claim. It cannot create or delete a claim, a Pod or a volume snapshot.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -336,14 +326,4 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
-    verbs: [list, create, patch]
-  - apiGroups: [""]
-    resources: [pods]
-    verbs: [create, delete]
-  # The recovery test queries the disposable restore Pod, whose name is generated.
-  - apiGroups: [""]
-    resources: [pods/exec]
-    verbs: [get, create]
-  - apiGroups: [snapshot.storage.k8s.io]
-    resources: [volumesnapshots]
-    verbs: [get, list, create, patch]
+    verbs: [patch]

@@ -34,8 +34,6 @@ def validate_inputs(env, stack, mode, scope):
     for image in ("JAEGER", "HOTROD"):
         if not re.fullmatch(r"[0-9a-f]{40}", env.get(f"JAEGER_DEMO_{image}_IMAGE_TAG", "")):
             raise ValueError(f"Handover requires an explicit full {image} image commit tag")
-    if env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "") not in ("", "required"):
-        raise ValueError("Handover cannot waive OpenSearch recovery")
     return True
 
 

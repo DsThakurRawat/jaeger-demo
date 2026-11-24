@@ -28,8 +28,10 @@ RBAC = "rbac.authorization.k8s.io"
 SNAPSHOTS = "snapshot.storage.k8s.io"
 RELEASE_NAMESPACES = ("default", "jaeger", "opensearch", "otel-demo")
 OTEL_NAMESPACES = RELEASE_NAMESPACES[1:]
+# The second role keeps the name it had while it also served the backup and
+# restore tooling, so its bindings in the cluster stay valid.
 DEPLOYER, RECOVERY = "jaeger-demo-deployer", "jaeger-demo-recovery"
-# The scheduled identity never runs the recovery or volume expansion scripts.
+# The scheduled identity never runs the volume expansion script.
 IDENTITIES = {"scheduled": (DEPLOYER,), "manual": (DEPLOYER, RECOVERY)}
 USER = re.compile(r"ocid1\.user\.oc[0-9]+\.\.[a-z0-9]+")
 COLLECTION = {"create", "list", "watch"}
@@ -124,16 +126,28 @@ def script_requests(identity):
     requests += each("opensearch", "", "pods/exec", ["get", "create"], OPENSEARCH_POD)  # verify_trace.py
     requests += each("jaeger", "", "pods/portforward", ["get", "create"])  # verify_trace.py
     if RECOVERY in IDENTITIES[identity]:
-        # opensearch-recovery.sh, opensearch-expand-volume.sh and the workflow diagnostics.
+        # opensearch-expand-volume.sh. The script reads the claim's name from the Pod.
         requests += each("", "", "persistentvolumes", ["get"])
         requests += each("", "storage.k8s.io", "storageclasses", ["get"], "oci-bv")
-        requests += each("", SNAPSHOTS, "volumesnapshotclasses", ["get"], "jaeger-opensearch-oci-retain")
-        requests += each("", SNAPSHOTS, "volumesnapshotclasses", ["create"])
-        requests += each("", SNAPSHOTS, "volumesnapshotcontents", ["get", "patch"])
-        requests += each("opensearch", SNAPSHOTS, "volumesnapshots", ["get", "list", "create", "patch"])
-        requests += each("opensearch", "", "persistentvolumeclaims", ["list", "create", "patch"])
-        requests += each("opensearch", "", "pods", ["create", "delete"])
-        requests += each("opensearch", "", "pods/exec", ["get", "create"])  # the generated restore Pod
+        requests += each("opensearch", "", "persistentvolumeclaims", ["patch"])
+    return requests
+
+
+def retired_requests():
+    """What the removed backup and restore tooling held and nothing needs any more (#76).
+
+    Neither identity may keep it, so `check` shows whether an applied role still carries it.
+    """
+    def each(namespace, group, resource, verbs, name=""):
+        return [Request(namespace, group, resource, verb, name) for verb in verbs]
+
+    requests = each("", SNAPSHOTS, "volumesnapshotclasses", ["get"], "jaeger-opensearch-oci-retain")
+    requests += each("", SNAPSHOTS, "volumesnapshotclasses", ["create"])
+    requests += each("", SNAPSHOTS, "volumesnapshotcontents", ["get", "patch"])
+    requests += each("opensearch", SNAPSHOTS, "volumesnapshots", ["get", "list", "create", "patch"])
+    requests += each("opensearch", "", "persistentvolumeclaims", ["list", "create"])
+    requests += each("opensearch", "", "pods", ["create", "delete"])
+    requests += each("opensearch", "", "pods/exec", ["get", "create"])  # a Pod of any name
     return requests
 
 
@@ -186,8 +200,9 @@ def denied(identity):
     for role in (DEPLOYER, RECOVERY):  # no rule lets an identity edit its own cluster roles directly
         requests += each("", RBAC, "clusterroles", ["patch", "update", "delete", "bind", "escalate"], role)
         requests += each("", RBAC, "clusterrolebindings", ["patch", "update", "delete"], role)
+    requests += retired_requests()
     if RECOVERY not in IDENTITIES[identity]:
-        # Everything the recovery role adds must be out of the scheduled identity's reach.
+        # Everything the second role adds must be out of the scheduled identity's reach.
         requests += set(script_requests("manual")) - set(script_requests(identity))
     return sorted(set(requests))
 

@@ -55,6 +55,8 @@ imports remains a maintainer decision if the check reports them.
 
 No Helmfile implementation, recovery-policy removal, production credential change,
 workflow activation, core asset removal or live deployment is part of extraction.
+The recovery workflow, script and policy in the path list above were removed
+later ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)).
 
 ## Pending source changes
 
