@@ -3,6 +3,7 @@
 
 """Exercise the repository boundary before any deployment credentials are used."""
 
+import copy
 import os
 from pathlib import Path
 import re
@@ -24,6 +25,80 @@ def step_script(name):
     step = workflow.split('    - name: ' + name + '\n', 1)[1].split('\n    - name:', 1)[0]
     lines = step.split('      run: |\n', 1)[1].splitlines()
     return '\n'.join(line[8:] for line in lines if line.startswith('        '))
+
+
+OCI_ENV = {name: '${{ secrets.%s }}' % name for name in (
+    'OCI_CLI_USER', 'OCI_CLI_TENANCY', 'OCI_CLI_FINGERPRINT', 'OCI_CLI_KEY_CONTENT', 'OCI_CLI_REGION')}
+KUBECTL_CONFIGURATION = re.compile(r'oracle-actions/configure-kubectl-oke@[0-9a-f]{40}')
+SLACK_NOTIFICATION = re.compile(r'rtCamp/action-slack-notify@[0-9a-f]{40}')
+EXPRESSION = re.compile(r'\$\{\{(.*?)\}\}', re.DOTALL)
+USES_SECRETS = re.compile(r'\bsecrets\b', re.IGNORECASE)
+WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml')
+PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
+# Both constructs hand over every secret without naming one. Expression functions
+# ignore case, and so does this search.
+WHOLE_SECRETS = re.compile(r'tojson\(\s*secrets\s*\)|secrets\s*:\s*inherit', re.IGNORECASE)
+HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML '
+                  '-r scripts/demo/oci-cli-hashes.txt')
+
+
+def secret_references(node, path=()):
+    """Yield (path, value) for every string whose expression reads the secrets context, in any form."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from secret_references(value, path + (key,))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from secret_references(value, path + (index,))
+    elif isinstance(node, str) and any(USES_SECRETS.search(expression) for expression in EXPRESSION.findall(node)):
+        yield path, node
+
+
+def allowed_secret_reference(step, place, key, value):
+    """The only secret references the workflows need. A new one needs a reason here."""
+    uses = step.get('uses', '')
+    if place == 'env' and OCI_ENV.get(key) == value:
+        return True  # the five OCI secrets, which the checks below confine to the steps that may hold them
+    if place == 'with' and key == 'cluster' and value == '${{ secrets.OKE_CLUSTER_OCID }}':
+        return bool(KUBECTL_CONFIGURATION.fullmatch(uses))
+    if place == 'env' and key == 'SLACK_WEBHOOK' and value == '${{ secrets.SLACK_WEBHOOK_URL }}':
+        return bool(SLACK_NOTIFICATION.fullmatch(uses))
+    return False
+
+
+def oci_credential_violations(workflow):
+    """List each place a parsed workflow passes an OCI secret other than the env of a step that may hold it.
+
+    Searching for the OCI names alone misses a name built at run time, such as
+    secrets[format('{0}_CLI_KEY_CONTENT', 'OCI')], so every read of the secrets
+    context must also be one that allowed_secret_reference names.
+    """
+    def mentions(value):
+        # GitHub resolves secret names without regard to case, so secrets.oci_cli_key_content is the key too.
+        return 'OCI_CLI_' in str(value).upper()
+
+    found = []
+    jobs = workflow.get('jobs') or {}
+    for path, value in secret_references(workflow):
+        is_step_value = len(path) == 6 and path[0] == 'jobs' and path[2] == 'steps' and path[4] in ('env', 'with')
+        step = jobs[path[1]]['steps'][path[3]] if is_step_value else {}
+        if not (is_step_value and allowed_secret_reference(step, path[4], path[5], value)):
+            found.append('/'.join(str(part) for part in path) + ': a secret reference outside the allowed places')
+    if mentions({key: value for key, value in workflow.items() if key != 'jobs'}):
+        found.append('workflow level')
+    for job_name, job in (workflow.get('jobs') or {}).items():
+        if mentions({key: value for key, value in job.items() if key != 'steps'}):
+            found.append(job_name + ': job level')
+        for index, step in enumerate(job.get('steps') or []):
+            label = '%s: step %s' % (job_name, step.get('name', index))
+            if mentions({key: value for key, value in step.items() if key != 'env'}):
+                found.append(label + ': outside the step env')
+            held = {key: value for key, value in (step.get('env') or {}).items() if mentions((key, value))}
+            if held and held != OCI_ENV:
+                found.append(label + ': not exactly the five secrets under their own names')
+            if held and 'uses' in step and not KUBECTL_CONFIGURATION.fullmatch(step['uses']):
+                found.append(label + ': an action other than the pinned kubectl configuration')
+    return found
 
 
 class WorkflowTests(unittest.TestCase):
@@ -204,6 +279,162 @@ class WorkflowTests(unittest.TestCase):
                     self.assertNotIn('OKE_CLUSTER_OCID', source)
                 elif path.name != 'ci-deploy-demo.yml':
                     self.assertEqual(['demo-apply'], environments)
+
+    def test_oci_credentials_reach_only_the_steps_that_use_them(self):
+        # The kubeconfig runs the OCI CLI for a token, and the CLI reads the API key
+        # from the environment, so each step that calls the cluster needs the five
+        # secrets. No other step, and no action but the kubectl configuration, gets them.
+        receiving = {
+            'ci-deploy-demo.yml': [
+                'Configure kubectl with OKE', "Verify the deployment identity's access", 'Reconcile demo components',
+                'Collect OpenSearch recovery diagnostics', 'Remove disposable restore pod'],
+            'ci-opensearch-recovery.yml': [
+                'Configure kubectl with OKE', "Verify the deployment identity's access",
+                'Create and verify OpenSearch recovery point', 'Collect failure diagnostics',
+                'Remove disposable restore pod'],
+            'ci-opensearch-volume-expand.yml': [
+                'Configure kubectl with OKE', "Verify the deployment identity's access",
+                'Expand and verify the OpenSearch volume'],
+        }
+        self.assertEqual(sorted(WRITERS), sorted(receiving))
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            with self.subTest(workflow=path.name):
+                source = path.read_text()
+                workflow = yaml.safe_load(source)
+                self.assertEqual([], oci_credential_violations(workflow))
+                self.assertIsNone(WHOLE_SECRETS.search(source))
+                steps = [step for job in workflow['jobs'].values() for step in job.get('steps') or []]
+                holders = [step for step in steps if 'OCI_CLI_KEY_CONTENT' in (step.get('env') or {})]
+                self.assertEqual(receiving.get(path.name, []), [step['name'] for step in holders])
+                self.assertEqual(['oracle-actions/configure-kubectl-oke'] if holders else [],
+                                 [step['uses'].split('@')[0] for step in holders if 'uses' in step])
+                if path.name in receiving:
+                    for step in steps:
+                        if re.search(r'\b(kubectl|helm)\b', step.get('run', '')):
+                            self.assertIn(step, holders, step['name'])
+
+    def test_oci_credential_check_reports_each_way_a_secret_can_spread(self):
+        workflow = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())
+        self.assertEqual([], oci_credential_violations(workflow))
+        key = OCI_ENV['OCI_CLI_KEY_CONTENT']
+
+        def step(candidate, name):
+            return next(step for step in candidate['jobs']['deploy']['steps'] if step['name'] == name)
+
+        def job_env(candidate):
+            candidate['jobs']['deploy']['env'].update(OCI_ENV)
+
+        def job_env_under_another_name(candidate):
+            candidate['jobs']['deploy']['env']['SIGNING_KEY'] = key
+
+        def workflow_env(candidate):
+            candidate['env'] = dict(OCI_ENV)
+
+        def job_container(candidate):
+            candidate['jobs']['deploy']['container'] = {'image': 'example', 'env': dict(OCI_ENV)}
+
+        def notification_action(candidate):
+            step(candidate, 'Send detailed Slack notification on failure')['env'].update(OCI_ENV)
+
+        def helm_action(candidate):
+            step(candidate, 'Install Helm')['env'] = dict(OCI_ENV)
+
+        def checkout_input(candidate):
+            step(candidate, 'Checkout demo configuration')['with']['token'] = key
+
+        def unpinned_configuration(candidate):
+            step(candidate, 'Configure kubectl with OKE')['uses'] = 'oracle-actions/configure-kubectl-oke@v1'
+
+        def script_interpolation(candidate):
+            step(candidate, 'Verify OCI CLI version')['run'] += ' "${{ secrets.OCI_CLI_USER }}"'
+
+        def renamed_variable(candidate):
+            step(candidate, 'Verify OCI CLI version')['env'] = {'SIGNING_KEY': key}
+
+        def partial_block(candidate):
+            del step(candidate, 'Reconcile demo components')['env']['OCI_CLI_REGION']
+
+        def crossed_names(candidate):
+            step(candidate, 'Reconcile demo components')['env']['OCI_CLI_USER'] = OCI_ENV['OCI_CLI_TENANCY']
+
+        # Secret names resolve without regard to case.
+        def lowercase_job_env(candidate):
+            candidate['jobs']['deploy']['env']['SIGNING_KEY'] = '${{ secrets.oci_cli_key_content }}'
+
+        def mixed_case_notification_action(candidate):
+            step(candidate, 'Send detailed Slack notification on failure')['env']['SIGNING_KEY'] = (
+                '${{ secrets.Oci_Cli_Key_Content }}')
+
+        def lowercase_script_interpolation(candidate):
+            step(candidate, 'Verify OCI CLI version')['run'] += ' "${{ secrets.oci_cli_user }}"'
+
+        def lowercase_reference_in_a_holder(candidate):
+            step(candidate, 'Reconcile demo components')['env']['OCI_CLI_USER'] = '${{ secrets.oci_cli_user }}'
+
+        # A name built at run time does not spell OCI_CLI_ anywhere.
+        def name_built_with_format(candidate):
+            candidate['jobs']['deploy']['env']['K'] = "${{ secrets[format('{0}_CLI_KEY_CONTENT', 'OCI')] }}"
+
+        def name_built_with_format_in_a_script(candidate):
+            step(candidate, 'Verify OCI CLI version')['run'] += (
+                " \"${{ secrets[format('{0}_CLI_{1}', 'OCI', 'KEY_CONTENT')] }}\"")
+
+        def lowercase_index_in_the_notification(candidate):
+            step(candidate, 'Send detailed Slack notification on failure')['env']['K'] = (
+                "${{ secrets['oci_cli_key_content'] }}")
+
+        def cluster_secret_given_to_another_action(candidate):
+            step(candidate, 'Install Helm')['with']['cluster'] = '${{ secrets.OKE_CLUSTER_OCID }}'
+
+        def webhook_secret_given_to_a_script(candidate):
+            step(candidate, 'Reconcile demo components')['env']['SLACK_WEBHOOK'] = '${{ secrets.SLACK_WEBHOOK_URL }}'
+
+        for change in (job_env, job_env_under_another_name, workflow_env, job_container, notification_action,
+                       helm_action, checkout_input, unpinned_configuration, script_interpolation, renamed_variable,
+                       partial_block, crossed_names, lowercase_job_env, mixed_case_notification_action,
+                       lowercase_script_interpolation, lowercase_reference_in_a_holder, name_built_with_format,
+                       name_built_with_format_in_a_script, lowercase_index_in_the_notification,
+                       cluster_secret_given_to_another_action, webhook_secret_given_to_a_script):
+            with self.subTest(change=change.__name__):
+                candidate = copy.deepcopy(workflow)
+                change(candidate)
+                self.assertNotEqual([], oci_credential_violations(candidate))
+
+    def test_whole_secrets_search_ignores_case(self):
+        for text in ('${{ toJSON(secrets) }}', '${{ tojson(secrets) }}', '${{ TOJSON( secrets ) }}',
+                     'secrets: inherit', 'Secrets : Inherit'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(WHOLE_SECRETS.search(text))
+        self.assertIsNone(WHOLE_SECRETS.search('${{ secrets.SLACK_WEBHOOK }}'))
+
+    def test_oci_cli_is_installed_with_required_hashes_before_any_step_holds_the_api_key(self):
+        for filename in WRITERS:
+            with self.subTest(workflow=filename):
+                source = (WORKFLOWS / filename).read_text()
+                steps = [step for job in yaml.safe_load(source)['jobs'].values() for step in job['steps']]
+                names = [step.get('name') for step in steps]
+                install = steps[names.index('Install the hash-verified OCI CLI')]
+                # The build of a source distribution runs here, so this step holds no secret.
+                self.assertEqual({'name': 'Install the hash-verified OCI CLI', 'env': {'PIP_CONSTRAINT': PIP_CONSTRAINT},
+                                  'run': HASHED_INSTALL + '\n'}, install)
+                self.assertEqual(1, source.count('pip install'))
+                configure = names.index('Configure kubectl with OKE')
+                self.assertEqual(names.index('Install the hash-verified OCI CLI') + 1, configure)
+                self.assertEqual(configure, min(index for index, step in enumerate(steps)
+                                                if 'OCI_CLI_KEY_CONTENT' in (step.get('env') or {})))
+                self.assertLess(names.index('Checkout demo configuration'), configure - 1)
+                # The action runs "python -m pip install oci-cli" itself. Without an index
+                # it succeeds only when the hash-verified install left nothing to fetch.
+                self.assertEqual(dict(OCI_ENV, PIP_CONSTRAINT=PIP_CONSTRAINT, PIP_NO_INDEX='1'), steps[configure]['env'])
+                self.assertRegex(steps[configure]['uses'], KUBECTL_CONFIGURATION)
+        # Credential-free CI runs the same two commands on a hosted runner, then the same check.
+        tests, = [job for job in yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs'].values()
+                  if job.get('name') == 'Demo tests']
+        rehearsal, = [step for step in tests['steps'] if 'pip install oci-cli' in step.get('run', '')]
+        self.assertEqual({'PIP_CONSTRAINT': PIP_CONSTRAINT}, rehearsal['env'])
+        commands = [line for line in rehearsal['run'].splitlines() if not line.startswith('#')]
+        self.assertEqual([HASHED_INSTALL, 'PIP_NO_INDEX=1 python -m pip install oci-cli',
+                          'python scripts/demo/verify_oci_cli.py'], commands)
 
     def scheduled_rerun(self, event, attempt, remote, status=0):
         with tempfile.TemporaryDirectory() as temp:

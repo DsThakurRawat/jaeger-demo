@@ -129,6 +129,84 @@ to the release images and `JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY` and
 snapshot image tags and so needs `MAIN_SHA`, the `jaegertracing/jaeger` commit to
 deploy.
 
+## Where the workflows use the API key
+
+Each identity is an OCI user whose API signing key is a GitHub environment secret.
+The kubeconfig the workflows create holds no credential. `kubectl` and Helm get
+a short-lived token by running `oci ce cluster generate-token`, and the OCI CLI
+reads the key from the five `OCI_CLI_*` environment variables. A step therefore
+needs the secrets when it configures cluster access or calls the cluster, and no
+other step does.
+
+The three writer workflows set the five secrets in the `env` of those steps, not
+for the job:
+
+| Workflow | Steps that receive the secrets |
+| --- | --- |
+| `ci-deploy-demo.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Reconcile demo components, Collect OpenSearch recovery diagnostics, Remove disposable restore pod |
+| `ci-opensearch-recovery.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Create and verify OpenSearch recovery point, Collect failure diagnostics, Remove disposable restore pod |
+| `ci-opensearch-volume-expand.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Expand and verify the OpenSearch volume |
+
+The checkout, the revision and recovery policy checks, the OCI CLI installation
+and version check, the Helm setup action and the Slack notification run without
+them. The only action that receives them is the kubectl configuration,
+`oracle-actions/configure-kubectl-oke`, pinned by commit.
+`scripts/demo/workflow_test.py` fails if a secret appears at workflow or job
+level, in an action input or a script, under another name, as part of the set, or
+on a step that runs any other action, and if the steps in this table change. The
+five lines are repeated in each step. GitHub Actions accepts YAML anchors, but
+not the merge key that would combine an anchor with a step's other variables.
+
+This limits which processes are handed the key. It does not isolate the steps of
+a job from each other: they share one runner, so an earlier step that was
+compromised could replace a tool that a later step runs with the key. Keep every
+action pinned by commit, and review a new step in these workflows as a change to
+who can use the identity.
+
+### OCI CLI installation
+
+The OCI CLI comes from PyPI on every run.
+[oci-cli-hashes.txt](../scripts/demo/oci-cli-hashes.txt) lists each pin of
+[oci-cli-constraints.txt](../scripts/demo/oci-cli-constraints.txt) with the
+SHA-256 of every file PyPI publishes for that release. The step **Install the
+hash-verified OCI CLI** runs before any step holds the key:
+
+```bash
+python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML -r scripts/demo/oci-cli-hashes.txt
+```
+
+pip refuses a file whose hash is not listed and a dependency that is not listed,
+so a changed file, or one added to a release later, stops the run. The kubectl
+configuration action then runs its own `python -m pip install oci-cli`, which
+takes no options. That step sets `PIP_NO_INDEX`, so the command succeeds only
+when nothing is left to install, and it cannot download a package while the key
+is in its environment. `verify_oci_cli.py` then checks every installed version.
+The `Demo tests` CI job runs the same three commands without credentials.
+
+Hash checking does not cover the following:
+
+- **The PyYAML build.** OCI CLI 3.96.3 accepts no PyYAML later than 6.0.2, and
+  that release has no wheel for Python 3.14, the hosted runner's version when
+  this was written. pip verifies the source archive, then builds it with the
+  setuptools, wheel and Cython releases PyPI serves at that moment. pip checks
+  neither hashes nor pins for build requirements. `--only-binary :all: --no-binary
+  PyYAML` keeps this the only source build. The build runs in the install step,
+  without the key, on the runner the later steps use. When a pinned OCI CLI
+  accepts a PyYAML release that has a wheel, remove `--no-binary PyYAML` from the
+  four workflows.
+- **Packages from the runner image.** pip does not download a pin that the image
+  already provides at that version, so only the version of such a package is
+  checked.
+- **Python before 3.13.** Three pins need `typing_extensions` there. The files
+  do not pin it, so the install stops.
+- **kubectl.** The pinned `oracle-actions/configure-kubectl-oke` action downloads
+  `kubectl` from `dl.k8s.io` without checking a checksum, inside the step that
+  holds the key, and the later steps that hold the key run that binary. The
+  OCI CLI hashes do not cover it.
+- **The origin of the hashes.** They are what PyPI recorded when
+  `scripts/utils/update-oci-cli-hashes.py` ran. They detect a later change. They
+  do not show that a release was sound when it was pinned.
+
 ## Apply and bind
 
 An administrator runs these from a checkout of the reviewed commit, with a

@@ -65,10 +65,13 @@ access is required for the chart repositories, but no production credentials are
 used. Install the constrained Python libraries in a virtual environment with
 `python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML`.
 The suite passes on Python 3.9 with only the constrained PyYAML installed. The
-full constrained OCI CLI, which the `Demo tests` CI check installs, needs Python
-3.11 or later for its `pycparser` and `multidict` pins; local checks do not install
-it. If a change or regenerated constraints raise either minimum, update this
-section and the README Development section.
+full constrained OCI CLI, which the `Demo tests` CI check installs with
+`--require-hashes` from `scripts/demo/oci-cli-hashes.txt`, needs Python 3.13 or
+later; local checks do not install it. The `pycparser` and `multidict` pins need
+3.11, and below 3.13 three pins require `typing_extensions`, which the files do
+not pin and hash checking therefore refuses. If a change or regenerated
+constraints raise either minimum, update this section and the README Development
+section.
 The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 
@@ -112,7 +115,16 @@ deployment.
   performed the deployment after `oci-cli` was installed, keep the license header and
   provenance comment with the new run URL, and replace the pins. Update the literal
   assertions in `scripts/demo/verify_oci_cli_test.py` (`oci-cli`, `oci` and
-  `python-dateutil`) in the same commit.
+  `python-dateutil`) in the same commit. Then run
+  `python3 scripts/utils/update-oci-cli-hashes.py` and commit
+  `scripts/demo/oci-cli-hashes.txt`, which the workflows install with
+  `pip install --require-hashes`. The script asks PyPI for the SHA-256 of every
+  file of each pinned release; `--check` changes nothing and exits non-zero when
+  the file is stale. `scripts/demo/update_oci_cli_hashes_test.py` fails while the
+  two files pin different versions. The install command builds only PyYAML from
+  source ([deployer access](docs/deployer-access.md#oci-cli-installation)); when
+  the pinned PyYAML has a wheel for the runner's Python, remove
+  `--no-binary PyYAML` from the four workflows and `scripts/demo/workflow_test.py`.
 
 ## Renovate discovery
 

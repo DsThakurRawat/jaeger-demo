@@ -29,7 +29,10 @@ chart or script needs access the role lacks, and when a rule has no chart object
 or command behind it. Every writer workflow runs
 `deployer_access.py check --self` with its own credential before any cluster
 change, so a credential that lacks part of the role stops the run before it
-changes anything.
+changes anything. Those workflows set the OCI API key only on the steps that
+configure cluster access or call the cluster, and install the OCI CLI with
+required hashes before the first of them
+([where the workflows use the API key](../../docs/deployer-access.md#where-the-workflows-use-the-api-key)).
 
 `deploy.py` fingerprints each component's deployment inputs and records successful
 revisions in the `default/jaeger-demo-deployment-revisions` ConfigMap, patching

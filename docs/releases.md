@@ -84,15 +84,23 @@ Production and credential-free chart tests pin Helm v4.3.2, the version observed
 in the November 17, 2026 core deployment writer. Compare fresh release revisions
 and timestamps with that writer evidence before handover; the Cloud Shell client
 version is not evidence of the last release writer. Freeze and verify the other
-tool versions and checksums in the operational record as well. The OKE setup
-action's pip installation is constrained by `scripts/demo/oci-cli-constraints.txt`
-to OCI CLI 3.96.3 and the dependency versions observed in the same writer. After
+tool versions and checksums in the operational record as well.
+`scripts/demo/oci-cli-constraints.txt` pins OCI CLI 3.96.3 and the dependency
+versions observed in the same writer, and `scripts/demo/oci-cli-hashes.txt`
+repeats those pins with the SHA-256 of every file PyPI publishes for them. Before
+any step holds the OCI API key, the workflow installs that file with
+`pip install --require-hashes`, so a file or dependency that is not listed stops
+the run. The OKE setup action's own pip command then runs under the same
+constraints with no package index, so it can only confirm that installation. After
 setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
 the CLI executable's version, including when the action's installed marker skips
 installation. A rejected tool check cannot start reconciliation or restore-pod
-cleanup. Credential-free CI installs and verifies these pins. The OpenSearch recovery and
-volume-expansion workflows apply the same constraint and check after checkout and
-before they verify the deployment identity's access.
+cleanup. Credential-free CI runs the same installation and check. The OpenSearch
+recovery and volume-expansion workflows install, constrain and check the same way
+after checkout and before they verify the deployment identity's access.
+[Deployer access](deployer-access.md#oci-cli-installation) lists what hash
+checking does not cover, chiefly the PyYAML source build, and which steps receive
+the API key.
 Kubectl follows the live cluster's Kubernetes version; record its exact version
 and checksum along with the runner image used for handover. Supply
 `expected_config_sha` during the reviewed script handover. The workflow

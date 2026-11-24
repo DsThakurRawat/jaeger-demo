@@ -85,11 +85,6 @@ jobs:
     timeout-minutes: 330
     env:
       EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
-      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       JAEGER_DEMO_JAEGER_IMAGE_REPOSITORY: jaegertracing/jaeger-snapshot
       JAEGER_DEMO_HOTROD_IMAGE_REPOSITORY: jaegertracing/example-hotrod-snapshot
       JAEGER_DEMO_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
@@ -147,11 +142,30 @@ jobs:
         printf 'MAIN_SHA=%s\n' "$core_sha" >> "$GITHUB_ENV"
         printf 'Configuration: %s\nUpstream Jaeger main: %s\n' "$GITHUB_SHA" "$core_sha" >> "$GITHUB_STEP_SUMMARY"
 
+    # Download and verify the OCI CLI before any step holds the OCI API key. pip
+    # rejects a file whose SHA-256 is not in oci-cli-hashes.txt and builds nothing
+    # from source except PyYAML, which has no wheel for the runner's Python
+    # (docs/deployer-access.md).
+    - name: Install the hash-verified OCI CLI
+      env:
+        PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
+      run: |
+        python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML -r scripts/demo/oci-cli-hashes.txt
+
+    # The OCI API key is set only on the steps that reach OCI or the cluster. The
+    # kubeconfig runs the OCI CLI for a token, so every kubectl and helm call needs it.
+    # The action runs pip itself; with no index it cannot download anything here.
     - name: Configure kubectl with OKE
       id: configure-oke
       uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
       env:
         PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
+        PIP_NO_INDEX: '1'
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       with:
         cluster: ${{ secrets.OKE_CLUSTER_OCID }}
         enablePrivateEndpoint: false
@@ -176,6 +190,11 @@ jobs:
       timeout-minutes: 10
       env:
         DEPLOYER_IDENTITY: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       run: python scripts/demo/deployer_access.py check --self --identity "$DEPLOYER_IDENTITY"
 
     # Stop inside the job limit so diagnostics, restore-pod cleanup and the
@@ -184,12 +203,24 @@ jobs:
     - name: Reconcile demo components
       id: reconcile
       timeout-minutes: 300
+      env:
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       run: python3 scripts/demo/deploy.py
 
     - name: Collect OpenSearch recovery diagnostics
       if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'
       # Bounded like the cleanup step, so a hung API cannot use up the reserve.
       timeout-minutes: 5
+      env:
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       run: |
         kubectl -n opensearch get volumesnapshots \
           -l jaegertracing.io/recovery-source=opensearch \
@@ -209,6 +240,11 @@ jobs:
       timeout-minutes: 2
       env:
         OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       run: |
         kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
           --request-timeout=30s --ignore-not-found=true --wait=false ||
