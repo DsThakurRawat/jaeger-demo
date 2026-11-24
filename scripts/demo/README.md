@@ -47,7 +47,9 @@ the dependent OTel Jaeger and application updates in that run.
 Deployment, manual recovery and volume expansion share the workflow concurrency
 group `jaeger-otel-demo-opensearch-recovery`, so one runs at a time and a running
 one is never cancelled. GitHub keeps one waiting run per group: a newer waiting
-run cancels an older waiting one. When the daily job selects OpenSearch, it
+run cancels an older waiting one, which is accepted
+([operator action](../../docs/releases.md#a-waiting-run-replaced-by-a-newer-one)).
+When the daily job selects OpenSearch, it
 upgrades the live StatefulSet on its existing PVC, waits for readiness, and then
 upgrades Dashboards. The job
 checks the database and public Dashboards versions against the application

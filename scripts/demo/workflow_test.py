@@ -198,6 +198,35 @@ class WorkflowTests(unittest.TestCase):
         for workflow in ('ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'):
             self.assertIn('deployer_access.py check --self --identity manual\n', (WORKFLOWS / workflow).read_text())
 
+    def test_the_writer_group_keeps_one_waiting_run_and_never_cancels_a_running_one(self):
+        # The chosen setting (#102): GitHub's default of one waiting run per group,
+        # which a newer waiting run replaces. `queue: max` would keep every waiting
+        # run, but no released actionlint accepts the key
+        # (https://github.com/rhysd/actionlint/issues/657). docs/releases.md states
+        # the operator action. Change all three workflows and this test together.
+        group = 'jaeger-otel-demo-opensearch-recovery'
+        chosen = {'group': group, 'cancel-in-progress': False}
+        declared = {}
+        for path in sorted(WORKFLOWS.glob('*.yml')):
+            workflow = yaml.safe_load(path.read_text())
+            jobs = workflow.get('jobs') or {}
+            settings = [('workflow', workflow.get('concurrency'))]
+            settings += [('job ' + name, job.get('concurrency')) for name, job in jobs.items()]
+            for level, setting in settings:
+                name = setting.get('group') if isinstance(setting, dict) else setting
+                # GitHub compares group names without regard to case.
+                if str(name or '').lower() == group:
+                    declared.setdefault(path.name, {})[level] = setting
+            levels = declared.get(path.name, {})
+            if levels and 'workflow' not in levels:
+                # Without a workflow-level setting, each job that holds deployment credentials needs its own.
+                for name, job in jobs.items():
+                    with self.subTest(workflow=path.name, job=name):
+                        self.assertTrue('environment' not in job or 'job ' + name in levels)
+        self.assertEqual({'ci-deploy-demo.yml': {'job deploy': chosen},
+                          'ci-opensearch-recovery.yml': {'workflow': chosen},
+                          'ci-opensearch-volume-expand.yml': {'workflow': chosen}}, declared)
+
     def test_only_the_writer_workflows_use_a_deployment_environment(self):
         writers = {'ci-deploy-demo.yml', 'ci-opensearch-recovery.yml', 'ci-opensearch-volume-expand.yml'}
         for path in sorted(WORKFLOWS.glob('*.yml')):
