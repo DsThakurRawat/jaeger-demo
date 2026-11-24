@@ -139,7 +139,11 @@ schedule uses `demo-scheduled`, which has no reviewer, and runs only while the
 the job checks that its credential holds the role in
 [ops/rbac/deployer.yaml](ops/rbac/deployer.yaml) ([deployer access](docs/deployer-access.md)),
 and the stack scripts install charts only from archives that match
-[scripts/demo/chart-archives.lock.json](scripts/demo/chart-archives.lock.json). The deployment,
+[scripts/demo/chart-archives.lock.json](scripts/demo/chart-archives.lock.json). Only the
+steps that configure cluster access or call the cluster receive the OCI API key,
+and the OCI CLI is installed before them from files that match
+[scripts/demo/oci-cli-hashes.txt](scripts/demo/oci-cli-hashes.txt)
+([where the workflows use the API key](docs/deployer-access.md#where-the-workflows-use-the-api-key)). The deployment,
 OpenSearch recovery and volume-expansion workflows share one concurrency group, so
 one of them runs at a time.
 

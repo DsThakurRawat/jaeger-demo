@@ -4,6 +4,8 @@
 # Installed by the November 17, 2026 deployment writer:
 # https://github.com/jaegertracing/jaeger/actions/runs/44090222704/job/134063110067
 # Include dependencies already present on that runner, not only newly installed ones.
+# oci-cli-hashes.txt repeats these pins with file hashes. After a change here, run
+# python3 scripts/utils/update-oci-cli-hashes.py and commit the result.
 
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.5

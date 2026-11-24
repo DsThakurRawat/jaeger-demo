@@ -54,6 +54,17 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
+### Security
+
+- The deploy, OpenSearch recovery and volume-expansion workflows give the OCI API
+  key only to the steps that configure cluster access or call the cluster, so the
+  Helm setup and Slack notification actions no longer receive it. They install the
+  OCI CLI before any of those steps with `pip install --require-hashes` from the
+  new `scripts/demo/oci-cli-hashes.txt`, and the kubectl configuration action can
+  no longer download packages. The PyYAML source build stays outside hash checking
+  ([deployer access](docs/deployer-access.md#oci-cli-installation)).
+  (fixes [#103](https://github.com/jaegertracing/jaeger-demo/issues/103))
+
 ## 2026-11-23
 
 ### Added
