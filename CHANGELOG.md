@@ -63,6 +63,18 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 
+### Fixed
+
+- An `otel` / `opensearch` deployment no longer fails verification when the
+  public Dashboards route answers 503 just after the rollout. The Dashboards
+  Pod is now Ready only when its status API answers 200, and `verify_trace.py`
+  retries the public status read for a bounded time on 502, 503, 504 and
+  connection errors, then fails with the last status. The readiness probe
+  changes the rendered Dashboards Deployment, so the next deployment that
+  applies it restarts the Dashboards Pod.
+  ([#128](https://github.com/jaegertracing/jaeger-demo/pull/128),
+  fixes [#111](https://github.com/jaegertracing/jaeger-demo/issues/111))
+
 ## 2026-11-23
 
 ### Added

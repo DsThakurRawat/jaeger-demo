@@ -51,7 +51,10 @@ upgrades the live StatefulSet on its existing PVC, waits for readiness, and then
 upgrades Dashboards. The job
 checks the database and public Dashboards versions against the application
 version of each deployed chart release and sends a fresh trace
-through the collector and query service before recording success. Historical
+through the collector and query service before recording success. It reads the
+public Dashboards status up to 30 times, two seconds apart, while the route
+answers 502, 503 or 504 or the connection fails, and then fails with the last
+status. Historical
 synthetic traces are disposable. A destructive reset needs explicit approval.
 
 An OpenSearch deployment requested manually defaults to a retained snapshot and
