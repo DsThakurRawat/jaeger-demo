@@ -33,6 +33,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `docs/releases.md` has the runbook.
   ([#131](https://github.com/jaegertracing/jaeger-demo/pull/131),
   fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
+- A node pool initialization script, `ops/oke/node-pool-init.sh`, that grows the
+  root filesystem to the boot volume size on every node the pool creates before
+  running the unchanged OKE init script, and the operator runbook
+  `docs/node-pool.md` to inspect the pool, set the script without dropping other
+  node metadata, and verify the next new node. Nothing applies it automatically;
+  setting it on the pool is a separately approved operator action.
+  ([#138](https://github.com/jaegertracing/jaeger-demo/pull/138),
+  refs [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
   ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))

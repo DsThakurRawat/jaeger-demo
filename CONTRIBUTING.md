@@ -75,7 +75,8 @@ section.
 The same shell/Python suites run in the `Demo tests` CI check. New behavior
 needs tests; bugs need regression coverage. Preserve imported test assertions.
 
-`make lint` runs ShellCheck for shared and example scripts, actionlint for workflows, JSON
+`make lint` runs ShellCheck for shared and example scripts and the node pool
+initialization script in `ops/oke`, actionlint for workflows, JSON
 syntax validation, and ruff for Python with the rules in `ruff.toml`. The script
 handover uses the production writer's Helm version. The toolchain and schema
 checks for Helmfile adoption are documented below.
