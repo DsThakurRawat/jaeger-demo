@@ -109,14 +109,24 @@ First prepare the new metadata. This changes nothing:
 node_pool_id='<node-pool-ocid>'
 work_dir="$(mktemp -d)"
 oci ce node-pool get --node-pool-id "$node_pool_id" >"$work_dir/node-pool.json"
+current="$(jq -r '.data["node-metadata"].user_data // empty' "$work_dir/node-pool.json")"
+if [ -n "$current" ] && ! printf '%s' "$current" | base64 --decode | cmp -s - ops/oke/node-pool-init.sh; then
+  echo 'Stop: the node pool now has another initialization script. Nothing was changed.' >&2
+  rm -rf "$work_dir"
+  false
+fi
 user_data="$(base64 <ops/oke/node-pool-init.sh | tr -d '\n')"
 jq --arg user_data "$user_data" '(.data["node-metadata"] // {}) + {user_data: $user_data}' \
   "$work_dir/node-pool.json" >"$work_dir/node-metadata.json"
 jq 'keys' "$work_dir/node-metadata.json"
 ```
 
-The keys must be the `node_metadata_keys` from step 1 plus `user_data`. Stop if
-any command failed or the keys differ. Then apply it:
+The block checks `user_data` again in the snapshot it will merge into, because
+another operator may have set a script since step 1, and the update's `--if-match`
+uses this snapshot's etag, so it would not notice. If that check prints `Stop:`,
+it has removed the prepared files and the update below cannot run; go back to
+step 1. Otherwise the keys must be the `node_metadata_keys` from step 1 plus
+`user_data`. Stop if any command failed or the keys differ. Then apply it:
 
 ```bash
 oci ce node-pool update --node-pool-id "$node_pool_id" \

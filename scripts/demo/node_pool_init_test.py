@@ -175,7 +175,7 @@ class RunbookTests(unittest.TestCase):
         self.assertEqual(len(found), 1, marker)
         return found[0]
 
-    def run_blocks(self, code, metadata):
+    def run_blocks(self, code, metadata, status=0):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             for name in ("bin", "calls", "work"):
@@ -187,7 +187,8 @@ class RunbookTests(unittest.TestCase):
                        OCI_CALLS=str(tmp / "calls"), OCI_FIXTURE=str(fixture), TMPDIR=str(tmp / "work"))
             result = subprocess.run(["bash", "-euo", "pipefail", "-c", code], cwd=ROOT, env=env,
                                     capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, status, result.stderr)
+            self.stderr = result.stderr
             calls = [(tmp / "calls" / f).read_text().split("\0")[:-1]
                      for f in os.listdir(tmp / "calls") if f.startswith("call.")]
             sent = tmp / "calls/metadata.json"
@@ -227,13 +228,25 @@ class RunbookTests(unittest.TestCase):
         _, sent = self.update(None)
         self.assertEqual(set(sent), {"user_data"})
 
-    def test_update_replaces_an_earlier_value(self):
-        old = base64.b64encode(b"#!/bin/bash\necho secret\n").decode()
-        _, sent = self.update({"user_data": old})
-        self.assertEqual(set(sent), {"user_data"})
+    def test_update_refuses_a_script_set_since_the_inspection(self):
+        # Another operator set a different script after step 1. The fresh read in
+        # step 2 carries that script and its etag, so only this check stops it.
+        other = base64.b64encode(b"#!/bin/bash\necho secret\n").decode()
+        code = self.block("jq --arg user_data") + self.block("oci ce node-pool update")
+        stdout, calls, sent, leftovers = self.run_blocks(code, {"user_data": other, "existing-key": "x"}, status=1)
+        self.assertIn("Stop: the node pool now has another initialization script", self.stderr)
+        self.assertNotIn("echo secret", self.stderr)
+        self.assertEqual([c[:3] for c in calls], [["ce", "node-pool", "get"]])
+        self.assertIsNone(sent)
+        self.assertEqual(leftovers, [])
+
+    def test_update_with_the_committed_script_already_set_changes_nothing_else(self):
+        committed = base64.b64encode(SCRIPT.read_bytes()).decode()
+        _, sent = self.update({"user_data": committed, "existing-key": "existing-secret-value"})
+        self.assertEqual(sent, {"user_data": committed, "existing-key": "existing-secret-value"})
 
     def inspect(self, metadata):
-        stdout, calls, _, _ = self.run_blocks(self.block("cmp -s - ops/oke/node-pool-init.sh"), metadata)
+        stdout, calls, _, _ = self.run_blocks(self.block("node_metadata_keys: (("), metadata)
         self.assertTrue(calls)
         self.assertTrue(all(c[:3] == ["ce", "node-pool", "get"] for c in calls))
         summary = json.loads(stdout[:stdout.rindex("}") + 1])
