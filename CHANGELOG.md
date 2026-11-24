@@ -46,6 +46,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#135](https://github.com/jaegertracing/jaeger-demo/pull/135),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 
+- `AGENTS.md` no longer lists recovery removal as a separate future stage, since
+  the recovery tooling is gone. Helmfile and post-adoption refactors remain
+  separate stages with explicit prerequisites.
+  ([#134](https://github.com/jaegertracing/jaeger-demo/pull/134),
+  fixes [#133](https://github.com/jaegertracing/jaeger-demo/issues/133))
+
 - `docs/releases.md` states that a waiting writer replaced by a newer one in the
   shared concurrency group is accepted behavior, and what an operator does when
   the run observer reports a scheduled run cancelled that way. The workflows are
