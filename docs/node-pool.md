@@ -122,12 +122,16 @@ any command failed or the keys differ. Then apply it:
 oci ce node-pool update --node-pool-id "$node_pool_id" \
   --node-metadata "file://$work_dir/node-metadata.json" \
   --if-match "$(jq -r '.etag' "$work_dir/node-pool.json")" \
-  --force --wait-for-state SUCCEEDED --wait-for-state FAILED
+  --force --wait-for-state SUCCEEDED --wait-for-state FAILED \
+  --query 'data.status' --raw-output
 rm -rf "$work_dir"
 ```
 
 - `--if-match` makes the update fail if the node pool changed since it was read.
   Read and prepare again in that case.
+- `--query 'data.status' --raw-output` prints only the work request's state.
+  Without it, `--wait-for-state` prints the whole work request, including the
+  node pool's and the work request's OCIDs.
 - Pass no other property. In particular, a change to the placement configuration
   terminates the existing nodes and creates new ones
   ([modifying node pool properties](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengmodifyingnodepool.htm)).

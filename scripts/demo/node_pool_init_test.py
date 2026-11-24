@@ -114,7 +114,8 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(runs[0].split(), ["shellcheck"] + lint.group(1).split())
 
 
-FIXTURE_OCIDS = ["ocid1.nodepool.oc1..examplepool", "ocid1.image.oc1..exampleimage"]
+FIXTURE_OCIDS = ["ocid1.nodepool.oc1..examplepool", "ocid1.image.oc1..exampleimage",
+                 "ocid1.clustersworkrequest.oc1..examplerequest", "ocid1.compartment.oc1..examplecompartment"]
 
 
 def node_pool(metadata):
@@ -133,7 +134,9 @@ def node_pool(metadata):
 
 
 # Records every call and answers `get` from the fixture; `update` keeps a copy of
-# the metadata file it was given, because the runbook deletes it afterwards.
+# the metadata file it was given, because the runbook deletes it afterwards. Like
+# the OCI CLI with --wait-for-state, `update` answers with the whole work request,
+# OCIDs included, unless --query data.status --raw-output narrows it to the state.
 OCI_STUB = r"""#!/bin/bash
 call="$(mktemp "$OCI_CALLS/call.XXXXXX")"
 printf '%s\0' "$@" >"$call"
@@ -145,7 +148,20 @@ case "$1 $2 $3" in
       if [[ $prev == --node-metadata ]]; then cp "${arg#file://}" "$OCI_CALLS/metadata.json"; fi
       prev="$arg"
     done
-    echo '{"opc-work-request-id": "example-work-request"}' ;;
+    query='' raw=''
+    prev=''
+    for arg in "$@"; do
+      if [[ $prev == --query ]]; then query="$arg"; fi
+      if [[ $arg == --raw-output ]]; then raw=1; fi
+      prev="$arg"
+    done
+    if [[ $query == data.status && -n $raw ]]; then
+      echo SUCCEEDED
+    else
+      printf '%s\n' '{"data": {"id": "ocid1.clustersworkrequest.oc1..examplerequest",' \
+        '"compartment-id": "ocid1.compartment.oc1..examplecompartment", "status": "SUCCEEDED",' \
+        '"resources": [{"identifier": "ocid1.nodepool.oc1..examplepool", "action-type": "UPDATED"}]}}'
+    fi ;;
   *) exit 2 ;;
 esac
 """
@@ -191,7 +207,10 @@ class RunbookTests(unittest.TestCase):
         args = updates[0][3:]
         self.assertEqual([a for a in args if a.startswith("--")],
                          ["--node-pool-id", "--node-metadata", "--if-match", "--force",
-                          "--wait-for-state", "--wait-for-state"])
+                          "--wait-for-state", "--wait-for-state", "--query", "--raw-output"])
+        self.assertEqual(args[args.index("--query") + 1], "data.status")
+        # Only the work request's state reaches the terminal, not its OCIDs.
+        self.assertEqual(stdout.splitlines()[-1], "SUCCEEDED")
         self.assertEqual(args[args.index("--node-pool-id") + 1], "<node-pool-ocid>")
         self.assertEqual(args[args.index("--if-match") + 1], "example-etag-1")
         self.assertTrue(args[args.index("--node-metadata") + 1].startswith("file://"))
