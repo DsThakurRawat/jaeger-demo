@@ -810,6 +810,31 @@ testPinnedOpenSearchChartsRenderMatchingImagesAndStorageIdentity() {
   assertNotContains "$rendered" "postStart:"
   assertContains "$rendered" "- name: workspace-bootstrap"
   assertContains "$rendered" "image: \"docker.io/opensearchproject/opensearch-dashboards:$chart_version\""
+  # Dashboards answers 503 on its port while it starts, so Ready must mean
+  # that the status API answers 200 (#111). A probe accepts one handler: the
+  # chart's default port check must be gone from the readiness probe.
+  local readiness_probe
+  local other_probes
+  assertEquals "Dashboards should render exactly one readiness probe" 1 \
+    "$(printf '%s\n' "$rendered" | grep -c '^[[:space:]]*readinessProbe:$' || true)"
+  readiness_probe=$(printf '%s\n' "$rendered" |
+    sed -n '/^[[:space:]]*readinessProbe:$/,/^[[:space:]]*livenessProbe:$/p')
+  assertContains "$readiness_probe" "livenessProbe:"
+  assertEquals "Dashboards readiness should use one HTTP handler" 1 \
+    "$(printf '%s\n' "$readiness_probe" | grep -c '^[[:space:]]*httpGet:$' || true)"
+  printf '%s\n' "$readiness_probe" | grep -qxE '[[:space:]]*path: /api/status'
+  assertTrue "Dashboards readiness should read the status API" $?
+  printf '%s\n' "$readiness_probe" | grep -qxE '[[:space:]]*port: 5601'
+  assertTrue "Dashboards readiness should probe the Dashboards port" $?
+  assertNotContains "$readiness_probe" "tcpSocket"
+  # Liveness and startup keep the chart's port check, so neither restarts a
+  # Pod that is still starting.
+  other_probes=$(printf '%s\n' "$rendered" |
+    sed -n '/^[[:space:]]*livenessProbe:$/,/^[[:space:]]*env:$/p')
+  assertContains "$other_probes" "startupProbe:"
+  assertEquals "Dashboards liveness and startup should keep the port check" 2 \
+    "$(printf '%s\n' "$other_probes" | grep -c '^[[:space:]]*tcpSocket:$' || true)"
+  assertNotContains "$other_probes" "httpGet"
 }
 
 # Write a fake curl that answers like Dashboards in $HOOK_SCENARIO and records
