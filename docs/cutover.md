@@ -311,7 +311,8 @@ or runner. Manual runs continue to use `demo-apply`.
    before the intended 13:00 UTC event. Do not dispatch a manual writer close to
    13:00 UTC, and do not leave a dispatched run waiting for approval across it:
    the writers share one concurrency group, and a newer waiting run cancels an
-   older one. To pause future scheduled jobs, set the variable to `false`. Inspect
+   older one ([what to do when that happens](releases.md#a-waiting-run-replaced-by-a-newer-one)).
+   To pause future scheduled jobs, set the variable to `false`. Inspect
    and drain any queued or running writers before changing access or rolling back.
 
    ```bash

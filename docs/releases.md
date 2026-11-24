@@ -225,6 +225,54 @@ cancels an older waiting one. Do not dispatch a manual writer close to 13:00 UTC
 and do not leave a dispatched run waiting for approval across 13:00 UTC; either
 can cost the scheduled run or the manual one.
 
+### A waiting run replaced by a newer one
+
+This is accepted behavior
+([#102](https://github.com/jaegertracing/jaeger-demo/issues/102)), and
+`scripts/demo/workflow_test.py` asserts the setting on all three workflows.
+GitHub documents a
+[`queue: max`](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
+setting that keeps up to 100 waiting runs per group instead of one. It is not
+used, because actionlint 1.7.12, the version CI runs and the newest release on
+2026-11-24, rejects the key
+([rhysd/actionlint#657](https://github.com/rhysd/actionlint/issues/657)). Adopt
+it in all three workflows in one change once a released actionlint accepts it.
+
+Until then a writer that waits is cancelled as soon as another writer starts to
+wait in the group. The usual case is the 13:00 UTC run waiting behind a long
+manual run when someone dispatches a second writer. GitHub does not document
+whether a run that waits for `demo-apply` approval already holds the group, so
+treat it as holding it: other writers wait behind it, and the rule above applies.
+
+The cancelled run changed nothing in the cluster. The run observer reports a
+cancelled deploy run; a recovery or volume-expansion run cancelled this way is
+not reported, so check its run page after dispatching one. When the observer
+reports a cancelled scheduled run:
+
+1. Open the run and confirm that its job has no steps and that another writer
+   was created while it waited. A run with steps is a different failure; follow
+   the rest of this section.
+2. Decide whether the update can wait a day. The next scheduled run selects both
+   Jaeger components and every component whose fingerprint still differs, so the
+   skipped update is applied then and no merged change is lost. If it can wait,
+   nothing more is needed.
+3. To apply it the same day, first list the writers that are running or waiting
+   and let them finish:
+
+   ```bash
+   for workflow in ci-deploy-demo.yml ci-opensearch-recovery.yml ci-opensearch-volume-expand.yml; do
+     gh api "repos/jaegertracing/jaeger-demo/actions/workflows/$workflow/runs?per_page=20" \
+       --jq '.workflow_runs[] | select(.status != "completed") | {id, event, status, created_at, html_url}'
+   done
+   ```
+
+   Then re-run the cancelled scheduled run. A re-run deploys only while `main` is
+   still at the run's commit and stops at its first step otherwise. After a later
+   merge, wait for the next scheduled run or dispatch the stack and scope that
+   must not wait as a manual run, which needs a `demo-apply` reviewer. A re-run
+   or a dispatch waits in the group like any other writer, so start it only when
+   the list is empty.
+
 What a failed run leaves behind:
 
 - A failed component's fingerprint is not recorded, so the next run selects and
