@@ -22,6 +22,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ## 2026-11-24
 
+### Added
+
+- Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
+  ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
+  refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
 ### Changed
 
 - The runbooks no longer read as if the executor retirement that
@@ -65,10 +71,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   objects from the cluster.
   ([#101](https://github.com/jaegertracing/jaeger-demo/pull/101),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
-
-- Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
-  ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
-  refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 
 ### Changed
 
