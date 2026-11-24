@@ -30,6 +30,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- A manual **Deploy Jaeger Demo to OKE** run that leaves `image_tag` empty and finds
+  no published snapshot for upstream `main` HEAD still fails each selected Jaeger
+  component before its release is changed, but the error now says that HEAD has no
+  published snapshot and names the fix: dispatch again with `image_tag=latest` or
+  an explicit published SHA. A run that also selects a component other than Jaeger
+  continues with it and may change the cluster. `docs/releases.md` describes the
+  failure. A missing explicit tag keeps its earlier message.
+  ([#127](https://github.com/jaegertracing/jaeger-demo/pull/127),
+  fixes [#110](https://github.com/jaegertracing/jaeger-demo/issues/110))
+
 - The `deployer_access.py bindings --scheduled-user` help says what omitting the
   flag does instead of telling the operator to omit it, and
   `docs/deployer-access.md` warns that applying the manual-only bindings where

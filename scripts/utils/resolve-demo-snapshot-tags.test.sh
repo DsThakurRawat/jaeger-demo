@@ -309,5 +309,28 @@ testManualDispatchFailsWhenTagMissing() {
   assertContains "$out" "Snapshot image tag not found"
 }
 
+testManualDispatchDefaultTagMissingNamesTheFix() {
+  out=$(run_script GITHUB_EVENT_NAME=workflow_dispatch 2>&1)
+  rc=$?
+  assertEquals "a missing default tag still fails the run" 1 $rc
+  assertContains "$out" "Snapshot image tag not found on Docker Hub: ${REPO}:${MAIN_SHA} (Jaeger)."
+  assertContains "$out" "Upstream jaegertracing/jaeger main HEAD has no published snapshot yet"
+  assertContains "$out" "Dispatch again with image_tag=latest"
+  assertContains "$out" "or an explicit published SHA"
+  assertNotContains "$out" "Jaeger tag="
+}
+
+testManualDispatchExplicitMissingTagHasNoHeadHint() {
+  out=$(run_script GITHUB_EVENT_NAME=workflow_dispatch JAEGER_DEMO_IMAGE_TAG="$PREFERRED" 2>&1)
+  rc=$?
+  assertEquals "a missing explicit tag fails the run" 1 $rc
+  assertContains "$out" "Snapshot image tag not found on Docker Hub: ${REPO}:${PREFERRED} (Jaeger)"
+  assertNotContains "$out" "main HEAD has no published snapshot"
+  assertNotContains "$out" "image_tag=latest"
+
+  out=$(run_script GITHUB_EVENT_NAME=schedule JAEGER_DEMO_IMAGE_TAG="$PREFERRED" 2>&1)
+  assertNotContains "$out" "main HEAD has no published snapshot"
+}
+
 # shellcheck disable=SC1091
 source "${SHUNIT2}/shunit2"
