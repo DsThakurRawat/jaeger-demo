@@ -301,7 +301,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     bind = commands.add_parser("bindings", help="Print the bindings for kubectl apply -f -")
     bind.add_argument("--manual-user", required=True, help="OCID of the demo-apply OCI user")
-    bind.add_argument("--scheduled-user", help="OCID of the demo-scheduled OCI user; omit until the schedule deploys directly")
+    bind.add_argument("--scheduled-user", help="OCID of the demo-scheduled OCI user; without it the deployer bindings name the manual user only")
     live = commands.add_parser("check", help="Compare an identity's live access with the committed role")
     live.add_argument("--identity", choices=sorted(IDENTITIES), required=True)
     who = live.add_mutually_exclusive_group(required=True)
