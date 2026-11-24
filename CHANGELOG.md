@@ -63,7 +63,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   new `scripts/demo/oci-cli-hashes.txt`, and the kubectl configuration action can
   no longer download packages. The PyYAML source build stays outside hash checking
   ([deployer access](docs/deployer-access.md#oci-cli-installation)).
-  (fixes [#103](https://github.com/jaegertracing/jaeger-demo/issues/103))
+  ([#130](https://github.com/jaegertracing/jaeger-demo/pull/130),
+  fixes [#103](https://github.com/jaegertracing/jaeger-demo/issues/103))
 
 ## 2026-11-23
 
