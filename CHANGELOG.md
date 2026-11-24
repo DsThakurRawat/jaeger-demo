@@ -36,7 +36,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   unchanged: GitHub's `queue: max` setting would keep every waiting run, but no
   released actionlint accepts the key yet. A workflow test asserts the setting on
   all three writers.
-  (refs [#102](https://github.com/jaegertracing/jaeger-demo/issues/102))
+  ([#129](https://github.com/jaegertracing/jaeger-demo/pull/129),
+  refs [#102](https://github.com/jaegertracing/jaeger-demo/issues/102))
 
 - The `deployer_access.py bindings --scheduled-user` help says what omitting the
   flag does instead of telling the operator to omit it, and
