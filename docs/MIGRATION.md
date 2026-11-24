@@ -125,7 +125,7 @@ Deliverables:
 - Pinned/checksummed toolchain, six labeled application releases and allowlisted namespace-local companion resources
 - `helmfile apply` from the deploy workflow in place of the scripts: image resolution at deploy time, chart archive verification, compatibility validation before any mutation, failed/pending state handling, OCI-before-OTel verification and checks even on empty diffs
 - Complete sanitized equivalence fixture, live drift report, deployer role coverage of the Helmfile render, and kind regression/adoption/rollback tests
-- Delete backup/restore tooling and recovery gate; retain volume expansion and explicit constrained manual reset
+- Delete backup/restore tooling and recovery gate; retain volume expansion and explicit constrained manual reset. Done in the repository by [#131](https://github.com/jaegertracing/jaeger-demo/pull/131) ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)). The reset has no production run; applying the reduced `jaeger-demo-recovery` role and removing what the tooling left in the cluster remain [operator steps](releases.md#opensearch-storage-maintenance).
 - Native Helmfile Renovate, daily checks, seven-day release age, reviewed updates without automerge
 - Architecture, configuration/selectors, access/RBAC, release/promotion/rollback, maintenance/reset/incidents and troubleshooting runbooks
 
