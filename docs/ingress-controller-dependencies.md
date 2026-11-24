@@ -13,9 +13,9 @@ cert-manager, public routes or certificate issuers. The
 
 | Item | Status |
 | --- | --- |
-| Controller owner and operational contact | Not established by this source inventory; operator confirmation needed |
-| Installed controller distribution and version | Not verified; `ingressClassName: nginx` alone does not identify a running implementation or version |
-| Existing replacement plan | Not verified; ask the controller owner before proposing a replacement |
+| Controller owner and operational contact | The cluster administrator (`jkowall`); see the [migration plan](MIGRATION.md#ownership-and-fixed-constraints) |
+| Installed controller distribution and version | Community ingress-nginx from its static manifest, retired upstream with no patch stream; recorded in the [migration plan](MIGRATION.md#ownership-and-fixed-constraints). The exact version is not published here |
+| Existing replacement plan | None selected |
 | Replacement choice and timing relative to Helmfile adoption | Maintainer/operator decision still open |
 
 ## Five source Ingress objects
@@ -92,8 +92,8 @@ migration pass.
 ## Decision boundary
 
 The inventory can be reviewed independently of selecting Gateway API, another
-Ingress controller or an OCI-specific service. None is selected here. Before an
-implementation, identify the controller owner/version and existing plan, agree
-on timing relative to the Helmfile phases, and define route, redirect, TLS
-renewal and rollback evidence. Until then, #41 remains open and the existing
+Ingress controller or an OCI-specific service. None is selected here. The owner
+and distribution are recorded above. Before an implementation, agree on timing
+relative to the Helmfile phases, and define route, redirect, TLS renewal and
+rollback evidence. Until then, #41 remains open and the existing
 production constraints remain unchanged.
