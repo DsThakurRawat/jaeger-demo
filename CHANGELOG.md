@@ -47,6 +47,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
+  owner and record that it is the retired community ingress-nginx, installed from
+  its static manifest, without publishing the exact version. The replacement and
+  its timing are still open.
+  ([#135](https://github.com/jaegertracing/jaeger-demo/pull/135),
+  refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
 - `docs/releases.md` states that a waiting writer replaced by a newer one in the
   shared concurrency group is accepted behavior, and what an operator does when
   the run observer reports a scheduled run cancelled that way. The workflows are

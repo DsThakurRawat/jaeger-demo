@@ -17,7 +17,7 @@ Core retains product source, image publishing, ordinary examples and integration
 - Generated traces are disposable. Destructive storage resets require explicit approval.
 - Generated code and submodules untouched
 
-The source-only [ingress-controller dependency inventory](ingress-controller-dependencies.md) tracks #41. Controller owner/version and replacement timing still require operator/maintainer confirmation; it authorizes no migration.
+The source-only [ingress-controller dependency inventory](ingress-controller-dependencies.md) tracks #41; it authorizes no migration. The controller's owner is the cluster administrator (`jkowall`). A read-only check of the cluster on November 23 found the community [ingress-nginx](https://github.com/kubernetes/ingress-nginx) controller, installed from its static manifest rather than a Helm release. Upstream ended its maintenance in March 2026, so it receives no further releases or security fixes ([Ingress NGINX retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/)). The exact installed version is kept out of this public repository. No replacement is selected, and its timing relative to the Helmfile phases is still undecided.
 
 ## Execution contract
 
