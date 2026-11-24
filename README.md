@@ -207,6 +207,7 @@ agent work.
 - [Migration phases, decisions and exit criteria](docs/MIGRATION.md)
 - [Access and ownership handover](docs/cutover.md)
 - [Deployment releases, provenance, verification and rollback](docs/releases.md)
+- [Node pool initialization script, for node replacements and upgrades](docs/node-pool.md)
 - [Current script reconciler and maintenance](scripts/demo/README.md)
 - [OCI stack commands](examples/oci/README.md)
 - [OTel stack commands](examples/otel-demo/README.md)

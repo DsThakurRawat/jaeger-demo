@@ -51,7 +51,7 @@ jobs:
         PIP_NO_INDEX=1 python -m pip install oci-cli
         python scripts/demo/verify_oci_cli.py
     - name: Lint shell scripts
-      run: shellcheck scripts/demo/*.sh scripts/utils/*.sh examples/oci/*.sh examples/otel-demo/*.sh
+      run: shellcheck scripts/demo/*.sh scripts/utils/*.sh examples/oci/*.sh examples/otel-demo/*.sh ops/oke/*.sh
     - name: Lint workflows
       run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12
     - name: Lint Python
