@@ -143,8 +143,8 @@ and the stack scripts install charts only from archives that match
 steps that configure cluster access or call the cluster receive the OCI API key,
 and the OCI CLI is installed before them from files that match
 [scripts/demo/oci-cli-hashes.txt](scripts/demo/oci-cli-hashes.txt)
-([where the workflows use the API key](docs/deployer-access.md#where-the-workflows-use-the-api-key)). The deployment
-and volume-expansion workflows share one concurrency group, so
+([where the workflows use the API key](docs/deployer-access.md#where-the-workflows-use-the-api-key)). The deployment,
+trace-reset and volume-expansion workflows share one concurrency group, so
 one of them runs at a time.
 
 ```mermaid
@@ -160,7 +160,7 @@ flowchart TB
     end
 
     state[("ConfigMap<br/>default/jaeger-demo-deployment-revisions")]
-    writers["ci-opensearch-volume-expand.yml<br/>environment demo-apply"]
+    writers["ci-opensearch-reset.yml<br/>ci-opensearch-volume-expand.yml<br/>environment demo-apply"]
     group{{"Concurrency group<br/>jaeger-otel-demo-opensearch-recovery"}}
     slack["Slack #jaeger-operations"]
     observer["demo-run-observer.yml<br/>runs that ended before any job started"]
@@ -218,7 +218,9 @@ verifies new trace ingestion and query. Generated trace history is disposable:
 the backup and restore tooling and the recovery gate are removed, and volume
 expansion remains
 ([OpenSearch storage maintenance](docs/releases.md#opensearch-storage-maintenance)).
-The narrow manual reset is still part of [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1).
+A manual, reviewer-approved workflow with a typed acknowledgment
+[resets the stored traces](docs/releases.md#reset-the-trace-data) without touching
+the volume.
 
 ## Extraction provenance
 

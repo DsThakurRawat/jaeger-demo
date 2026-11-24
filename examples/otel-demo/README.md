@@ -220,6 +220,16 @@ fail on an immutable StatefulSet field. Reconcile the template separately only
 after the staged version upgrade and soak. PVC expansion cannot be rolled back
 or shrunk.
 
+### Trace data reset
+
+The manual `Reset OTel Demo OpenSearch Trace Data` workflow deletes the daily
+`jaeger-main-jaeger-{span,service,dependencies,sampling}-<date>` indices through
+the OpenSearch API, restarts Jaeger and verifies a fresh trace. It needs a typed
+acknowledgment and a `demo-apply` reviewer, keeps the data volume, the
+`jaeger-archive-*` indices and the Dashboards saved objects, and deletes no
+Kubernetes object. See
+[Reset the trace data](../../docs/releases.md#reset-the-trace-data).
+
 ### Index retention
 
 Jaeger writes one OpenSearch index per day, and OpenSearch has no TTL. The

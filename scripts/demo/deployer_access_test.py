@@ -191,6 +191,9 @@ class DeployerAccessTests(unittest.TestCase):
                                                  "logs -l opentelemetry.io/name=frontend ",
                                                  "describe svc otel-collector"],
             "scripts/demo/verify_trace.py": ['"exec", "' + d.OPENSEARCH_POD + '"', '"port-forward"'],
+            # The trace reset needs nothing beyond what the deployment already holds.
+            "scripts/demo/opensearch_reset.py": ['"exec", POD', '"get", "pod", POD', '"rollout", "restart"',
+                                                 '"rollout", "status"', '"port-forward"'],
             "scripts/demo/deploy.py": ['"get", kind, name', '"pvc"'],
             "examples/otel-demo/opensearch-expand-volume.sh": ["patch pvc", "get storageclass", "get pv ",
                                                                'STORAGE_CLASS="oci-bv"'],

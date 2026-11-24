@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -33,7 +34,7 @@ KUBECTL_CONFIGURATION = re.compile(r'oracle-actions/configure-kubectl-oke@[0-9a-
 SLACK_NOTIFICATION = re.compile(r'rtCamp/action-slack-notify@[0-9a-f]{40}')
 EXPRESSION = re.compile(r'\$\{\{(.*?)\}\}', re.DOTALL)
 USES_SECRETS = re.compile(r'\bsecrets\b', re.IGNORECASE)
-WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-volume-expand.yml')
+WRITERS = ('ci-deploy-demo.yml', 'ci-opensearch-reset.yml', 'ci-opensearch-volume-expand.yml')
 PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
 # Both constructs hand over every secret without naming one. Expression functions
 # ignore case, and so does this search.
@@ -138,7 +139,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(check, source.index('    - name: Reconcile demo components\n'))
 
     def test_maintenance_workflows_constrain_and_verify_oci_cli_before_cluster_access(self):
-        for filename, script in (('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n'),):
+        for filename, script in (('ci-opensearch-reset.yml', '    - name: List or reset the Jaeger trace indices\n'),
+                                 ('ci-opensearch-volume-expand.yml', '    - name: Expand and verify the OpenSearch volume\n')):
             with self.subTest(workflow=filename):
                 source = (WORKFLOWS / filename).read_text()
                 configure_header = '    - name: Configure kubectl with OKE\n'
@@ -152,7 +154,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(1, source.count('verify_oci_cli.py'))
 
     def test_maintenance_workflows_are_manual_main_only_and_environment_scoped(self):
-        for filename in ('ci-opensearch-volume-expand.yml',):
+        for filename in ('ci-opensearch-reset.yml', 'ci-opensearch-volume-expand.yml'):
             with self.subTest(workflow=filename):
                 source = (WORKFLOWS / filename).read_text()
                 events = source.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
@@ -199,6 +201,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_all_writers_share_one_concurrency_group_and_take_no_lock(self):
         for workflow, operation in [('ci-deploy-demo.yml','Reconcile demo components'),
+                                   ('ci-opensearch-reset.yml','List or reset the Jaeger trace indices'),
                                    ('ci-opensearch-volume-expand.yml','Expand and verify the OpenSearch volume')]:
             with self.subTest(workflow=workflow):
                 source = (WORKFLOWS / workflow).read_text()
@@ -214,7 +217,7 @@ class WorkflowTests(unittest.TestCase):
                 jobs = yaml.safe_load(source)['jobs']
                 access, = [step for job in jobs.values() for step in job['steps'] if step.get('id') == 'access']
                 self.assertLessEqual(access['timeout-minutes'], 15)
-        for workflow in ('ci-opensearch-volume-expand.yml',):
+        for workflow in ('ci-opensearch-reset.yml', 'ci-opensearch-volume-expand.yml'):
             self.assertIn('deployer_access.py check --self --identity manual\n', (WORKFLOWS / workflow).read_text())
 
     def test_the_writer_group_keeps_one_waiting_run_and_never_cancels_a_running_one(self):
@@ -243,10 +246,11 @@ class WorkflowTests(unittest.TestCase):
                     with self.subTest(workflow=path.name, job=name):
                         self.assertTrue('environment' not in job or 'job ' + name in levels)
         self.assertEqual({'ci-deploy-demo.yml': {'job deploy': chosen},
+                          'ci-opensearch-reset.yml': {'workflow': chosen},
                           'ci-opensearch-volume-expand.yml': {'workflow': chosen}}, declared)
 
     def test_only_the_writer_workflows_use_a_deployment_environment(self):
-        writers = {'ci-deploy-demo.yml', 'ci-opensearch-volume-expand.yml'}
+        writers = {'ci-deploy-demo.yml', 'ci-opensearch-reset.yml', 'ci-opensearch-volume-expand.yml'}
         for path in sorted(WORKFLOWS.glob('*.yml')):
             source = path.read_text()
             with self.subTest(workflow=path.name):
@@ -267,6 +271,9 @@ class WorkflowTests(unittest.TestCase):
         receiving = {
             'ci-deploy-demo.yml': [
                 'Configure kubectl with OKE', "Verify the deployment identity's access", 'Reconcile demo components'],
+            'ci-opensearch-reset.yml': [
+                'Configure kubectl with OKE', "Verify the deployment identity's access",
+                'List or reset the Jaeger trace indices'],
             'ci-opensearch-volume-expand.yml': [
                 'Configure kubectl with OKE', "Verify the deployment identity's access",
                 'Expand and verify the OpenSearch volume'],
@@ -518,6 +525,49 @@ class WorkflowTests(unittest.TestCase):
                 with self.subTest(path=str(path.relative_to(ROOT)), retired=retired):
                     self.assertNotIn(retired, text)
 
+    def test_reset_is_manual_typed_and_checked_before_cluster_access(self):
+        import opensearch_reset
+        source = (WORKFLOWS / 'ci-opensearch-reset.yml').read_text()
+        workflow = yaml.safe_load(source)
+        # A dispatch is the only trigger: no schedule, push or workflow_run can start a reset.
+        self.assertEqual(['workflow_dispatch'], list(workflow[True]))
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertEqual({'operation', 'acknowledgment'}, set(inputs))
+        # The default changes nothing, and no input names a namespace, a Pod or an index.
+        self.assertEqual(('choice', 'list', ['list', 'reset']),
+                         (inputs['operation']['type'], inputs['operation']['default'], inputs['operation']['options']))
+        self.assertEqual('string', inputs['acknowledgment']['type'])
+        self.assertNotIn('default', inputs['acknowledgment'])
+        self.assertIn(opensearch_reset.ACKNOWLEDGMENT, inputs['acknowledgment']['description'])
+        self.assertEqual(['require-main', 'reset'], list(workflow['jobs']))
+        job = workflow['jobs']['reset']
+        self.assertEqual(('demo-apply', 'require-main', "github.ref == 'refs/heads/main'"),
+                         (job['environment'], job['needs'], job['if']))
+        self.assertLessEqual(job['timeout-minutes'], 60)
+        # The inputs are data: they reach the script through the environment, quoted.
+        self.assertEqual(('${{ inputs.operation }}', '${{ inputs.acknowledgment }}'),
+                         (job['env']['RESET_OPERATION'], job['env']['RESET_ACKNOWLEDGMENT']))
+        command = 'python3 scripts/demo/opensearch_reset.py "$RESET_OPERATION" --acknowledge "$RESET_ACKNOWLEDGMENT"'
+        runs = [step.get('run', '') for step in job['steps']]
+        self.assertFalse([run for run in runs if '${{' in run])
+        names = [step['name'] for step in job['steps']]
+        self.assertEqual(['Checkout demo configuration', 'Check the request before any cluster access',
+                          'Install the hash-verified OCI CLI', 'Configure kubectl with OKE', 'Verify OCI CLI version',
+                          "Verify the deployment identity's access", 'List or reset the Jaeger trace indices'], names)
+        self.assertEqual(command + ' --validate-only', runs[1])
+        self.assertEqual(command, runs[6])
+        # The acknowledgment is checked before the API key reaches any step.
+        self.assertNotIn('OCI_CLI_KEY_CONTENT', job['steps'][1].get('env') or {})
+        self.assertNotIn('continue-on-error', source)
+        # The validation step really stops a wrong phrase, on the runner's shell, with no kubectl on the path.
+        for phrase, status in ((opensearch_reset.ACKNOWLEDGMENT, 0), ('yes', 2), ('', 2)):
+            with self.subTest(phrase=phrase), tempfile.TemporaryDirectory() as empty:
+                env = dict(os.environ, PATH=empty + os.pathsep + os.path.dirname(sys.executable) + os.pathsep + '/usr/bin:/bin',
+                           RESET_OPERATION='reset', RESET_ACKNOWLEDGMENT=phrase, GITHUB_EVENT_NAME='workflow_dispatch',
+                           GITHUB_REF='refs/heads/main')
+                result = subprocess.run(['bash', '-e', '-c', runs[1]], cwd=ROOT, env=env, text=True, capture_output=True)
+                self.assertEqual(status, result.returncode, result.stderr)
+
     def test_dispatch_cannot_select_a_clean_run(self):
         # The deployer role cannot create or delete namespaces (docs/deployer-access.md),
         # so a clean run would leave the demo down. Only an administrator runs it.
@@ -573,6 +623,15 @@ class WorkflowTests(unittest.TestCase):
         job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
         runs = [step['run'] for step in job['steps'] if 'run' in step]
         self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check', runs)
+
+    def test_adoption_job_rehearses_the_trace_reset_on_its_own_cluster(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        rehearsal, = [run for run in runs if 'rehearsals/opensearch-reset/exercise.py' in run]
+        self.assertIn('--context kind-jaeger-demo-reset-fixture', rehearsal)
+        self.assertTrue((ROOT / 'scripts/demo/rehearsals/opensearch-reset/exercise.py').is_file())
+        # It follows the other rehearsals, which need a cluster with only the bootstrap namespaces.
+        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
 
     def test_demo_tests_job_checks_the_chart_archive_lock_against_the_publishers(self):
         jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']

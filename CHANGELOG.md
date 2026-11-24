@@ -24,6 +24,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- **Reset OTel Demo OpenSearch Trace Data**, a manual workflow for the disposable
+  traces of the OTel demo. `list` prints what a reset would delete. `reset` needs
+  a typed acknowledgment and a `demo-apply` reviewer, deletes only the daily
+  `jaeger-main-jaeger-*` trace indices through the OpenSearch API, restarts Jaeger
+  and verifies a fresh trace. It deletes no Kubernetes object, keeps the data
+  volume and needs no new access. It does not help when OpenSearch cannot start.
+  `docs/releases.md` has the runbook.
+  (fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
   ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
@@ -89,7 +97,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `otel-jaeger` and `otel-demo`, so the next scheduled run upgrades those releases
   in place with unchanged charts and values. `docs/releases.md` lists the operator
   steps, including the objects the tooling may have left in the cluster.
-  (refs [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
+  (fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 
 ### Fixed
 

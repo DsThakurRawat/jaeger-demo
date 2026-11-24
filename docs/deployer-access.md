@@ -7,7 +7,7 @@
 two GitHub Actions identities that deploy the hosted demo. It is the reviewed
 definition, not a record of what the cluster holds: an administrator applies it
 and binds the identities, and records that in the release record. Every run of the
-deploy and volume expansion workflows starts by checking its own
+deploy, trace reset and volume expansion workflows starts by checking its own
 credential against this role and stops before any change if part of it is
 missing, so a run changes nothing until the role is applied and its identity bound.
 
@@ -37,7 +37,7 @@ watch by name.
 | `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks |
 | `default` | Roles and RoleBindings, monitoring custom resources, hook Jobs | `default/prometheus` and its hooks |
 | `jaeger` | `pods/portforward` | `verify_trace.py` writes and reads one trace |
-| `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check |
+| `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check, `opensearch_reset.py` |
 | `jaeger`, `opensearch`, `otel-demo` | Read Pod logs, endpoints, events and Certificates | Certificate readiness and failure diagnostics in `examples/otel-demo/deploy-all.sh` |
 | `kube-system` | Get, patch and delete five named Services, list Services | Monitoring scrape Services, `kubectl cluster-info` |
 | Cluster | Get, patch and delete seven named ClusterRoles (with `bind` and `escalate`) and seven named ClusterRoleBindings. Create a ClusterRole or ClusterRoleBinding of any name. Get, patch and delete the two named admission webhook configurations. Three namespace lookups. | Monitoring and OTel demo chart RBAC, monitoring hooks |
@@ -53,6 +53,13 @@ does not hold this role. The role kept its name when the backup and restore
 tooling was removed ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)),
 so its bindings did not have to change. It no longer creates a claim, a Pod or a
 volume snapshot, and it no longer runs a command in a Pod of any name.
+
+The manual [trace reset](releases.md#reset-the-trace-data) has no access of its
+own. It uses the `pods/exec` grant on the OpenSearch Pod, the patch of the Jaeger
+Deployment and the port-forward that the deployer role already holds, and it
+deletes no Kubernetes object. The scheduled identity holds the same access. What
+keeps a reset manual is the workflow (dispatch only, a `demo-apply` reviewer and a
+typed acknowledgment), not the role.
 
 ## What a holder can reach
 
@@ -146,6 +153,7 @@ for the job:
 | Workflow | Steps that receive the secrets |
 | --- | --- |
 | `ci-deploy-demo.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Reconcile demo components |
+| `ci-opensearch-reset.yml` | Configure kubectl with OKE, Verify the deployment identity's access, List or reset the Jaeger trace indices |
 | `ci-opensearch-volume-expand.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Expand and verify the OpenSearch volume |
 
 The checkout, the revision check, the OCI CLI installation
@@ -273,7 +281,7 @@ a group is not evaluated unless each group is passed with `--group`, so a clean
 result does not rule out a group grant. `check --identity <name> --self` closes
 that gap for the required access: run with the identity's own credential, it
 reviews what that credential can really do, and asks nothing about the denied
-list. The deploy and volume expansion workflows run it as their first
+list. The deploy, trace reset and volume expansion workflows run it as their first
 cluster step.
 
 Record the reviewed commit, the command outputs and the time in the release

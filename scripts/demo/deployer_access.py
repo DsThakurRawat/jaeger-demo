@@ -123,8 +123,9 @@ def script_requests(identity):
         requests += each(namespace, "", "pods", ["get", "list", "watch"])
         requests += each(namespace, "apps", "replicasets", ["get", "list", "watch"])
     requests += each("opensearch", "", "persistentvolumeclaims", ["get"])  # deploy.py binding check
-    requests += each("opensearch", "", "pods/exec", ["get", "create"], OPENSEARCH_POD)  # verify_trace.py
-    requests += each("jaeger", "", "pods/portforward", ["get", "create"])  # verify_trace.py
+    # verify_trace.py. opensearch_reset.py uses the same two and the Jaeger Deployment patch of the chart.
+    requests += each("opensearch", "", "pods/exec", ["get", "create"], OPENSEARCH_POD)
+    requests += each("jaeger", "", "pods/portforward", ["get", "create"])
     if RECOVERY in IDENTITIES[identity]:
         # opensearch-expand-volume.sh. The script reads the claim's name from the Pod.
         requests += each("", "", "persistentvolumes", ["get"])

@@ -44,7 +44,7 @@ and refuse a release in a `pending-*` state. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 
-Deployment and volume expansion share the workflow concurrency
+Deployment, the trace reset and volume expansion share the workflow concurrency
 group `jaeger-otel-demo-opensearch-recovery`, so one runs at a time and a running
 one is never cancelled. GitHub keeps one waiting run per group: a newer waiting
 run cancels an older waiting one, which is accepted
@@ -65,6 +65,14 @@ restores a backup, and the `opensearch_recovery` input and the recovery policy
 are removed ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)).
 [OpenSearch storage maintenance](../../docs/releases.md#opensearch-storage-maintenance)
 covers volume expansion and what the removed tooling may have left in the cluster.
+
+`opensearch_reset.py` is the manual
+[trace reset](../../docs/releases.md#reset-the-trace-data), run by
+**Reset OTel Demo OpenSearch Trace Data** after a `demo-apply` reviewer approves
+it. `list` prints what a reset would delete. `reset` needs the exact acknowledgment
+phrase, deletes only the daily `jaeger-main-jaeger-*` trace indices through the
+OpenSearch API, restarts Jaeger and verifies a fresh trace. It takes no name as an
+argument and deletes no Kubernetes object.
 
 The manual `demo_stack`, `otel_deploy_scope` and image override
 inputs are preserved. The `deploy_mode` input is removed: the workflow always
