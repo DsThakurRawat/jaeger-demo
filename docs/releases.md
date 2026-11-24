@@ -42,6 +42,14 @@ SHA. Jaeger and HotROD tags can differ because they are published independently.
 Record the resolved digests even while the scripts still render tag references.
 Do not convert image reference syntax during the ownership transition.
 
+A manual run that leaves the tags empty requires a published snapshot for upstream
+`main` HEAD and fails before any cluster change when there is none, typically
+because the upstream CI run for that commit did not finish. The error names the
+cause. Dispatch again with `image_tag=latest`, which the resolver verifies and
+turns into the newest published commit tag, or with an explicit published commit
+tag. A missing explicit tag fails without this hint. Only the daily schedule falls
+back to the newest published tag on its own.
+
 The script reconciler can deploy OTel before OCI and continue independent
 components after a failure. The stricter OCI-before-OTel failure gate is a Helmfile
 requirement, not an extraction guarantee. Existing public smoke checks also do not

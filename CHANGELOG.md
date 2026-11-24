@@ -30,6 +30,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- A manual **Deploy Jaeger Demo to OKE** run that leaves `image_tag` empty and finds
+  no published snapshot for upstream `main` HEAD still fails before any cluster
+  change, but the error now says that HEAD has no published snapshot and names the
+  fix: dispatch again with `image_tag=latest` or an explicit published SHA.
+  `docs/releases.md` describes the failure. A missing explicit tag keeps its
+  earlier message.
+  (fixes [#110](https://github.com/jaegertracing/jaeger-demo/issues/110))
+
 - The runbooks no longer read as if the executor retirement that
   `docs/MIGRATION.md` records were still ahead, or ask for the retired read-only
   plan identity: `docs/cutover.md` drops the
