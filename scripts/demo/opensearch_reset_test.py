@@ -43,6 +43,8 @@ class Cluster:
         self.containers = ["opensearch"]
         self.cluster_name, self.nodes, self.acknowledged, self.deployment = "opensearch-cluster", 1, True, "jaeger"
         self.listing = None
+        self.read_error = False
+        self.rollout_error = False
         self.after_delete = lambda name: None
         self.calls, self.limits = [], []
 
@@ -60,6 +62,8 @@ class Cluster:
                 raise subprocess.CalledProcessError(1, args, stderr="NotFound")
             return self.answer(args, {"metadata": {"name": self.deployment}})
         if args[:4] == ["kubectl", "-n", "jaeger", "rollout"]:
+            if self.rollout_error:
+                raise subprocess.CalledProcessError(1, args, stderr="rollout failed")
             return self.answer(args)
         prefix = ["kubectl", "-n", "opensearch", "exec", "opensearch-cluster-single-0", "-c", "opensearch", "--",
                   "curl", "-fsS", "--max-time", "60", "-X"]
@@ -77,6 +81,8 @@ class Cluster:
             self.after_delete(path)
             return self.answer(args, {"acknowledged": self.acknowledged})
         assert method == "GET", method
+        if self.read_error and path.startswith("_cat/"):
+            raise subprocess.CalledProcessError(7, args, stderr="connection refused")
         if path == "":
             return self.answer(args, {"cluster_name": self.cluster_name, "version": {"number": "3.10.0"}})
         if path == "_cluster/health":
@@ -298,6 +304,52 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(1, status)
         self.assertIn("Failed", err)
         self.assertTrue(set(OTHERS) <= set(cluster.indices))
+
+    def test_a_reset_that_fails_after_a_delete_still_restarts_jaeger(self):
+        restart = ["kubectl", "-n", "jaeger", "rollout", "restart", "deployment/jaeger"]
+
+        def unacknowledged(cluster):
+            cluster.acknowledged = False
+
+        def removed_by_something_else(cluster):
+            cluster.after_delete = lambda name: cluster.indices.remove(TRACES[1]) if name == TRACES[0] else None
+
+        def unreadable_afterwards(cluster):
+            cluster.after_delete = lambda name: setattr(cluster, "read_error", True) if name == TRACES[-1] else None
+
+        for change, message, deletes in ((unacknowledged, "did not acknowledge", 1),
+                                         (removed_by_something_else, "Failed", 2),
+                                         (unreadable_afterwards, "connection refused", len(TRACES))):
+            with self.subTest(change=change.__name__):
+                cluster = Cluster()
+                change(cluster)
+                status, cluster, _, err, verify = self.invoke(["reset", "--acknowledge", reset.ACKNOWLEDGMENT], cluster)
+                self.assertEqual(1, status)
+                self.assertEqual(deletes, len(cluster.deletes()))
+                # Jaeger forgets the services it cached, and the error that stopped the reset is still the one reported.
+                self.assertEqual([restart, ["kubectl", "-n", "jaeger", "rollout", "status", "deployment/jaeger",
+                                            "--timeout=600s"]], [call for call in cluster.changes() if "rollout" in call])
+                self.assertIn("Restarted jaeger/jaeger after the failed reset", err)
+                self.assertIn(message, err)
+                verify.assert_not_called()
+
+    def test_a_failed_restart_after_a_partial_reset_keeps_the_original_error(self):
+        cluster = Cluster()
+        cluster.acknowledged = False
+        cluster.rollout_error = True
+        status, cluster, _, err, verify = self.invoke(["reset", "--acknowledge", reset.ACKNOWLEDGMENT], cluster)
+        self.assertEqual(1, status)
+        self.assertIn("Jaeger could not be restarted after the failed reset; restart jaeger/jaeger by hand", err)
+        self.assertIn("did not acknowledge", err.splitlines()[-1])
+        verify.assert_not_called()
+
+    def test_a_refusal_before_any_delete_restarts_nothing(self):
+        cluster = Cluster()
+        cluster.read_error = True
+        status, cluster, _, err, _ = self.invoke(["reset", "--acknowledge", reset.ACKNOWLEDGMENT], cluster)
+        self.assertEqual(1, status)
+        self.assertEqual([], cluster.changes())
+        self.assertNotIn("Restarted", err)
 
     def test_trace_indices_recreated_by_ingestion_are_expected(self):
         cluster = Cluster()

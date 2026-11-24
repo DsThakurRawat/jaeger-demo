@@ -120,8 +120,13 @@ def templates():
     return names(opensearch("GET", "_cat/templates/jaeger*?format=json&h=name"), "name")
 
 
-def delete_trace_indices(log=print):
-    """Delete each daily Jaeger trace index by its exact name. Return (deleted, problems)."""
+def delete_trace_indices(log=print, attempted=None):
+    """Delete each daily Jaeger trace index by its exact name. Return (deleted, problems).
+
+    Each name is added to `attempted` before its request is sent, so a caller can
+    tell a refusal that changed nothing from a failure after a delete may have run.
+    """
+    attempted = [] if attempted is None else attempted
     targets, kept = inventory()
     before = templates()
     # The path of a delete is only ever a name that matched in full: no pattern, list or alias.
@@ -130,6 +135,7 @@ def delete_trace_indices(log=print):
     log("Keeping %d other index(es): %s" % (len(kept), ", ".join(kept) or "none"))
     log("Deleting %d Jaeger trace index(es)" % len(targets))
     for name in targets:
+        attempted.append(name)
         if opensearch("DELETE", name).get("acknowledged") is not True:
             raise RuntimeError("The engine did not acknowledge the deletion of " + name)
         log("Deleted " + name)
@@ -153,6 +159,21 @@ def restart_jaeger(seconds=600):
     # kubectl gives up first and says why; the process limit only covers a kubectl that hangs.
     run(["kubectl", "-n", JAEGER_NAMESPACE, "rollout", "status", workload, "--timeout=%ds" % seconds],
         limit=seconds + 60)
+
+
+def restart_after_partial_reset(log=print):
+    """Restart Jaeger after a reset that failed once a delete had been sent.
+
+    Jaeger skips writing a service or operation it has cached for up to 12 hours,
+    so with some trace indices gone the UI would miss services until then. A failed
+    restart is reported and does not replace the error that stopped the reset.
+    """
+    try:
+        restart_jaeger()
+        log("Restarted %s/%s after the failed reset" % (JAEGER_NAMESPACE, JAEGER_DEPLOYMENT), file=sys.stderr)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        log("Jaeger could not be restarted after the failed reset; restart %s/%s by hand: %s"
+            % (JAEGER_NAMESPACE, JAEGER_DEPLOYMENT, error), file=sys.stderr)
 
 
 def has_service(value, service=CHECK_SERVICE):
@@ -211,7 +232,13 @@ def main(argv=None, env=None):
             summarize(env, ["Listed only; nothing was changed", "Jaeger trace indices: %d" % len(targets),
                             "Other indices: %d" % len(kept)])
             return 0
-        deleted, problems = delete_trace_indices()
+        attempted = []
+        try:
+            deleted, problems = delete_trace_indices(attempted=attempted)
+        except Exception:
+            if attempted:
+                restart_after_partial_reset()
+            raise
         restart_jaeger()
         verify_ingestion()
         summarize(env, ["Deleted Jaeger trace indices: %d" % len(deleted), "Restarted %s/%s" %

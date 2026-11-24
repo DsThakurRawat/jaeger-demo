@@ -411,9 +411,12 @@ templates. It needs no access beyond the deployer role
 The run stops before any change when the acknowledgment differs, when the event
 is not a manual dispatch from `main`, when the Pod or the engine is not the
 expected one, or when the engine's listing is not what the script expects. A run
-that fails part-way can be dispatched again: it deletes what is left and restarts
-Jaeger. The workflow posts nothing to Slack and the run observer does not watch
-it, so watch the run.
+that fails after its first delete request still restarts `jaeger/jaeger` before it
+reports the error, so the UI does not miss services for 12 hours; if that restart
+also fails, the log says so and the Deployment needs a manual
+`kubectl -n jaeger rollout restart deployment/jaeger`. A run that fails part-way
+can be dispatched again: it deletes what is left and restarts Jaeger. The workflow
+posts nothing to Slack and the run observer does not watch it, so watch the run.
 
 The reset needs an OpenSearch that answers. It cannot repair an engine that does
 not start, and it does not replace the data volume.
