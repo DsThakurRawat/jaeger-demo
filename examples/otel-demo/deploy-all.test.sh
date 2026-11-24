@@ -90,58 +90,6 @@ testInvalidModeIsRejected() {
   assertContains "$output" "Invalid mode 'invalid'"
 }
 
-testInvalidOpenSearchRecoveryPolicyIsRejected() {
-  output=$(bash -c '
-    source "$1"
-    MODE=upgrade
-    DEPLOY_SCOPE=opensearch
-    OPENSEARCH_RECOVERY=invalid
-    validate_options
-  ' _ "$SCRIPT" 2>&1)
-  rc=$?
-
-  assertEquals "invalid recovery policy should fail" 1 $rc
-  assertContains "$output" "Invalid OpenSearch recovery policy 'invalid'"
-}
-
-testOpenSearchRecoveryWaiverAcceptsOnlyManualMainIsolatedUpgrade() {
-  output=$(GITHUB_EVENT_NAME=workflow_dispatch \
-    GITHUB_REF=refs/heads/main \
-    JAEGER_DEMO_STACK=otel \
-    JAEGER_OTEL_DEMO_DEPLOY_SCOPE=opensearch \
-    JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=waive \
-    bash -c 'source "$1"; MODE=upgrade; DEPLOY_SCOPE=opensearch; validate_options' _ "$SCRIPT" 2>&1)
-  rc=$?
-
-  assertEquals "exact manual waiver route should pass" 0 $rc
-  assertEquals "" "$output"
-}
-
-testOpenSearchRecoveryWaiverRejectsOtherRoutes() {
-  local cases=(
-    "schedule|refs/heads/main|otel|upgrade|opensearch"
-    "workflow_dispatch|refs/heads/feature|otel|upgrade|opensearch"
-    "workflow_dispatch|refs/heads/main|oci|upgrade|opensearch"
-    "workflow_dispatch|refs/heads/main|otel|clean|opensearch"
-    "workflow_dispatch|refs/heads/main|otel|upgrade|all"
-  )
-  local values
-
-  for values in "${cases[@]}"; do
-    IFS='|' read -r event ref stack mode scope <<<"$values"
-    output=$(GITHUB_EVENT_NAME="$event" \
-      GITHUB_REF="$ref" \
-      JAEGER_DEMO_STACK="$stack" \
-      JAEGER_OTEL_DEMO_DEPLOY_SCOPE="$scope" \
-      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=waive \
-      bash -c 'source "$1"; MODE="$2"; validate_options' _ "$SCRIPT" "$mode" 2>&1)
-    rc=$?
-
-    assertEquals "$values should reject the waiver" 1 $rc
-    assertContains "$output" "OpenSearch recovery may be waived only"
-  done
-}
-
 testMainIsGuardedWhenSourced() {
   output=$(bash -c 'source "$1"; printf sourced-only' _ "$SCRIPT" 2>&1)
   rc=$?
@@ -336,7 +284,6 @@ testScheduledOtelUpgradesCannotInstallOrCreateNamespaces() {
   local output
   output=$(GITHUB_EVENT_NAME=schedule GITHUB_REF=refs/heads/main run_jaeger_deploy upgrade "" all)
   assertEquals "scheduled upgrade should succeed" 0 "$?"
-  assertNotContains "$output" "opensearch-recovery.sh"
   assertContains "$output" "helm upgrade opensearch /verified/opensearch-$(pinned_version OPENSEARCH_CHART_VERSION).tgz"
   assertContains "$output" \
     "helm upgrade opensearch-dashboards /verified/opensearch-dashboards-$(pinned_version OPENSEARCH_DASHBOARDS_CHART_VERSION).tgz"
@@ -406,7 +353,6 @@ run_with_chart_helper() {
       printf "helm %s\n" "$*"
     }
     python3() {
-      if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
       if [[ "$1" != */scripts/demo/chart_archives.py || "$2" != pull ]]; then
         printf "unexpected python3 %s\n" "$*"
         return 1
@@ -489,7 +435,6 @@ testJaegerDependencyMismatchStopsBeforeHelmUpgrade() {
       esac
     }
     python3() {
-      if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
       printf "python3 %s\n" "$*"
       if [[ "$1" == */chart_archives.py && "$2" == dependencies ]]; then
         printf "error: Chart archive differs from approved SHA-256: kafka-26.6.2.tgz\n" >&2
@@ -982,6 +927,7 @@ testDeploysPinnedOpenSearchChartsInOrder() {
     OPENSEARCH_CHART_ARCHIVE="/verified/opensearch-$OPENSEARCH_CHART_VERSION.tgz"
     OPENSEARCH_DASHBOARDS_CHART_ARCHIVE="/verified/opensearch-dashboards-$OPENSEARCH_DASHBOARDS_CHART_VERSION.tgz"
     log() { :; }
+    # Any other script the upgrade started would appear in the exact output below.
     bash() { printf "bash"; printf " %s" "$@"; printf "\n"; }
     helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
     wait_for_statefulset() { printf "wait-for-statefulset"; printf " %s" "$@"; printf "\n"; }
@@ -996,13 +942,43 @@ testDeploysPinnedOpenSearchChartsInOrder() {
   opensearch_version=${chart_versions%%|*}
   dashboards_version=${chart_versions##*|}
   # The chart token is the verified archive; a version flag would refer to a repository chart.
-  expected="bash $(dirname "$SCRIPT")/opensearch-recovery.sh verify
-helm upgrade --install opensearch /verified/opensearch-$opensearch_version.tgz --namespace opensearch --create-namespace -f $(dirname "$SCRIPT")/opensearch-values.yaml --wait --timeout 10m
+  expected="helm upgrade --install opensearch /verified/opensearch-$opensearch_version.tgz --namespace opensearch --create-namespace -f $(dirname "$SCRIPT")/opensearch-values.yaml --wait --timeout 10m
 wait-for-statefulset opensearch opensearch-cluster-single 600s
 helm upgrade --install opensearch-dashboards /verified/opensearch-dashboards-$dashboards_version.tgz --namespace opensearch -f $(dirname "$SCRIPT")/opensearch-dashboard-values.yaml --wait --timeout 60m"
   expected="$expected
 wait-for-dashboards 600s"
   assertEquals "$expected" "$output"
+}
+
+testOpenSearchUpgradeNeedsNoRecoveryPointOrPolicy() {
+  # Generated traces are disposable. Neither a manual nor a scheduled upgrade may
+  # start another script, a Python helper or a cluster call before Helm, and a
+  # leftover value of the removed recovery input changes nothing.
+  local event
+  for event in workflow_dispatch schedule ""; do
+    output=$(GITHUB_EVENT_NAME="$event" GITHUB_REF=refs/heads/main JAEGER_DEMO_STACK=otel \
+      JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=required bash -c '
+      source "$1"
+      MODE=upgrade
+      DEPLOY_SCOPE=opensearch
+      OPENSEARCH_CHART_ARCHIVE=/verified/opensearch.tgz
+      OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=/verified/opensearch-dashboards.tgz
+      log() { :; }
+      bash() { printf "unexpected bash %s\n" "$*"; }
+      python3() { printf "unexpected python3 %s\n" "$*"; return 1; }
+      kubectl() { printf "unexpected kubectl %s\n" "$*"; }
+      helm() { printf "helm %s\n" "$*"; }
+      wait_for_statefulset() { :; }
+      wait_for_opensearch_dashboards() { :; }
+      validate_options && deploy_opensearch_releases
+    ' _ "$SCRIPT" 2>&1)
+    rc=$?
+
+    assertEquals "event '$event' should upgrade OpenSearch" 0 "$rc"
+    assertNotContains "$output" "unexpected"
+    assertContains "$output" " opensearch /verified/opensearch.tgz --namespace opensearch"
+    assertContains "$output" " opensearch-dashboards /verified/opensearch-dashboards.tgz --namespace opensearch"
+  done
 }
 
 testDashboardsHelmTimeoutCanBeOverridden() {
@@ -1128,64 +1104,6 @@ testDashboardsRolloutFailureCollectsSanitizedDiagnostics() {
   assertNotContains "$output" "describe"
 }
 
-testRecoveryGatePrecedesOpenSearchUpgrade() {
-  output=$(bash -c '
-    source "$1"
-    MODE=upgrade
-    log() { :; }
-    bash() { printf "recovery %s %s\n" "$1" "$2"; return 1; }
-    helm() { printf "unsafe helm call\n"; }
-    deploy_opensearch_releases
-  ' _ "$SCRIPT" 2>&1)
-  rc=$?
-
-  assertNotEquals "missing recovery point must stop deployment" 0 "$rc"
-  assertContains "$output" "recovery $(dirname "$SCRIPT")/opensearch-recovery.sh verify"
-  assertNotContains "$output" "unsafe helm call"
-}
-
-testRecoveryWaiverSkipsOnlyRecoveryGate() {
-  output=$(bash -c '
-    source "$1"
-    MODE=upgrade
-    OPENSEARCH_RECOVERY=waive
-    GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/main JAEGER_DEMO_STACK=otel
-    export GITHUB_EVENT_NAME GITHUB_REF JAEGER_DEMO_STACK
-    DEPLOY_SCOPE=opensearch
-    OPENSEARCH_CHART_ARCHIVE=/verified/opensearch.tgz
-    OPENSEARCH_DASHBOARDS_CHART_ARCHIVE=/verified/opensearch-dashboards.tgz
-    log() { printf "log %s\n" "$*"; }
-    bash() { printf "unsafe recovery call\n"; }
-    helm() { printf "helm"; printf " %s" "$@"; printf "\n"; }
-    wait_for_statefulset() { printf "wait-for-statefulset"; printf " %s" "$@"; printf "\n"; }
-    wait_for_opensearch_dashboards() { printf "wait-for-dashboards"; printf " %s" "$@"; printf "\n"; }
-    deploy_opensearch_releases
-  ' _ "$SCRIPT")
-
-  assertContains "$output" "WARNING: OpenSearch recovery was explicitly waived"
-  assertNotContains "$output" "unsafe recovery call"
-  assertContains "$output" "helm upgrade --install opensearch /verified/opensearch.tgz"
-  assertContains "$output" "wait-for-statefulset opensearch opensearch-cluster-single 600s"
-  assertContains "$output" "helm upgrade --install opensearch-dashboards /verified/opensearch-dashboards.tgz"
-  assertContains "$output" "wait-for-dashboards 600s"
-}
-
-testInvalidRecoveryPolicyCannotCallHelm() {
-  output=$(bash -c '
-    source "$1"
-    MODE=upgrade
-    OPENSEARCH_RECOVERY=invalid
-    log() { :; }
-    helm() { printf "unsafe helm call\n"; }
-    deploy_opensearch_releases
-  ' _ "$SCRIPT" 2>&1)
-  rc=$?
-
-  assertNotEquals "invalid recovery policy must stop deployment" 0 "$rc"
-  assertContains "$output" "Invalid OpenSearch recovery policy 'invalid'"
-  assertNotContains "$output" "unsafe helm call"
-}
-
 testHandoverPreflightStopsBeforeWritesAndRechecksAfterChartPreparation() {
   local stop_at
   for stop_at in 1 2; do
@@ -1202,7 +1120,6 @@ testHandoverPreflightStopsBeforeWritesAndRechecksAfterChartPreparation() {
       check_cluster() { :; }
       clone_jaeger_v2() { printf "chart prepared\n"; }
       python3() {
-        if [[ "$1" == */recovery_policy.py ]]; then command python3 "$@"; return; fi
         checks=$((checks + 1))
         printf "preflight %s: %s\n" "$checks" "$*"
         [[ "$checks" -ne "$stop_at" ]]

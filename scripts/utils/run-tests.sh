@@ -19,7 +19,6 @@ for test_file in \
   scripts/utils/resolve-demo-snapshot-tags.test.sh \
   examples/otel-demo/deploy-all.test.sh \
   examples/otel-demo/jaeger-values.test.sh \
-  examples/otel-demo/opensearch-expand-volume.test.sh \
-  examples/otel-demo/opensearch-recovery.test.sh; do
+  examples/otel-demo/opensearch-expand-volume.test.sh; do
   bash "$test_file"
 done

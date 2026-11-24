@@ -20,7 +20,6 @@ IMAGE_PULL_POLICY="${JAEGER_DEMO_IMAGE_PULL_POLICY:-IfNotPresent}"
 PUBLIC_JAEGER_URL="${JAEGER_DEMO_PUBLIC_JAEGER_URL:-${JAEGER_OTEL_DEMO_JAEGER_URL:-https://jaeger.demo.jaegertracing.io}}"
 RUN_PUBLIC_SMOKE_TESTS="${RUN_PUBLIC_SMOKE_TESTS:-false}"
 DEPLOY_SCOPE="${JAEGER_DEMO_DEPLOY_SCOPE:-${JAEGER_OTEL_DEMO_DEPLOY_SCOPE:-jaeger}}"
-OPENSEARCH_RECOVERY="${JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY:-}"
 # renovate: datasource=helm depName=opentelemetry-demo registryUrl=https://open-telemetry.github.io/opentelemetry-helm-charts
 OTEL_DEMO_CHART_VERSION="0.42.7"
 # renovate: datasource=helm depName=opensearch registryUrl=https://opensearch-project.github.io/helm-charts
@@ -39,10 +38,6 @@ fi
 
 log() { echo "[$(date +"%F %T")] $*"; }
 err() { echo "[$(date +"%F %T")] ERROR: $*" >&2; exit 1; }
-
-recovery_policy() {
-  python3 "$SCRIPT_DIR/../../scripts/demo/recovery_policy.py" "${JAEGER_DEMO_STACK:-}" "$MODE" "$DEPLOY_SCOPE" "$OPENSEARCH_RECOVERY"
-}
 
 # Print the path of a chart archive whose SHA-256 equals the reviewed lock.
 verified_chart() {
@@ -71,8 +66,6 @@ validate_options() {
       return 1
       ;;
   esac
-
-  recovery_policy >/dev/null
 }
 
 existing_installation() {
@@ -113,9 +106,6 @@ check_handover() {
 
 check_required_files() {
   local files=(
-    "$SCRIPT_DIR/OPENSEARCH_RECOVERY.md"
-    "$SCRIPT_DIR/opensearch-recovery.sh"
-    "$SCRIPT_DIR/opensearch-volume-snapshot-class.yaml"
     "$SCRIPT_DIR/opensearch-values.yaml"
     "$SCRIPT_DIR/opensearch-dashboard-values.yaml"
     "$SCRIPT_DIR/jaeger-values.yaml"
@@ -460,26 +450,7 @@ reconcile_ingress() {
 }
 
 deploy_opensearch_releases() {
-  if [[ "$MODE" == "upgrade" ]]; then
-    local policy
-    policy=$(recovery_policy) || return 1
-    case "$policy" in
-      required)
-        log "Verifying a recent tested OpenSearch recovery point"
-        bash "$SCRIPT_DIR/opensearch-recovery.sh" verify
-        ;;
-      preserve-pvc)
-        log "Upgrading OpenSearch in place with its existing data volume"
-        ;;
-      waive)
-        log "WARNING: OpenSearch recovery was explicitly waived; this upgrade has no tested rollback or data-recovery path"
-        ;;
-      *)
-        err "Invalid OpenSearch recovery policy '$OPENSEARCH_RECOVERY'"
-        ;;
-    esac
-  fi
-
+  # Generated traces are disposable: no upgrade takes or requires a backup.
   log "Deploying OpenSearch chart $OPENSEARCH_CHART_VERSION"
   helm "${HELM_UPGRADE[@]}" opensearch "${OPENSEARCH_CHART_ARCHIVE:?verified OpenSearch chart archive required}" \
     "${OPENSEARCH_NAMESPACE[@]}" \

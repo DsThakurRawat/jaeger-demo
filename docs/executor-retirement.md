@@ -169,8 +169,8 @@ order, and verify each before the next:
 1. `demo_stack=oci`, `otel_deploy_scope=monitoring`. This is the upgrade that
    failed in [#87](https://github.com/jaegertracing/jaeger-demo/issues/87).
 2. `demo_stack=oci`, `otel_deploy_scope=jaeger`.
-3. `demo_stack=otel`, `otel_deploy_scope=opensearch`. Choose the recovery policy
-   deliberately; `required` creates and tests a backup first.
+3. `demo_stack=otel`, `otel_deploy_scope=opensearch`. The upgrade keeps the
+   existing data volume and takes no backup.
 4. `demo_stack=otel`, `otel_deploy_scope=jaeger`.
 5. `demo_stack=otel`, `otel_deploy_scope=otel-demo`.
 
@@ -183,9 +183,9 @@ only the two Jaeger components unless something merged since.
 Rollback, for every release except OpenSearch: `helm rollback <release> <revision>
 -n <namespace>` to the revision in the release record. Never roll OpenSearch back
 with Helm after its engine version has changed: the older engine would start on
-data the newer one has already upgraded. Use the tested recovery point and the
-[OpenSearch recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md)
-instead.
+data the newer one has already upgraded. Generated traces are disposable and no
+backup tooling exists, so repair forward or get approval for a storage reset
+([OpenSearch storage maintenance](releases.md#opensearch-storage-maintenance)).
 
 ### 8. Bind the scheduled identity
 

@@ -94,7 +94,6 @@ A denied read is a failure, not evidence that an object is absent. OCI refuses i
 ordinary uninstall/reinstall fallback; OTel repeats the check before HotROD
 replacement. Both handover Helm commands omit `--install`, and OTel also omits
 `--create-namespace`. OTel ingress apply and certificate-read errors fail the run.
-Jaeger-only runs skip restore-pod cleanup because they cannot start recovery.
 
 These guards do not compare full live manifests or authorize a new resource set.
 Before dispatch, compare captured current, desired and rollback object sets, chart
@@ -194,8 +193,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
      -f demo_stack=oci -f otel_deploy_scope=jaeger \
-     -f "jaeger_image_tag=$oci_jaeger_tag" -f "hotrod_image_tag=$oci_hotrod_tag" \
-     -f opensearch_recovery=required
+     -f "jaeger_image_tag=$oci_jaeger_tag" -f "hotrod_image_tag=$oci_hotrod_tag"
    ```
 
    Wait for the OCI run to finish and verify its functional and resource checks.
@@ -208,8 +206,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
      -f "expected_config_sha=$config_sha" \
      -f demo_stack=otel -f otel_deploy_scope=jaeger \
-     -f "jaeger_image_tag=$otel_jaeger_tag" -f "hotrod_image_tag=$otel_hotrod_tag" \
-     -f opensearch_recovery=required
+     -f "jaeger_image_tag=$otel_jaeger_tag" -f "hotrod_image_tag=$otel_hotrod_tag"
    ```
 
    Verify and record each run's `headSha` and inputs. A differing configuration
@@ -218,8 +215,7 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    These runs deploy the two Jaeger components. They do not exercise a chart
    upgrade of OpenSearch, monitoring or the OTel application. The full release and
    public-behavior checks still cover the existing six-release installation.
-   Keep `opensearch_recovery=required`; the Jaeger-only scope does not invoke the
-   OpenSearch recovery or upgrade path.
+   The Jaeger-only scope does not invoke the OpenSearch upgrade path.
 6. Verify actual changes and all health checks in [releases.md](releases.md). The
    extracted scripts retain unconditional generator restarts and OTel HotROD
    Deployment replacement; review those expected effects rather than claiming this
@@ -231,11 +227,11 @@ not authorized to rebuild the installation or repair missing unrelated objects.
    enabling it, then verify the first scheduled run. Stage 1 operational handover
    remains incomplete until that scheduled-refresh gate passes.
 
-The manual OpenSearch recovery input defaults to `required`. A manual
-`main` / `otel` / `upgrade` / `opensearch` dispatch can explicitly waive it.
-The 13:00 UTC schedule handles disposable trace history automatically. The
-existing PVC and the live version and trace checks remain part of its upgrade.
-Manual recovery-tool retirement belongs to the later Helmfile conversion.
+Generated trace history is disposable. The workflow has no recovery input, and
+neither a manual nor a scheduled OpenSearch upgrade takes or requires a backup
+([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)). The existing PVC
+and the live version and trace checks remain part of every upgrade
+([OpenSearch storage maintenance](releases.md#opensearch-storage-maintenance)).
 
 ## Review scheduled scope
 
@@ -276,7 +272,7 @@ print(json.dumps({"configuration": sys.argv[1], "state_resource_version": state[
 PY
 ```
 
-Retain the result and review every selected component, its recovery policy,
+Retain the result and review every selected component, its
 effective permissions, revision allowance and rollback procedure. Rehearse the
 accepted selection with matching permissions before activation, and repeat this
 inspection if configuration or stored fingerprints change. Do not overwrite
@@ -302,7 +298,8 @@ or runner. Manual runs continue to use `demo-apply`.
    `demo-scheduled` environment has no reviewer and that an administrator has
    applied `ops/rbac/deployer.yaml` and bound the scheduled identity. Run
    `deployer_access.py check --identity scheduled --user <scheduled user OCID>`
-   and require `0 difference(s)`. The scheduled identity does not hold the recovery role.
+   and require `0 difference(s)`. The scheduled identity does not hold the
+   `jaeger-demo-recovery` role, which only volume expansion uses.
    Keep the human reviewer on `demo-apply`. Follow
    [Before the first direct run](executor-retirement.md#before-the-first-direct-run)
    in the executor retirement procedure up to enabling the schedule, which is
@@ -347,13 +344,10 @@ dispatch of `demo-smoke.yml` that shows no history lookup warning.
 
 While the old maintenance workflows are disabled and the new grant is limited to
 Jaeger, the independent operator owns maintenance and incident recovery through the
-separate administrator route. Manual recovery and volume expansion use
-`demo-apply` workflows and require separately authorized storage access.
-The scheduled writer needs neither snapshot privileges nor restore capacity.
-The two manual recovery repairs cover in-pod API requests and OpenSearch startup
-in the isolated restore Pod. Verify them before relying on a manually tested
-recovery point. [In-pod command fix](https://github.com/jaegertracing/jaeger-demo/pull/13),
-[restore startup fix](https://github.com/jaegertracing/jaeger-demo/pull/14).
+separate administrator route. Volume expansion uses a
+`demo-apply` workflow and the storage access of the `jaeger-demo-recovery` role.
+No workflow takes or restores a backup, so no identity needs snapshot privileges
+or restore capacity.
 
 ## If the handover fails
 

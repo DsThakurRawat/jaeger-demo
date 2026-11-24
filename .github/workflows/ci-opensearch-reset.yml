@@ -1,10 +1,25 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-name: Verify OTel Demo OpenSearch Recovery
+name: Reset OTel Demo OpenSearch Trace Data
 
+# Manual only: no schedule, push or workflow_run trigger. A demo-apply reviewer
+# approves every run. docs/releases.md describes the operation and its limits.
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 'list prints what a reset would delete and changes nothing. reset deletes the Jaeger trace indices.'
+        required: true
+        default: list
+        type: choice
+        options:
+          - list
+          - reset
+      acknowledgment:
+        description: 'For reset, type exactly: delete all Jaeger trace indices in opensearch/opensearch-cluster-single-0'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,13 +38,19 @@ jobs:
         DISPATCH_REF: ${{ github.ref }}
       run: test "$DISPATCH_REF" = 'refs/heads/main'
 
-  backup-and-restore:
-    name: Create and test retained recovery point
+  reset:
+    name: List or reset the Jaeger trace indices
     needs: require-main
     if: github.ref == 'refs/heads/main'
     environment: demo-apply
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # One short request per index, a Jaeger rollout of up to 10m and a trace check
+    # of about 2m. The limit keeps a hung run from holding the concurrency group.
+    timeout-minutes: 45
+    env:
+      # The inputs reach the script as data, never as part of a command line.
+      RESET_OPERATION: ${{ inputs.operation }}
+      RESET_ACKNOWLEDGMENT: ${{ inputs.acknowledgment }}
 
     steps:
     - name: Checkout demo configuration
@@ -37,6 +58,11 @@ jobs:
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
+
+    # A wrong or missing acknowledgment stops the run here, before the job
+    # installs the OCI CLI or configures any cluster access.
+    - name: Check the request before any cluster access
+      run: python3 scripts/demo/opensearch_reset.py "$RESET_OPERATION" --acknowledge "$RESET_ACKNOWLEDGMENT" --validate-only
 
     # Download and verify the OCI CLI before any step holds the OCI API key. pip
     # rejects a file whose SHA-256 is not in oci-cli-hashes.txt and builds nothing
@@ -49,7 +75,7 @@ jobs:
         python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML -r scripts/demo/oci-cli-hashes.txt
 
     # The OCI API key is set only on the steps that reach OCI or the cluster. The
-    # kubeconfig runs the OCI CLI for a token, so every kubectl and helm call needs it.
+    # kubeconfig runs the OCI CLI for a token, so every kubectl call needs it.
     # The action runs pip itself; with no index it cannot download anything here.
     - name: Configure kubectl with OKE
       uses: oracle-actions/configure-kubectl-oke@77a733d79446dabe7bf0e58eb56197d33ce4dc58 # v1.5.0
@@ -69,8 +95,7 @@ jobs:
       run: python scripts/demo/verify_oci_cli.py
 
     # Stop before any change when the credential lacks part of the reviewed role
-    # (docs/deployer-access.md). A partial grant otherwise fails mid-upgrade and
-    # leaves a release pending.
+    # (docs/deployer-access.md).
     - name: Verify the deployment identity's access
       id: access
       timeout-minutes: 10
@@ -82,47 +107,11 @@ jobs:
         OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
       run: python scripts/demo/deployer_access.py check --self --identity manual
 
-    - name: Create and verify OpenSearch recovery point
-      env:
-        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      run: bash examples/otel-demo/opensearch-recovery.sh backup-test
-
-    # Skip unless the access check succeeded. If the CLI check failed, kubectl would
-    # run an unverified CLI. If the access check failed, the recovery script never
-    # started and there is nothing to collect.
-    - name: Collect failure diagnostics
-      if: failure() && steps.access.outcome == 'success'
+    - name: List or reset the Jaeger trace indices
       env:
         OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
         OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
         OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
         OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
         OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      run: |
-        kubectl -n opensearch get volumesnapshots \
-          -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,READY:.status.readyToUse,AGE:.metadata.creationTimestamp || true
-        kubectl -n opensearch get pvc \
-          -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CAPACITY:.status.capacity.storage || true
-        kubectl -n opensearch get pods \
-          -l jaegertracing.io/recovery-source=opensearch \
-          -o custom-columns=NAME:.metadata.name,PHASE:.status.phase || true
-
-    - name: Remove disposable restore pod
-      if: always() && steps.access.outcome == 'success'
-      env:
-        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-        OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-        OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-        OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-        OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      run: |
-        kubectl -n opensearch delete pod "jaeger-os-verify-$OPENSEARCH_RECOVERY_ID" \
-          --ignore-not-found=true --wait=false
+      run: python3 scripts/demo/opensearch_reset.py "$RESET_OPERATION" --acknowledge "$RESET_ACKNOWLEDGMENT"

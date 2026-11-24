@@ -43,8 +43,7 @@ class HandoverTests(unittest.TestCase):
                 handover.validate_inputs(self.env, stack, mode, scope)
         for key, value in (("EXPECTED_CONFIG_SHA", "main"), ("GITHUB_SHA", "d" * 40),
                            ("GITHUB_EVENT_NAME", "schedule"), ("GITHUB_REF", "refs/heads/feature"),
-                           ("JAEGER_DEMO_JAEGER_IMAGE_TAG", ""), ("JAEGER_DEMO_HOTROD_IMAGE_TAG", "latest"),
-                           ("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", "waive")):
+                           ("JAEGER_DEMO_JAEGER_IMAGE_TAG", ""), ("JAEGER_DEMO_HOTROD_IMAGE_TAG", "latest")):
             with self.subTest(key=key, value=value), patch("handover.read") as read:
                 with self.assertRaises(ValueError):
                     handover.preflight(dict(self.env, **{key: value}), "oci", "upgrade", "jaeger")

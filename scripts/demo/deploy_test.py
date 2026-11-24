@@ -1,9 +1,7 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-from itertools import takewhile
 import json
-import os
 import re
 from pathlib import Path
 import shutil
@@ -55,12 +53,10 @@ class DeploymentTests(unittest.TestCase):
 
     @patch("deploy.handover.read")
     @patch("deploy.run")
-    def test_schedule_rejects_invalid_context_clean_and_recovery_policy_before_mutation(self, run, read):
+    def test_schedule_rejects_invalid_context_and_clean_before_mutation(self, run, read):
         for overrides, namespace in (({"HELM_DRIVER": "configmap"}, ""), ({"HELM_NAMESPACE": "test"}, ""),
                                      ({"HELM_KUBECONTEXT": "another-cluster"}, ""),
-                                     ({}, "other"), ({"JAEGER_DEMO_DEPLOY_MODE": "clean"}, ""),
-                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "waive"}, ""),
-                                     ({"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "invalid"}, "")):
+                                     ({}, "other"), ({"JAEGER_DEMO_DEPLOY_MODE": "clean"}, "")):
             with self.subTest(overrides=overrides, namespace=namespace):
                 read.return_value = namespace
                 with self.assertRaises(ValueError):
@@ -202,18 +198,17 @@ class DeploymentTests(unittest.TestCase):
             values.write_text(values.read_text() + "\n# revised application\n")
             self.assertNotEqual(self.desired["otel-demo"], deploy.fingerprint("otel-demo", root))
 
-    def test_opensearch_fingerprint_tracks_deployed_inputs_independently_of_manual_recovery(self):
+    def test_opensearch_fingerprint_tracks_deployed_inputs_and_not_maintenance_scripts(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             shutil.copytree(deploy.ROOT / "examples", root / "examples")
             shutil.copytree(deploy.ROOT / "scripts/demo", root / "scripts/demo")
             stack = root / "examples/otel-demo"
             script = stack / "deploy-all.sh"
-            edits = [(stack / name, None, False) for name in (
-                "opensearch-recovery.sh", "opensearch-volume-snapshot-class.yaml")]
+            # The volume expansion script is manual maintenance, not a deployed input.
+            edits = [(stack / "opensearch-expand-volume.sh", None, False)]
             edits.extend((path, None, True) for path in (
-                root / "scripts/demo/recovery_policy.py", stack / "opensearch-values.yaml",
-                stack / "opensearch-dashboard-values.yaml"))
+                stack / "opensearch-values.yaml", stack / "opensearch-dashboard-values.yaml"))
             edits.extend((script, pin, True) for pin in deploy.CHART_PINS["opensearch"])
             for path, pin, should_select in edits:
                 with self.subTest(path=path.name, pin=pin):
@@ -246,7 +241,7 @@ class DeploymentTests(unittest.TestCase):
                     deploy.opensearch_data_binding()
 
     @patch("deploy.run")
-    def test_scheduled_opensearch_preserves_bound_data_and_verifies_trace_without_recovery(self, run):
+    def test_scheduled_opensearch_preserves_bound_data_and_verifies_trace(self, run):
         pod = {"spec": {"containers": [{"name": "opensearch", "volumeMounts": [
             {"name": "data", "mountPath": "/usr/share/opensearch/data"}]}],
             "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "source"}}]}}
@@ -268,6 +263,7 @@ class DeploymentTests(unittest.TestCase):
                     elif args == ["kubectl", "-n", "opensearch", "get", "pvc", "source", "-o", "json"]:
                         data = next(observations)
                     else:
+                        # No backup, restore test or chart pre-check runs: only the stack script and the verifier.
                         self.assertIn(Path(args[1]).name, ("deploy-all.sh", "verify_trace.py"))
                         data = {}
                     return subprocess.CompletedProcess(args, 0, stdout=json.dumps(data))
@@ -285,44 +281,31 @@ class DeploymentTests(unittest.TestCase):
                                  any(Path(args[1]).name == "deploy-all.sh" for args in calls))
 
     @patch("deploy.run")
-    def test_manual_default_recovery_precedes_upgrade_and_fresh_trace(self, run):
-        deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
-        # Both charts are verified against the lock before the recovery test allocates storage.
-        script = str(deploy.ROOT / "scripts/demo/chart_archives.py")
-        pulls = [call.args[0] for call in run.call_args_list[:2]]
-        self.assertEqual([["python3", script, "pull", "opensearch", pins["OPENSEARCH_CHART_VERSION"]],
-                          ["python3", script, "pull", "opensearch-dashboards", pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]]],
-                         [pull[:-1] for pull in pulls])
-        self.assertEqual(pulls[0][-1], pulls[1][-1])
-        self.assertFalse(Path(pulls[0][-1]).exists(), "the verification directory must be removed")
-        self.assertEqual("backup-test", run.call_args_list[2].args[0][-1])
-        self.assertTrue(run.call_args_list[3].args[0][1].endswith("deploy-all.sh"))
-        self.assertTrue(run.call_args_list[4].args[0][1].endswith("verify_trace.py"))
-        self.assertEqual([pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]],
-                         run.call_args_list[4].args[0][2:])
-        self.assertEqual("opensearch", run.call_args_list[3].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+    def test_manual_opensearch_upgrade_runs_the_stack_script_then_verifies_a_fresh_trace(self, run):
+        # No recovery point is taken or required, and a leftover value of the removed input changes nothing.
+        for leftover in ({}, {"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "required"},
+                         {"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "waive"}):
+            with self.subTest(leftover=leftover), tempfile.NamedTemporaryFile() as output:
+                run.reset_mock()
+                deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch",
+                                                          GITHUB_OUTPUT=output.name, **leftover))
+                pins = dict(deploy.PIN_LINE.findall((deploy.ROOT / "examples/otel-demo/deploy-all.sh").read_text()))
+                first, second = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(["bash", str(deploy.ROOT / "examples/otel-demo/deploy-all.sh"), "upgrade"], first)
+                self.assertEqual(["python3", str(deploy.ROOT / "scripts/demo/verify_trace.py"),
+                                  pins["OPENSEARCH_CHART_VERSION"], pins["OPENSEARCH_DASHBOARDS_CHART_VERSION"]], second)
+                self.assertEqual("opensearch", run.call_args_list[0].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+                # The job has no cleanup step to signal any more.
+                self.assertEqual("", Path(output.name).read_text())
 
     @patch("deploy.run")
-    def test_a_chart_that_fails_verification_stops_before_the_recovery_test(self, run):
-        def command(args, **kwargs):
-            if "pull" in args:
-                raise subprocess.CalledProcessError(1, args)
-        run.side_effect = command
-        with tempfile.NamedTemporaryFile() as output:
-            env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_OUTPUT=output.name)
-            with self.assertRaises(subprocess.CalledProcessError):
-                deploy.deploy_component("opensearch", env)
-            # Nothing was created, so there is nothing for the workflow to clean up.
-            self.assertEqual("", Path(output.name).read_text())
-        self.assertEqual(1, run.call_count)
-        self.assertFalse(any(call.args[0][-1] == "backup-test" for call in run.call_args_list))
-
-    @patch("deploy.run")
-    def test_only_the_recovery_path_verifies_charts_ahead_of_the_stack_script(self, run):
-        # Everywhere else deploy-all.sh is the first step and verifies before it changes anything.
-        deploy.deploy_component("otel-demo", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        self.assertTrue(run.call_args_list[0].args[0][1].endswith("deploy-all.sh"))
+    def test_every_component_starts_with_its_stack_script(self, run):
+        # deploy-all.sh verifies the charts against the lock before it changes anything.
+        for component in deploy.COMPONENTS:
+            with self.subTest(component=component):
+                run.reset_mock()
+                deploy.deploy_component(component, dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
+                self.assertTrue(run.call_args_list[0].args[0][1].endswith("deploy-all.sh"))
 
     @patch("deploy.run")
     def test_verifier_receives_each_chart_pin_in_order(self, run):
@@ -339,33 +322,21 @@ class DeploymentTests(unittest.TestCase):
             (stack / "deploy-all.sh").write_text(script)
             with patch.object(deploy, "ROOT", Path(temp)):
                 deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        # The charts are verified first, each at its own pin, before the recovery test.
-        self.assertEqual([["pull", "opensearch", "9.1.0"], ["pull", "opensearch-dashboards", "9.2.0"]],
-                         [call.args[0][2:5] for call in run.call_args_list[:2]])
-        self.assertEqual("backup-test", run.call_args_list[2].args[0][-1])
-        verifier = run.call_args_list[4].args[0]
+        self.assertEqual(2, run.call_count)
+        verifier = run.call_args_list[1].args[0]
         self.assertTrue(verifier[1].endswith("verify_trace.py"))
         self.assertEqual(["9.1.0", "9.2.0"], verifier[2:])
-        self.assertEqual("opensearch", run.call_args_list[3].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
+        self.assertEqual("opensearch", run.call_args_list[0].kwargs["env"]["JAEGER_DEMO_DEPLOY_SCOPE"])
 
     @patch("deploy.run")
-    def test_manual_recovery_failure_prevents_helm_upgrade(self, run):
+    def test_a_failed_opensearch_upgrade_is_not_verified(self, run):
         def command(args, **kwargs):
-            if args[-1] == "backup-test":
-                raise subprocess.CalledProcessError(1, "recovery")
+            if str(args[1]).endswith("deploy-all.sh"):
+                raise subprocess.CalledProcessError(1, args)
         run.side_effect = command
         with self.assertRaises(subprocess.CalledProcessError):
             deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch"))
-        # Two chart verifications, then the recovery test that fails. Nothing runs after it.
-        self.assertEqual(["pull", "pull", "backup-test"],
-                         [call.args[0][2] if "pull" in call.args[0] else call.args[0][-1] for call in run.call_args_list])
-        self.assertFalse(any(str(call.args[0][1]).endswith("deploy-all.sh") for call in run.call_args_list))
-
-    @patch("deploy.run")
-    def test_explicit_manual_waiver_skips_only_backup(self, run):
-        deploy.deploy_component("opensearch", dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch",
-                                                  JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY="waive"))
-        self.assertEqual(2, run.call_count)
+        self.assertEqual(1, run.call_count)
 
     @patch("deploy.run")
     def test_snapshot_exports_are_loaded_and_push_can_use_published_fallback(self, run):
@@ -382,7 +353,7 @@ class DeploymentTests(unittest.TestCase):
     @patch("deploy.run")
     def test_failed_component_is_not_recorded_and_independent_components_continue(self, run, component, resolve):
         run.return_value.stdout = ""
-        component.side_effect = [subprocess.CalledProcessError(1, "recovery"), None, None]
+        component.side_effect = [subprocess.CalledProcessError(1, "opensearch"), None, None]
         self.assertEqual(1, deploy.reconcile(self.env))
         self.assertEqual(["opensearch", "oci-jaeger", "oci-monitoring"], [call.args[0] for call in component.call_args_list])
         writes = [call.args[0] for call in run.call_args_list if call.args[0][3] != "get"]
@@ -409,63 +380,20 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(1, len(writes))
         self.assertEqual({"data": {"otel-demo": self.desired["otel-demo"]}}, json.loads(writes[0][-1]))
 
-    def run_workflow_step(self, step, kubectl_status, **env):
-        lines = step.split("\n      run: |\n", 1)[1].splitlines()
-        script = "\n".join(line[8:] for line in takewhile(lambda line: line.startswith(" " * 8) or not line, lines))
-        self.assertNotIn("${{", script)
-        with tempfile.TemporaryDirectory() as temp:
-            kubectl = Path(temp) / "kubectl"
-            kubectl.write_text('#!/bin/sh\necho "$*" >> "$TEST_KUBECTL_LOG"\nexit "$TEST_KUBECTL_STATUS"\n')
-            kubectl.chmod(0o755)
-            log = Path(temp) / "kubectl.log"
-            env = dict(os.environ, PATH=temp + os.pathsep + os.environ["PATH"], TEST_KUBECTL_LOG=str(log),
-                       TEST_KUBECTL_STATUS=str(kubectl_status), **env)
-            result = subprocess.run(["bash", "-e", "-c", script], env=env, text=True, capture_output=True)
-            return result, log.read_text().splitlines()
-
-    def test_deploy_workflow_guards_the_restore_test(self):
+    def test_deploy_workflow_ends_with_reconcile_and_the_notification(self):
         workflows = deploy.ROOT / ".github/workflows"
         workflow = (workflows / "ci-deploy-demo.yml").read_text()
         self.assertEqual(1, len(re.findall(r"^  [a-z-]+:$", workflow.split("\njobs:\n", 1)[1], re.MULTILINE)))
         job, *steps = workflow.split("\n    - name: ")
         names = [step.split("\n", 1)[0] for step in steps]
-        self.assertEqual(["Reconcile demo components", "Collect OpenSearch recovery diagnostics",
-                          "Remove disposable restore pod",
-                          "Send detailed Slack notification on failure"], names[-4:])
+        # Nothing runs between the reconciliation and the notification: no restore test to clean up after.
+        self.assertEqual(["Reconcile demo components", "Send detailed Slack notification on failure"], names[-2:])
         self.assertFalse([name for name in names if "lock" in name.lower()])
         self.assertNotIn("continue-on-error", workflow)
         limit = re.search(r"^    timeout-minutes: (\d+)$", job, re.MULTILINE)
         self.assertIsNotNone(limit, "the deploy job has no timeout-minutes")
-        recovery_limit = re.search(r"^    timeout-minutes: (\d+)$", (workflows / "ci-opensearch-recovery.yml").read_text(), re.MULTILINE)
-        self.assertLess(int(recovery_limit[1]), int(limit[1]))
         self.assertLess(int(limit[1]), 360)
-
-        diagnostics, cleanup, slack = steps[-3:]
-        self.assertIn("\n      if: failure() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && steps.reconcile.outputs.recovery_started == 'true'\n", diagnostics)
-        self.assertIn("\n      if: always() && github.event_name == 'workflow_dispatch' && steps.configure-oke.outcome == 'success' && "
-                      "steps.reconcile.outputs.recovery_started == 'true' && "
-                      "(steps.reconcile.outcome == 'success' || steps.reconcile.outcome == 'failure' || "
-                      "steps.reconcile.outcome == 'cancelled')\n", cleanup)
-        self.assertIn("\n      if: failure() || cancelled()\n", slack)
-        self.assertIn("\n        OPENSEARCH_RECOVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}\n", cleanup)
-        script = deploy.ROOT / "examples/otel-demo/opensearch-recovery.sh"
-        self.assertIn('local restore_pod="jaeger-os-verify-$RECOVERY_ID"', script.read_text())
-        run = dict(GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2", OPENSEARCH_RECOVERY_ID="")
-        derived = subprocess.run(["bash", "-c", 'source "$1" && echo "$RECOVERY_ID"', "bash", str(script)],
-                                 env=dict(os.environ, **run), text=True, capture_output=True, check=True)
-        self.assertEqual("123-2", derived.stdout.strip())
-        selector = " -l jaegertracing.io/recovery-source=opensearch -o custom-columns="
-        for status in (0, 1):
-            with self.subTest(kubectl_status=status):
-                result, calls = self.run_workflow_step(diagnostics, status)
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(["volumesnapshots", "pvc", "pods"], [call.split()[3] for call in calls])
-                self.assertTrue(all(call.startswith("-n opensearch get ") and selector in call for call in calls))
-                self.assertTrue(all(call.endswith(" --request-timeout=30s") for call in calls))
-                result, calls = self.run_workflow_step(cleanup, status, OPENSEARCH_RECOVERY_ID="123-2")
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(["-n opensearch delete pod jaeger-os-verify-123-2 --request-timeout=30s --ignore-not-found=true --wait=false"], calls)
-                self.assertEqual(bool(status), "::warning::" in result.stdout)
+        self.assertIn("\n      if: failure() || cancelled()\n", steps[-1])
 
     @patch("deploy.resolve_snapshots")
     @patch("deploy.run")
@@ -508,7 +436,7 @@ class DeploymentTests(unittest.TestCase):
     def test_rejects_invalid_or_automatic_unsafe_routes(self):
         cases = [{"GITHUB_REF": "refs/heads/other"}, {"JAEGER_DEMO_STACK": "invalid"},
                  {"JAEGER_DEMO_DEPLOY_MODE": "invalid"}, {"JAEGER_DEMO_DEPLOY_MODE": "clean"},
-                 {"GITHUB_EVENT_NAME": "pull_request"}, {"JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY": "waive"}]
+                 {"GITHUB_EVENT_NAME": "pull_request"}]
         for case in cases:
             with self.subTest(case=case), self.assertRaises(ValueError):
                 deploy.reconcile(dict(self.env, **case))
@@ -589,30 +517,6 @@ class DeploymentTests(unittest.TestCase):
             deploy.reconcile(self.handover_env())
         component.assert_not_called()
         self.assertEqual(1, run.call_count)
-
-    @patch("deploy.run")
-    def test_cleanup_signal_is_set_only_when_recovery_backup_starts(self, run):
-        for component, mode, policy, recovery in (("opensearch", "upgrade", "required", True),
-                                                  ("opensearch", "upgrade", "waive", False),
-                                                  ("opensearch", "clean", "required", False),
-                                                  ("oci-jaeger", "upgrade", "required", False),
-                                                  ("otel-jaeger", "upgrade", "required", False)):
-            with self.subTest(component=component, mode=mode, policy=policy), tempfile.NamedTemporaryFile() as output:
-                run.reset_mock()
-                env = dict(self.env, GITHUB_EVENT_NAME="workflow_dispatch", JAEGER_DEMO_DEPLOY_MODE=mode,
-                           JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY=policy, GITHUB_OUTPUT=output.name)
-                def command(args, **kwargs):
-                    if args[-1] == "backup-test":
-                        self.assertEqual("recovery_started=true\n", Path(output.name).read_text())
-                        raise subprocess.CalledProcessError(1, args)
-                run.side_effect = command
-                if recovery:
-                    with self.assertRaises(subprocess.CalledProcessError):
-                        deploy.deploy_component(component, env)
-                else:
-                    deploy.deploy_component(component, env)
-                self.assertEqual("recovery_started=true\n" if recovery else "", Path(output.name).read_text())
-
 
 if __name__ == "__main__":
     unittest.main()

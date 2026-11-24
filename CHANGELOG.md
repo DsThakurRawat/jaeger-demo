@@ -24,6 +24,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- **Reset OTel Demo OpenSearch Trace Data**, a manual workflow for the disposable
+  traces of the OTel demo. `list` prints what a reset would delete. `reset` needs
+  a typed acknowledgment and a `demo-apply` reviewer, deletes only the daily
+  `jaeger-main-jaeger-*` trace indices through the OpenSearch API, restarts Jaeger
+  and verifies a fresh trace. It deletes no Kubernetes object, keeps the data
+  volume and needs no new access. It does not help when OpenSearch cannot start.
+  `docs/releases.md` has the runbook.
+  ([#131](https://github.com/jaegertracing/jaeger-demo/pull/131),
+  fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 - Document the source ingress-controller dependencies. This is documentation only, with operational decisions still open.
   ([#91](https://github.com/jaegertracing/jaeger-demo/pull/91),
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
@@ -72,6 +81,25 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   evidence for the first scheduled run after the removals.
   ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
+### Removed
+
+- The OpenSearch backup and restore tooling and the recovery gate: the **Verify
+  OTel Demo OpenSearch Recovery** workflow, `opensearch-recovery.sh`,
+  `OPENSEARCH_RECOVERY.md`, the snapshot class manifest, `recovery_policy.py` and
+  the `opensearch_recovery` input of **Deploy Jaeger Demo to OKE**, which a
+  dispatch can no longer pass. Generated traces are disposable: a manual
+  OpenSearch upgrade takes and requires no recovery point, a scheduled one still
+  fails if the data claim or its volume changed, and volume expansion is kept. The
+  `jaeger-demo-recovery` role keeps its name and loses the access only that
+  tooling used. Runs pass before an administrator applies the reduced
+  `ops/rbac/deployer.yaml`; until then the administrator's `check` reports the
+  removed access. The change alters the fingerprints of `opensearch`,
+  `otel-jaeger` and `otel-demo`, so the next scheduled run upgrades those releases
+  in place with unchanged charts and values. `docs/releases.md` lists the operator
+  steps, including the objects the tooling may have left in the cluster.
+  ([#131](https://github.com/jaegertracing/jaeger-demo/pull/131),
+  fixes [#76](https://github.com/jaegertracing/jaeger-demo/issues/76))
 
 ### Fixed
 

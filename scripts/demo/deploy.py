@@ -17,9 +17,7 @@ import re
 import subprocess
 import tempfile
 
-import chart_archives
 import handover
-import recovery_policy
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,8 +63,6 @@ def fingerprint(component, root=ROOT):
     inputs += [name + "\n" + (directory / name).read_text() for name in files]
     if scope == "jaeger":
         inputs.append((root / "scripts/demo/jaeger-chart.sh").read_text())
-    elif scope == "opensearch":
-        inputs.append((root / "scripts/demo/recovery_policy.py").read_text())
     return hashlib.sha256("\0".join(inputs).encode()).hexdigest()
 
 
@@ -137,15 +133,6 @@ def opensearch_data_binding(get=None):
     return claims[0], uid, pv
 
 
-def verify_charts(component, env):
-    """Fail while nothing has changed if a chart this component installs differs from the lock."""
-    with tempfile.TemporaryDirectory() as archives:
-        for _, variable, chart, _ in chart_archives.CHARTS:
-            if variable in CHART_PINS.get(component, ()):
-                run(["python3", str(ROOT / "scripts/demo/chart_archives.py"), "pull", chart,
-                     chart_archives.pin(ROOT, variable), archives], env=env, stdout=subprocess.DEVNULL)
-
-
 def deploy_component(component, env):
     stack, scope, _ = COMPONENTS[component]
     directory = ROOT / "examples" / ("otel-demo" if stack == "otel" else "oci")
@@ -155,18 +142,10 @@ def deploy_component(component, env):
     if env.get("GITHUB_EVENT_NAME") == "schedule":
         check_scheduled_releases(component)
     binding = None
-    if scope == "opensearch" and mode == "upgrade":
-        policy = recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
-        if policy == "preserve-pvc":
-            binding = opensearch_data_binding()
-        elif policy == "required":
-            # The recovery test creates a snapshot, a restore volume and a Pod. deploy-all.sh
-            # verifies the charts again, but only after that, so check them here first.
-            verify_charts(component, child_env)
-            if env.get("GITHUB_OUTPUT"):
-                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                    output.write("recovery_started=true\n")
-            run(["bash", str(directory / "opensearch-recovery.sh"), "backup-test"], env=child_env)
+    if scope == "opensearch" and mode == "upgrade" and env.get("GITHUB_EVENT_NAME") == "schedule":
+        # Generated traces are disposable, so no upgrade takes a backup. An unattended
+        # upgrade must still leave the data claim and its volume where they were.
+        binding = opensearch_data_binding()
     run(["bash", str(directory / "deploy-all.sh"), mode], env=child_env)
     if scope == "opensearch":
         if binding is not None and opensearch_data_binding() != binding:
@@ -195,7 +174,6 @@ def reconcile(env, root=ROOT):
         raise ValueError("A clean reinstall cannot run in GitHub Actions; an administrator runs it from a shell")
     if event != "workflow_dispatch" and mode != "upgrade":
         raise ValueError("Automatic demo deployments must use upgrade mode")
-    recovery_policy.resolve(env, stack, mode, scope, env.get("JAEGER_OTEL_DEMO_OPENSEARCH_RECOVERY", ""))
     if event == "schedule":
         handover.check_helm_context(env)
     if event == "workflow_dispatch" and mode == "clean":

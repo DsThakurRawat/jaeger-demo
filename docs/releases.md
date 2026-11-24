@@ -32,7 +32,6 @@ The current workflow supports these inputs:
 | `jaeger_image_tag` | Explicit Jaeger snapshot tag |
 | `hotrod_image_tag` | Explicit HotROD snapshot tag |
 | `image_tag` | Shared fallback when an independent tag is omitted |
-| `opensearch_recovery` | Manual dispatch defaults to `required`. An isolated main-branch OTel OpenSearch upgrade can explicitly select `waive`. The daily schedule selects the disposable-trace policy automatically. |
 
 Supply each stack's existing published commit tags for the first handover, using
 separate OCI and OTel dispatches when they run different images. Do not use `latest`
@@ -94,10 +93,10 @@ the run. The OKE setup action's own pip command then runs under the same
 constraints with no package index, so it can only confirm that installation. After
 setup, `python scripts/demo/verify_oci_cli.py` checks every pinned distribution and
 the CLI executable's version, including when the action's installed marker skips
-installation. A rejected tool check cannot start reconciliation or restore-pod
-cleanup. Credential-free CI runs the same installation and check. The OpenSearch
-recovery and volume-expansion workflows install, constrain and check the same way
-after checkout and before they verify the deployment identity's access.
+installation. A rejected tool check cannot start reconciliation.
+Credential-free CI runs the same installation and check. The trace-reset and
+volume-expansion workflows install, constrain and check the same way after
+checkout and before they verify the deployment identity's access.
 [Deployer access](deployer-access.md#oci-cli-installation) lists what hash
 checking does not cover, chiefly the PyYAML source build, and which steps receive
 the API key.
@@ -113,8 +112,7 @@ commit tags is permitted. Existing deployed release state, Helm storage/namespac
 and required objects are checked before application writes; the Helm commands
 cannot fall back to installation. See the [handover permission checks](cutover.md#check-the-restricted-handover-path).
 OTel ingress apply or certificate-read failures prevent a successful component
-record. Restore-pod cleanup runs only if this run actually started the recovery
-backup path, so Jaeger-only handover does not attempt OpenSearch Pod deletion.
+record.
 Without a reviewed SHA, ordinary deployment and schedule selection behavior is
 unchanged. Scheduling still requires its separate scope/access decision.
 
@@ -184,12 +182,12 @@ that adds, removes or renames an object is applied like any other once the
 deployer role covers it. See
 [When a change alters a release's objects](#when-a-change-alters-a-releases-objects).
 
-Generated trace history is disposable. Daily OpenSearch upgrades preserve the
-existing PVC and create no backup, restored volume or test Pod. If the stored
-format becomes unusable, historical traces may be lost. After an explicitly
-approved repair, new traffic can repopulate the demo. Use the
-[manual recovery procedure](../examples/otel-demo/OPENSEARCH_RECOVERY.md) when a
-separately authorized operation requires a tested backup.
+Generated trace history is disposable. No workflow or script takes or restores a
+backup, and no deployment waits for one. Manual and scheduled OpenSearch upgrades
+preserve the existing PVC and create no snapshot, restored volume or test Pod. If
+the stored format becomes unusable, historical traces are lost. After an
+explicitly approved repair, new traffic repopulates the demo. See
+[OpenSearch storage maintenance](#opensearch-storage-maintenance).
 
 A chart version and its application version can differ: a chart-only release
 repackages the same OpenSearch or Dashboards version. Manual and scheduled runs
@@ -200,10 +198,11 @@ Secret reads the upgrade already needs.
 Once the schedule is enabled, a merged change to the OpenSearch and Dashboards
 charts is applied in place by the next scheduled run, on the existing PVC and
 without a backup. The run compares the data PVC and its bound volume before and
-after the upgrade. To start an engine upgrade from a tested recovery point
-instead, merge after the 13:00 UTC run or pause the schedule, dispatch the manual
-`otel` / `opensearch` upgrade with `opensearch_recovery=required`, and let it
-finish. Its successful result records the OpenSearch fingerprint, so the next
+after the upgrade. To apply an engine upgrade under review instead, merge after
+the 13:00 UTC run or pause the schedule, dispatch the manual
+`otel` / `opensearch` upgrade, and let it finish. A manual upgrade takes no
+backup either, and an OpenSearch engine upgrade cannot be rolled back with Helm.
+Its successful result records the OpenSearch fingerprint, so the next
 scheduled run does not select OpenSearch again.
 
 An OpenSearch failure holds both dependent OTel components. Independent OCI
@@ -222,10 +221,8 @@ failure notification includes the run ID in `#jaeger-operations`.
 
 A manual or scheduled run of the `deploy` job that fails, is cancelled or times
 out posts to `#jaeger-operations` with its status. The job is limited to
-330 minutes and its reconcile step to 300, which leaves 30 minutes for setup,
-failure diagnostics, restore-pod cleanup and the notification. The diagnostics
-and cleanup steps have their own 5- and 2-minute limits so that a hung request
-cannot use up the cancellation window.
+330 minutes and its reconcile step to 300, which leaves 30 minutes for setup
+and the notification.
 
 A run that ends before its job starts, for example while it waits for approval
 or when a newer pending run replaces it, runs no steps and cannot report itself.
@@ -234,9 +231,9 @@ channel for a deploy or smoke-check run that was cancelled, failed, timed out or
 failed at startup while none of its jobs reached a runner. It stays silent when
 a job did start, because that job reports itself. The observer runs from the
 workflow file on `main` and does not report its own failures. It does not watch
-the recovery and volume-expansion workflows.
+the trace-reset and volume-expansion workflows.
 
-The deployment, OpenSearch recovery and volume-expansion workflows share the
+The deployment, trace-reset and volume-expansion workflows share the
 concurrency group `jaeger-otel-demo-opensearch-recovery` with
 `cancel-in-progress: false`, so one of them runs at a time and a running writer is
 never cancelled. GitHub keeps one waiting run per group: a newer waiting run
@@ -264,7 +261,7 @@ whether a run that waits for `demo-apply` approval already holds the group, so
 treat it as holding it: other writers wait behind it, and the rule above applies.
 
 The cancelled run changed nothing in the cluster. The run observer reports a
-cancelled deploy run; a recovery or volume-expansion run cancelled this way is
+cancelled deploy run; a reset or volume-expansion run cancelled this way is
 not reported, so check its run page after dispatching one. When the observer
 reports a cancelled scheduled run:
 
@@ -279,7 +276,7 @@ reports a cancelled scheduled run:
    and let them finish:
 
    ```bash
-   for workflow in ci-deploy-demo.yml ci-opensearch-recovery.yml ci-opensearch-volume-expand.yml; do
+   for workflow in ci-deploy-demo.yml ci-opensearch-reset.yml ci-opensearch-volume-expand.yml; do
      gh api --paginate \
        "repos/jaegertracing/jaeger-demo/actions/workflows/$workflow/runs?per_page=100" \
        --jq '.workflow_runs[] | select(.status != "completed") | {id, event, status, created_at, html_url}'
@@ -329,8 +326,160 @@ reviewed pre-run captures and only after verifying the resulting deployment.
 
 OpenSearch downgrade, `clean`, `cleanup.sh`, namespace deletion and PVC deletion
 are not generic rollback procedures. Storage expansion cannot be reversed by
-shrinking the PVC. Disposable trace data allows a separately approved narrow reset;
-it does not authorize routine destructive maintenance.
+shrinking the PVC. Disposable trace data allows a separately approved narrow
+[reset](#reset-the-trace-data); it does not authorize routine destructive maintenance.
+
+## OpenSearch storage maintenance
+
+Generated traces are disposable, so the repository holds no backup or restore
+tooling and no deployment is gated on a recovery point
+([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)). Routine
+maintenance preserves storage:
+
+- **Upgrades** keep the existing data PVC. A scheduled run fails if the claim or
+  its bound volume changed during the upgrade.
+- **Volume expansion** is the manual
+  [Expand OTel Demo OpenSearch Volume](../examples/otel-demo/README.md#opensearch-volume-expansion)
+  workflow, approved by a `demo-apply` reviewer.
+- **Index retention** removes Jaeger indices older than 30 days
+  ([index retention](../examples/otel-demo/README.md#index-retention)).
+
+The one destructive operation is the manual [trace reset](#reset-the-trace-data)
+below. It deletes trace indices and keeps the data volume. No workflow identity
+can delete a PersistentVolumeClaim. Replacing the data volume is a destructive
+storage change that no workflow performs: pause the schedule, get explicit
+maintainer approval, and have an administrator perform it outside the workflows.
+
+### Reset the trace data
+
+**Reset OTel Demo OpenSearch Trace Data**
+([ci-opensearch-reset.yml](../.github/workflows/ci-opensearch-reset.yml)) deletes
+the stored Jaeger traces of the OTel demo and nothing else. Use it when the trace
+indices are unusable or fill the volume and the 30-day retention cannot be waited
+for. It is never part of a deployment. It runs only from a manual dispatch on
+`main`, waits for a `demo-apply` reviewer every time, and shares the writers'
+concurrency group.
+
+Every name it touches is a constant in
+[scripts/demo/opensearch_reset.py](../scripts/demo/opensearch_reset.py). No input
+selects a namespace, a Pod, a workload or an index.
+
+| Resource | What the reset does |
+| --- | --- |
+| Pod `opensearch/opensearch-cluster-single-0`, container `opensearch` | Sends requests to the engine on `localhost:9200` |
+| Indices named `jaeger-main-jaeger-span-<date>`, `-service-`, `-dependencies-` and `-sampling-<date>`, with the date as `YYYY-MM-DD` | Deletes each one by its exact name, one request per index |
+| Deployment `jaeger/jaeger` | Restarts it and waits for the rollout |
+
+It deletes no Kubernetes object. The StatefulSet, its Pod, the data claim and the
+volume stay, and the freed space returns to that volume. Every other index stays:
+the `jaeger-archive-*` indices, the Dashboards saved objects and the index
+templates. It needs no access beyond the deployer role
+([deployer access](deployer-access.md#what-the-deployer-role-grants)).
+
+1. Dispatch `operation=list` first. After approval the run prints the indices a
+   reset would delete and the ones it would keep, and changes nothing.
+
+   ```bash
+   gh workflow run ci-opensearch-reset.yml --repo jaegertracing/jaeger-demo --ref main -f operation=list
+   ```
+
+2. A reset is a destructive change that needs a concrete maintainer decision
+   ([migration plan](MIGRATION.md#release-and-documentation-contract)). Record it,
+   then dispatch `operation=reset` and type the acknowledgment exactly, with no
+   quotes or extra spaces:
+
+   ```bash
+   gh workflow run ci-opensearch-reset.yml --repo jaegertracing/jaeger-demo --ref main \
+     -f operation=reset -f 'acknowledgment=delete all Jaeger trace indices in opensearch/opensearch-cluster-single-0'
+   ```
+
+   Do not dispatch it close to 13:00 UTC, as for any writer.
+3. The run checks the request before it configures cluster access, then checks its
+   identity's access, then checks that the Pod is the live Pod of the
+   `opensearch-cluster-single` StatefulSet and that the engine is the one-node
+   `opensearch-cluster`. Only then does it delete. Afterwards it requires that no
+   other index and no Jaeger index template disappeared.
+4. It restarts `jaeger/jaeger`. Jaeger writes its index templates at startup and
+   remembers the service names it has already recorded, so without a restart the
+   Jaeger UI would list no services for up to 12 hours. The run then sends a fresh trace
+   through the collector, reads it back, and finds its service in the service list.
+5. Verify the demo as in step 5 of the
+   [change and verification process](#change-and-verification-process), and record
+   the run URL, the deleted index count and the decision in the release record.
+   The Jaeger UI shows only traces written after the reset.
+
+The run stops before any change when the acknowledgment differs, when the event
+is not a manual dispatch from `main`, when the Pod or the engine is not the
+expected one, or when the engine's listing is not what the script expects. A run
+that fails after its first delete request still restarts `jaeger/jaeger` before it
+reports the error, so the UI does not miss services for 12 hours; if that restart
+also fails, the log says so and the Deployment needs a manual
+`kubectl -n jaeger rollout restart deployment/jaeger`. A run that fails part-way
+can be dispatched again: it deletes what is left and restarts Jaeger. The workflow
+posts nothing to Slack and the run observer does not watch it, so watch the run.
+
+The reset needs an OpenSearch that answers. It cannot repair an engine that does
+not start, and it does not replace the data volume.
+
+### After the backup tooling was removed
+
+The removal changes `examples/otel-demo/deploy-all.sh`, which is a fingerprint
+input of every OTel component, and drops `recovery_policy.py` from the OpenSearch
+inputs. The first scheduled run after the merge therefore selects `opensearch`,
+`otel-jaeger` and `otel-demo`, and upgrades `opensearch`, `opensearch-dashboards`
+and `otel-demo` in place with unchanged charts and values. To do that under
+review instead, pause the schedule before merging and dispatch the
+`otel` / `opensearch` and `otel` / `otel-demo` upgrades manually
+([merging a change](#merging-a-change)).
+
+Two operator steps follow the merge. Neither blocks a deployment.
+
+1. **Apply the reduced role.** `ops/rbac/deployer.yaml` no longer grants the
+   `jaeger-demo-recovery` role anything that only the backup and restore tooling
+   used. Runs keep passing before the file is applied, because the live role is
+   wider than what a run asks for. Until then the administrator's
+   `check --identity manual --user` reports the removed access as
+   `must not be allowed`. When no writer workflow is running, apply the file and
+   require `0 difference(s)` for both identities
+   ([changing the role](deployer-access.md#changing-the-role)). The bindings are
+   unchanged.
+2. **Inspect what the tooling left in the cluster.** Each backup run created a
+   VolumeSnapshot `jaeger-os-recovery-<run>`, a restored PersistentVolumeClaim
+   `jaeger-os-restore-<run>` and a ConfigMap `jaeger-os-query-<run>` in
+   `opensearch`, all labelled `jaegertracing.io/recovery-source=opensearch`, and
+   a disposable Pod `jaeger-os-verify-<run>` that it removed afterwards. The first
+   run also created the cluster-scoped VolumeSnapshotClass
+   `jaeger-opensearch-oci-retain`. Nothing deleted the retained objects, and the
+   workflow identities can no longer read them. With an administrator kubeconfig,
+   list them first. These commands change nothing:
+
+   ```bash
+   kubectl get volumesnapshotclass jaeger-opensearch-oci-retain
+   kubectl -n opensearch get volumesnapshots -l jaegertracing.io/recovery-source=opensearch
+   kubectl -n opensearch get persistentvolumeclaims,configmaps,pods -l jaegertracing.io/recovery-source=opensearch
+   kubectl get volumesnapshotcontents \
+     -o custom-columns='NAME:.metadata.name,CLASS:.spec.volumeSnapshotClassName,POLICY:.spec.deletionPolicy,SNAPSHOT:.spec.volumeSnapshotRef.name,NAMESPACE:.spec.volumeSnapshotRef.namespace'
+   kubectl -n opensearch get persistentvolumeclaims \
+     -o custom-columns='NAME:.metadata.name,VOLUME:.spec.volumeName,CAPACITY:.status.capacity.storage,PHASE:.status.phase'
+   ```
+
+   A `NotFound` answer, or an error that the server has no such resource type,
+   means that kind was never created. Deleting anything found is a separate,
+   explicitly approved administrator action, because it is not reversible:
+
+   - A restored claim `jaeger-os-restore-<run>` is a full copy of the data volume
+     at the time of the test. Whether its block volume is deleted with it depends
+     on the reclaim policy of the bound PersistentVolume.
+   - Snapshot contents of the class `jaeger-opensearch-oci-retain` have the
+     deletion policy `Retain`. Deleting the VolumeSnapshot and its content leaves
+     the OCI block volume backup, which then has to be deleted in OCI. Its
+     identifier is the content's `status.snapshotHandle`. That value is private
+     infrastructure data: keep it out of issues, pull requests and public logs.
+   - The live data claim is `opensearch-cluster-single-opensearch-cluster-single-0`.
+     It carries no `jaegertracing.io/recovery-source` label. Never delete it as
+     part of this cleanup.
+   - Delete by exact name, one object at a time, after reading the list again.
+     Record what was found, what was deleted and when in the release record.
 
 ## Helmfile acceptance
 

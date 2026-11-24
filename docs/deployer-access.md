@@ -7,7 +7,7 @@
 two GitHub Actions identities that deploy the hosted demo. It is the reviewed
 definition, not a record of what the cluster holds: an administrator applies it
 and binds the identities, and records that in the release record. Every run of the
-deploy, recovery and volume expansion workflows starts by checking its own
+deploy, trace reset and volume expansion workflows starts by checking its own
 credential against this role and stops before any change if part of it is
 missing, so a run changes nothing until the role is applied and its identity bound.
 
@@ -22,7 +22,7 @@ when the role was applied and the earlier grants were removed.
 | Role | Bound to | Purpose |
 | --- | --- | --- |
 | `jaeger-demo-deployer` | `demo-apply` and `demo-scheduled` identities | Upgrade the six Helm releases and run their checks |
-| `jaeger-demo-recovery` | `demo-apply` identity only | Manual OpenSearch recovery test and volume expansion |
+| `jaeger-demo-recovery` | `demo-apply` identity only | Manual OpenSearch volume expansion |
 
 Each role is one ClusterRole for kinds that have no namespace, plus one Role per
 namespace. A Role grants nothing outside its namespace. Rules in the four release
@@ -37,7 +37,7 @@ watch by name.
 | `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks |
 | `default` | Roles and RoleBindings, monitoring custom resources, hook Jobs | `default/prometheus` and its hooks |
 | `jaeger` | `pods/portforward` | `verify_trace.py` writes and reads one trace |
-| `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check |
+| `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check, `opensearch_reset.py` |
 | `jaeger`, `opensearch`, `otel-demo` | Read Pod logs, endpoints, events and Certificates | Certificate readiness and failure diagnostics in `examples/otel-demo/deploy-all.sh` |
 | `kube-system` | Get, patch and delete five named Services, list Services | Monitoring scrape Services, `kubectl cluster-info` |
 | Cluster | Get, patch and delete seven named ClusterRoles (with `bind` and `escalate`) and seven named ClusterRoleBindings. Create a ClusterRole or ClusterRoleBinding of any name. Get, patch and delete the two named admission webhook configurations. Three namespace lookups. | Monitoring and OTel demo chart RBAC, monitoring hooks |
@@ -46,12 +46,20 @@ The verbs cover a release that Helm stored with either apply method. With
 client-side apply Helm creates and patches; with server-side apply it creates by
 patch.
 
-The recovery role adds, in `opensearch`: create and patch PersistentVolumeClaims,
-create and delete Pods, run a command in any Pod, and create and annotate volume
-snapshots. At cluster scope it reads PersistentVolumes, the `oci-bv` StorageClass
-and the recovery snapshot class, creates snapshot classes, and reads and patches
-volume snapshot contents. The scheduled identity never runs those scripts, so it
-does not hold this role.
+The `jaeger-demo-recovery` role adds what volume expansion needs: in `opensearch`
+it patches PersistentVolumeClaims, and at cluster scope it reads PersistentVolumes
+and the `oci-bv` StorageClass. The scheduled identity never runs that script, so it
+does not hold this role. The role kept its name when the backup and restore
+tooling was removed ([#76](https://github.com/jaegertracing/jaeger-demo/issues/76)),
+so its bindings did not have to change. It no longer creates a claim, a Pod or a
+volume snapshot, and it no longer runs a command in a Pod of any name.
+
+The manual [trace reset](releases.md#reset-the-trace-data) has no access of its
+own. It uses the `pods/exec` grant on the OpenSearch Pod, the patch of the Jaeger
+Deployment and the port-forward that the deployer role already holds, and it
+deletes no Kubernetes object. The scheduled identity holds the same access. What
+keeps a reset manual is the workflow (dispatch only, a `demo-apply` reviewer and a
+typed acknowledgment), not the role.
 
 ## What a holder can reach
 
@@ -80,9 +88,9 @@ against someone who controls the identity:
   already uses, have cert-manager issue a certificate for it.
 - **Pods.** `pods/exec` runs any command in the OpenSearch Pod, which can delete
   its indices. `pods/portforward` reaches every Pod in `jaeger`.
-- **Storage, recovery role only.** It can patch any volume snapshot content in the
-  cluster, including one that belongs to another workload, and run a command in
-  any Pod in `opensearch`.
+- **Storage, `jaeger-demo-recovery` role only.** It can patch any
+  PersistentVolumeClaim in `opensearch`. A patch can grow a volume, and a grown
+  volume cannot be shrunk again.
 
 A hostile holder can therefore reach cluster-administrator access. The control is
 who can use the identity: code-owner review and merge to `main`, a `main`-only
@@ -101,7 +109,8 @@ section explains how a hostile holder gets past them.
   named ones. It reads nothing else there.
 - No create, patch or delete of a Namespace, Node, CustomResourceDefinition,
   PersistentVolume, admission policy or ClusterIssuer.
-- No direct delete of a PersistentVolumeClaim or a volume snapshot. That does not
+- No direct create or delete of a PersistentVolumeClaim or a Pod, and no access
+  to volume snapshots, snapshot classes or snapshot contents. That does not
   make stored data safe from a holder: it can change the OpenSearch StatefulSet
   and run commands in its Pod. Treat any change to that StatefulSet's volume claim
   settings as a storage change that needs explicit approval.
@@ -118,8 +127,8 @@ no `deploy_mode` input and always runs `upgrade`, and `deploy.py` refuses `clean
 when `GITHUB_ACTIONS` is `true`. A clean reinstall deletes namespaces and
 PersistentVolumeClaim bindings that the [migration plan](MIGRATION.md) preserves,
 so only an administrator performs it, from a shell, with that administrator's own
-kubeconfig and with explicit maintainer approval. Take the backup first
-([OpenSearch recovery](../examples/otel-demo/OPENSEARCH_RECOVERY.md)), then run
+kubeconfig and with explicit maintainer approval. It discards the stored traces:
+generated traces are disposable and no backup tooling exists. Run
 `./deploy-all.sh clean` in the stack's example directory (`examples/oci` or
 `examples/otel-demo`) from a checkout of the reviewed commit. Pass the image
 tag as the second argument or in `JAEGER_DEMO_IMAGE_TAG`; the repositories default
@@ -138,16 +147,16 @@ reads the key from the five `OCI_CLI_*` environment variables. A step therefore
 needs the secrets when it configures cluster access or calls the cluster, and no
 other step does.
 
-The three writer workflows set the five secrets in the `env` of those steps, not
+The writer workflows set the five secrets in the `env` of those steps, not
 for the job:
 
 | Workflow | Steps that receive the secrets |
 | --- | --- |
-| `ci-deploy-demo.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Reconcile demo components, Collect OpenSearch recovery diagnostics, Remove disposable restore pod |
-| `ci-opensearch-recovery.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Create and verify OpenSearch recovery point, Collect failure diagnostics, Remove disposable restore pod |
+| `ci-deploy-demo.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Reconcile demo components |
+| `ci-opensearch-reset.yml` | Configure kubectl with OKE, Verify the deployment identity's access, List or reset the Jaeger trace indices |
 | `ci-opensearch-volume-expand.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Expand and verify the OpenSearch volume |
 
-The checkout, the revision and recovery policy checks, the OCI CLI installation
+The checkout, the revision check, the OCI CLI installation
 and version check, the Helm setup action and the Slack notification run without
 them. The only action that receives them is the kubectl configuration,
 `oracle-actions/configure-kubectl-oke`, pinned by commit.
@@ -193,7 +202,7 @@ Hash checking does not cover the following:
   PyYAML` keeps this the only source build. The build runs in the install step,
   without the key, on the runner the later steps use. When a pinned OCI CLI
   accepts a PyYAML release that has a wheel, remove `--no-binary PyYAML` from the
-  four workflows.
+  workflows that install the OCI CLI.
 - **Packages from the runner image.** pip does not download a pin that the image
   already provides at that version, so only the version of such a package is
   checked.
@@ -272,7 +281,7 @@ a group is not evaluated unless each group is passed with `--group`, so a clean
 result does not rule out a group grant. `check --identity <name> --self` closes
 that gap for the required access: run with the identity's own credential, it
 reviews what that credential can really do, and asks nothing about the denied
-list. The deploy, recovery and volume expansion workflows run it as their first
+list. The deploy, trace reset and volume expansion workflows run it as their first
 cluster step.
 
 Record the reviewed commit, the command outputs and the time in the release
@@ -306,6 +315,23 @@ the role in the same pull request, and the reviewer sees the access change. A ne
 `kubectl` or `helm` call in a script needs a row in the module's table. After the
 change merges, an administrator applies the file again and reruns `check`. A merge
 alone does not change the cluster.
+
+The order depends on the direction of the change:
+
+- **A change that adds access.** Until the file is applied, each run stops at
+  **Verify the deployment identity's access** with `missing` lines, before any
+  change. Merge after the 13:00 UTC run or pause the schedule, apply the file,
+  and require `0 difference(s)` before the next run.
+- **A change that only removes access.** Runs keep passing while the cluster
+  still holds the older, wider role, because a run's own `check --self` asks only
+  for what it needs. Nothing has to be paused. The administrator's `check --user`
+  reports each removed access as `must not be allowed` until the file is applied,
+  when it is on the denied list. Apply the file when no writer workflow is
+  running, then require `0 difference(s)` for both identities.
+
+`kubectl apply -f ops/rbac/deployer.yaml` replaces the rules of each role, so it
+also removes access. It does not touch the bindings, which name the roles and stay
+valid as long as the role names do.
 
 To withdraw the access, delete the bindings:
 

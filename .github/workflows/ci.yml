@@ -68,7 +68,7 @@ jobs:
   adoption:
     name: Helmfile render and adoption rehearsal
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       with:
@@ -95,6 +95,17 @@ jobs:
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/release-phases/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
+    # The reset rehearsal installs the pinned OpenSearch chart, so it gets a cluster of its own.
+    - name: Replace the fixture for the trace reset rehearsal
+      working-directory: ${{ runner.temp }}
+      run: |
+        ./kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml"
+        ./kind create cluster --name jaeger-demo-reset-fixture --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Rehearse the OpenSearch trace reset under the committed manual role
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/opensearch-reset/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" --context kind-jaeger-demo-reset-fixture
 
   render-diff:
     name: Rendered resource changes
