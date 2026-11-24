@@ -18,6 +18,12 @@ python3 scripts/demo/helmfile_tools.py run -- helmfile -f helmfile-resources.yam
 
 ## Inspect existing ownership
 
+> **Under revision.** The commands in this section were written for the separate
+> read-only plan identity (`$PLAN_KUBECONFIG`, `$PLAN_CONTEXT`), which the
+> [migration plan](MIGRATION.md#execution-contract) retires. The planner still only
+> reads the twelve named objects. [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)
+> tracks the rewrite for the deployer identity.
+
 Use the read-only plan kubeconfig for the approved cluster context. The planner performs twelve named GETs. It rejects controller-owned objects, old or partial Helm ownership, conflicting retention, missing identities and deletion in progress. An already owned object returns an empty patch. Proposed changes modify top-level metadata only. The UID and resource version in each JSON Patch protect against replacement or concurrent change. A stale patch requires a fresh check of the object and its proposed inputs.
 
 ```bash

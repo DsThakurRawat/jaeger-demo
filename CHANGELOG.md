@@ -20,6 +20,27 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-24
+
+### Changed
+
+- The runbooks no longer read as if the executor retirement that
+  `docs/MIGRATION.md` records were still ahead, or ask for the retired read-only
+  plan identity: `docs/cutover.md` drops the
+  `demo-plan` environment from the Stage 1 access step, `docs/deployer-access.md`
+  describes the deployer role without the transition from the earlier grants,
+  `docs/executor-retirement.md` points to the evidence in `docs/MIGRATION.md`, and
+  `docs/helmfile-companions.md` marks its ownership commands as under revision.
+  ([#124](https://github.com/jaegertracing/jaeger-demo/pull/124),
+  fixes [#123](https://github.com/jaegertracing/jaeger-demo/issues/123))
+
+- `docs/MIGRATION.md` records the retirement of the leftovers that executor
+  retirement step 16 lists (the Stage 1 handover grants, the `demo-plan`
+  environment with its identity, and the published executor images) and the
+  evidence for the first scheduled run after the removals.
+  ([#122](https://github.com/jaegertracing/jaeger-demo/pull/122),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+
 ## 2026-11-23
 
 ### Added
@@ -51,10 +72,25 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` records the evidence for executor retirement steps 11 to 16
+  (removing the executor objects) and lists the leftovers that still need their
+  own approval.
+  ([#121](https://github.com/jaegertracing/jaeger-demo/pull/121),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `docs/MIGRATION.md` records the evidence for executor retirement steps 8 to 10,
+  including the first accepted scheduled run, and the monitoring chart 93.6.1
+  upgrade, and narrows the remaining gates to removing the executor objects.
+  ([#119](https://github.com/jaegertracing/jaeger-demo/pull/119),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - `docs/MIGRATION.md` records the evidence for executor retirement steps 2 to 7
   (cluster state, deployer role binding and the manual component runs) and lists
   the gates that remain before the executor objects are removed.
   ([#112](https://github.com/jaegertracing/jaeger-demo/pull/112),
+  refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
+- `docs/MIGRATION.md` records operator acceptance of the manual component
+  upgrades (executor retirement step 7) and no longer lists it as an open gate.
+  Binding the scheduled identity is the next gate.
+  ([#117](https://github.com/jaegertracing/jaeger-demo/pull/117),
   refs [#95](https://github.com/jaegertracing/jaeger-demo/issues/95))
 - kube-prometheus-stack chart pin moves from 82.10.4 to 93.6.1. The chart no
   longer renders the `prometheus-grafana` Role, so `ops/rbac/deployer.yaml` drops
@@ -117,6 +153,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   listing omits, stops the run before any write.
   ([#109](https://github.com/jaegertracing/jaeger-demo/pull/109),
   fixes [#106](https://github.com/jaegertracing/jaeger-demo/issues/106))
+- The OpenTelemetry Demo values now give the reason the assistant stack is
+  disabled as the migration's AI activation constraint, not the retired
+  executor's size limit, and note the endpoint override the agent would need.
+  No rendered object changes.
+  ([#118](https://github.com/jaegertracing/jaeger-demo/pull/118),
+  fixes [#55](https://github.com/jaegertracing/jaeger-demo/issues/55))
 
 ### Fixed
 
