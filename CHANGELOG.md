@@ -47,6 +47,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The owner decided to keep the community ingress-nginx controller in place, with no
+  replacement planned in this migration. This is an accepted risk for a public demo
+  whose data is disposable and which holds no credentials behind its routes. The
+  decision is revisited if an exploitable ingress-nginx CVE is published or when the
+  cluster is rebuilt. (fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 - `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
   owner and record that it is the retired community ingress-nginx, installed from
   its static manifest, without publishing the exact version. The replacement and
