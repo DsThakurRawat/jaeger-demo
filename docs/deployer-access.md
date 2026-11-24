@@ -155,6 +155,11 @@ needs no reviewer is only risk. The same command with both users adds it:
 python3 scripts/demo/deployer_access.py bindings --manual-user "$MANUAL_USER_OCID" --scheduled-user "$SCHEDULED_USER_OCID" | kubectl apply -f -
 ```
 
+Once both identities are bound, pass both users every time. Applying the output
+for the manual user alone replaces the subjects of the six deployer bindings,
+which removes the scheduled identity, and the next scheduled run stops at its
+access check.
+
 The command prints one ClusterRoleBinding or RoleBinding per role and refuses
 anything that is not an OCI user OCID, or the same user twice. Kubernetes accepts
 the empty resource name in the `escalate` rules; confirm with
