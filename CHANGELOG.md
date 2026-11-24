@@ -39,6 +39,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The Helmfile conversion deliverable for removing the backup and restore tooling
+  in `docs/MIGRATION.md` now says the repository change is done and that the
+  reduced role and cluster cleanup remain operator steps. The stage's exit
+  criteria are unchanged.
+  (fixes [#136](https://github.com/jaegertracing/jaeger-demo/issues/136))
+
 - `docs/releases.md` states that a waiting writer replaced by a newer one in the
   shared concurrency group is accepted behavior, and what an operator does when
   the run observer reports a scheduled run cancelled that way. The workflows are
