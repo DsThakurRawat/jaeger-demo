@@ -56,7 +56,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   connection errors, then fails with the last status. The readiness probe
   changes the rendered Dashboards Deployment, so the next deployment that
   applies it restarts the Dashboards Pod.
-  (fixes [#111](https://github.com/jaegertracing/jaeger-demo/issues/111))
+  ([#128](https://github.com/jaegertracing/jaeger-demo/pull/128),
+  fixes [#111](https://github.com/jaegertracing/jaeger-demo/issues/111))
 
 ## 2026-11-23
 
