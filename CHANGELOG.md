@@ -39,6 +39,19 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
+  owner and record that it is the retired community ingress-nginx, installed from
+  its static manifest, without publishing the exact version. The replacement and
+  its timing are still open.
+  ([#135](https://github.com/jaegertracing/jaeger-demo/pull/135),
+  refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
+- `AGENTS.md` no longer lists recovery removal as a separate future stage, since
+  the recovery tooling is gone. Helmfile and post-adoption refactors remain
+  separate stages with explicit prerequisites.
+  ([#134](https://github.com/jaegertracing/jaeger-demo/pull/134),
+  fixes [#133](https://github.com/jaegertracing/jaeger-demo/issues/133))
+
 - The Helmfile conversion deliverable for removing the backup and restore tooling
   in `docs/MIGRATION.md` now says the repository change is done and that the
   reduced role and cluster cleanup remain operator steps. The stage's exit

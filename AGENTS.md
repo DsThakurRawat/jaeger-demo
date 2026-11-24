@@ -14,8 +14,8 @@ output. Human approval is required for each proposed reply to review feedback.
   dependency configuration before opening or updating a PR. Report limitations.
 - Add regression tests for changed behavior. Do not weaken assertions or bypass
   checks. Preserve imported authored history and license headers.
-- Keep extraction adapters minimal. Helmfile, recovery removal and post-adoption
-  refactors are separate stages with explicit prerequisites.
+- Keep extraction adapters minimal. Helmfile and post-adoption refactors are
+  separate stages with explicit prerequisites.
 - Do not treat local test success as production acceptance. Follow the concrete
   access/cutover/adoption/acceptance gates and bind verification to exact inputs.
 - Preserve the cluster, DNS/routes, namespaces, release identities, Service
