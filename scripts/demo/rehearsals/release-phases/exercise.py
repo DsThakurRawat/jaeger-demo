@@ -8,6 +8,7 @@ import argparse
 import base64
 import gzip
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,24 +18,44 @@ from urllib.parse import urlsplit
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import deployer_access
 import release_phases
+
+# A rehearsal identity bound to the committed deployer roles. It matches the OCI user OCID pattern.
+USER = "ocid1.user.oc1..aaaarehearsalphases"
 
 # Helmfile resolves ref+ strings in its own values. The direct path passes values to Helm, which keeps them.
 LITERAL = "ref+unused-provider://literal"
 
 
-def direct_transactions(cfg, context, root, force_status):
+def impersonating(cfg, context, user, path):
+    """Write a kubeconfig that sends every request as `user`. The admin in cfg must be allowed to impersonate."""
+    config = yaml.safe_load(Path(cfg).read_text())
+    config["current-context"] = context
+    for entry in config["users"]:
+        entry["user"]["as"] = user
+        entry["user"]["as-groups"] = ["system:authenticated"]
+    with open(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as f:
+        yaml.safe_dump(config, f)
+    return path
+
+
+def direct_transactions(cfg, deployer, context, root, force_status):
     """Reconcile one existing release with native Helmfile and the direct deployment flags.
 
     The flags match the deploy workflow's contract: upgrade an existing release in place and
     never install it. Helmfile prepends --install to every Helm upgrade, so --install=false in
     the sync arguments restores that boundary. Values go to Helm, not Helmfile.
+
+    Helm and Helmfile run through the deployer kubeconfig. ctl is the admin and only inspects the
+    Helm storage index and the rendered objects, so that a check does not depend on the role.
     """
     ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
-    name = ns = "jaeger-direct-fixture"
-    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context, "-n", ns]
+    # A release namespace, because the deployer role covers only those. The caller created it.
+    ns = "jaeger"
+    name = "jaeger-direct-fixture"
+    helm = ["helm", "--kubeconfig", str(deployer), "--kube-context", context, "-n", ns]
     history = 3
-    subprocess.run(ctl + ["create", "namespace", ns], check=True, stdout=subprocess.DEVNULL)
     chart = root / "direct-chart"
     (chart / "templates").mkdir(parents=True)
     # A vendored dependency with an unreachable repository: --skip-deps must not fetch it.
@@ -64,7 +85,7 @@ def direct_transactions(cfg, context, root, force_status):
     def helmfile(method):
         sync = ["--install=false", "--values=./" + values.name, "--wait=legacy", "--rollback-on-failure=true",
                 "--skip-crds=false", "--create-namespace=false"]
-        command = ["helmfile", "--file", "direct.yaml", "--kubeconfig", str(cfg), "--kube-context", context,
+        command = ["helmfile", "--file", "direct.yaml", "--kubeconfig", str(deployer), "--kube-context", context,
                    "--skip-deps", method, "--concurrency", "1", "--reset-values", "--sync-args=" + " ".join(sync)]
         if method == "apply":
             command += ["--diff-args=--allow-unreleased=false --values=./" + values.name,
@@ -119,7 +140,7 @@ def direct_transactions(cfg, context, root, force_status):
     # Helmfile 1.8.4 and later: apply also upgrades a release that is not deployed, even with an empty diff.
     force_status(ns, "failed", name)
     diff = subprocess.run(["helm", "diff", "upgrade", name, str(archive), "-n", ns, "--values", str(values),
-                           "--kubeconfig", str(cfg), "--kube-context", context, "--detailed-exitcode"],
+                           "--kubeconfig", str(deployer), "--kube-context", context, "--detailed-exitcode"],
                           stdout=subprocess.DEVNULL)
     assert diff.returncode == 0, "The failed release must have an empty diff"
     reconcile("apply")
@@ -137,15 +158,33 @@ def direct_transactions(cfg, context, root, force_status):
 
 
 def exercise(cfg, context):
+    # ctl is the cluster admin. It creates the fixture (namespaces, the role and its bindings), builds
+    # states the deployer must never create (a release record in a forced status) and inspects results.
+    # Every Helm and Helmfile command below runs as the bound deployer user, through deployer.
     ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
-    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context]
     view = json.loads(subprocess.check_output(ctl + ["config", "view", "--minify", "-o", "json"]))
     if urlsplit(view["clusters"][0]["cluster"]["server"]).hostname != "127.0.0.1":
         raise ValueError("A disposable loopback cluster is required")
     name = "jaeger-phase-fixture"
-    namespaces = ["default", "jaeger-phase-fixture"]
-    # Creation must fail on reuse. Leave cleanup to the disposable cluster owner.
-    subprocess.run(ctl + ["create", "namespace", namespaces[1]], check=True)
+    # The deployer role covers the four release namespaces only. The OCI stack is default.
+    namespaces = ["default", "otel-demo"]
+    # Creation must fail on reuse, so this needs a fresh cluster. Leave cleanup to the disposable
+    # cluster owner. Every release namespace must exist before its role binding can.
+    for ns in release_phases.NAMESPACES[1:]:
+        subprocess.run(ctl + ["create", "namespace", ns], check=True)
+    subprocess.run(ctl + ["apply", "-f", str(deployer_access.ROLES)], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(ctl + ["apply", "-f", "-"], input=json.dumps(deployer_access.bindings(USER)).encode(),
+                   check=True, stdout=subprocess.DEVNULL)
+    scratch = tempfile.TemporaryDirectory()
+    deployer = impersonating(cfg, context, USER, Path(scratch.name) / "deployer.yaml")
+    helm = ["helm", "--kubeconfig", str(deployer), "--kube-context", context]
+    who = subprocess.run(["kubectl", "--kubeconfig", str(deployer), "--context", context, "auth", "whoami",
+                          "-o", "jsonpath={.status.userInfo.username}"], capture_output=True, text=True, check=True)
+    assert who.stdout.strip() == USER, who.stdout
+    # The reason for per-namespace listings: this user cannot read Secrets cluster-wide.
+    wide = subprocess.run(["kubectl", "--kubeconfig", str(deployer), "--context", context, "auth", "can-i",
+                           "list", "secrets", "--all-namespaces"], capture_output=True, text=True)
+    assert wide.returncode == 1 and wide.stdout.strip() == "no", "The deployer must not list Secrets cluster-wide"
     helm_rows = [{"name": name, "namespace": ns, "chart": "./chart", "labels": {"testns": ns}}
                  for ns in namespaces]
     rows = [{"id": ns + "/" + name} for ns in namespaces]
@@ -154,9 +193,10 @@ def exercise(cfg, context):
         return json.loads(subprocess.check_output(helm + ["-n", ns, "status", name, "-o", "json"]))
 
     def listing():
-        # Helm 4 has no --all flag, and its default mask omits releases in the unknown state.
-        # --max 0 disables the 256-release page.
-        return json.loads(subprocess.check_output(helm + ["list", "--all-namespaces", "--max", "0", "-o", "json"]))
+        # One listing per release namespace, as the deployer role allows. Helm 4 has no --all flag, and
+        # its default mask omits releases in the unknown state.
+        return {ns: json.loads(subprocess.check_output(helm + release_phases.list_args(ns)))
+                for ns in release_phases.NAMESPACES}
 
     def read_status(release):
         ns, rel = release.split("/")
@@ -195,13 +235,22 @@ def exercise(cfg, context):
             'apiVersion: v1\nkind: ConfigMap\nmetadata: {name: jaeger-phase-fixture}\ndata: {stable: "yes"}\n')
         state = root / "helmfile.yaml"
         state.write_text(yaml.safe_dump({"releases": helm_rows}))
-        cmd = ["helmfile", "--kubeconfig", str(cfg), "--kube-context", context, "-f", str(state)]
+        cmd = ["helmfile", "--kubeconfig", str(deployer), "--kube-context", context, "-f", str(state)]
         for ns in namespaces:
             subprocess.run(helm + ["-n", ns, "install", name, str(chart)], check=True)
         ran = []
+        companion_chart = root / "companion"
+        companion_values = root / "companion-values.json"
+        companion_values.write_text("{}")
+
         def reconcile(row, method):
             ns = row["id"].split("/")[0]
-            subprocess.run(cmd + ["-l", "testns=" + ns, method, "--skip-deps", "--concurrency", "1"], check=True)
+            if method == "install":
+                # The first install of a companion, with the arguments the deploy driver will use.
+                subprocess.run(helm + release_phases.install_args(ns, companion_chart, companion_values),
+                               check=True, stdout=subprocess.DEVNULL)
+            else:
+                subprocess.run(cmd + ["-l", "testns=" + ns, method, "--skip-deps", "--concurrency", "1"], check=True)
             ran.append((method, ns))
 
         def healthy(stack):
@@ -216,7 +265,7 @@ def exercise(cfg, context):
 
         force_test_status(namespaces[0], "failed")
         diff = subprocess.run(["helm", "diff", "upgrade", name, str(chart), "-n", namespaces[0],
-                               "--kubeconfig", str(cfg), "--kube-context", context, "--detailed-exitcode"])
+                               "--kubeconfig", str(deployer), "--kube-context", context, "--detailed-exitcode"])
         assert diff.returncode == 0, "The failed release must have an empty diff"
         result = release_phases.run(rows, statuses(), reconcile, healthy)
         assert result["verifiedStacks"] == ["oci", "otel"] and revisions() == [2, 1]
@@ -245,16 +294,29 @@ def exercise(cfg, context):
         else:
             raise AssertionError("Missing application release accepted")
         assert not ran and revisions() == [2, 1]
-        # A companion in the unknown state is missing from the listing but must not be treated as absent.
         companion = {"id": namespaces[1] + "/demo-resources"}
-        assert statuses(rows + [companion])[companion["id"]] == release_phases.ABSENT
-        companion_chart = root / "companion"
         (companion_chart / "templates").mkdir(parents=True)
         (companion_chart / "Chart.yaml").write_text("apiVersion: v2\nname: companion-fixture\nversion: 1.0.0\n")
         (companion_chart / "templates" / "config.yaml").write_text(
             "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: demo-resources-fixture}\ndata: {}\n")
-        subprocess.run(helm + ["-n", namespaces[1], "install", "demo-resources", str(companion_chart)],
-                       check=True, stdout=subprocess.DEVNULL)
+        absent = statuses(rows + [companion])
+        assert absent[companion["id"]] == release_phases.ABSENT
+        # An absent companion is refused unless its first install is requested alone.
+        for selected, install in ((rows + [companion], {companion["id"]}), ([companion], frozenset())):
+            try:
+                release_phases.run(selected, statuses(selected), reconcile, healthy, install=install)
+            except ValueError as exc:
+                assert "operator review" in str(exc) or "only selected release" in str(exc), str(exc)
+            else:
+                raise AssertionError("Absent companion accepted")
+        assert not ran and revisions() == [2, 1]
+        installed = release_phases.run([companion], statuses([companion]), reconcile, healthy,
+                                       install={companion["id"]})
+        assert installed["releases"] == {companion["id"]: "install"} and ran[1:2] == [("install", namespaces[1])]
+        assert json.loads(subprocess.check_output(helm + ["-n", namespaces[1], "status", "demo-resources", "-o", "json"]))[
+            "info"]["status"] == "deployed"
+        ran.clear()
+        # A companion in the unknown state is missing from the listing but must not be treated as absent.
         force_test_status(namespaces[1], "unknown", "demo-resources")
         assert companion["id"] not in release_phases.helm_statuses(listing()), "Helm listed an unknown release"
         assert statuses(rows + [companion])[companion["id"]] == "unknown"
@@ -273,10 +335,11 @@ def exercise(cfg, context):
         else:
             raise AssertionError("Pending OTel state accepted")
         assert not ran and revisions() == [2, 1]
-        direct = direct_transactions(cfg, context, root, force_test_status)
+        direct = direct_transactions(cfg, deployer, context, root, force_test_status)
         print(json.dumps({"failedEmptyDiffRecovered": True, "noOpNewRevisions": 0,
                           "ociHealthFailureBlockedOTel": True, "pendingBlockedAllReleases": True,
                           "missingReleaseBlockedAllReleases": True, "unlistedUnknownCompanionBlocked": True,
+                          "ranAsDeployer": True, "absentCompanionInstalledOnlyWhenRequested": True,
                           **direct}))
 
 
