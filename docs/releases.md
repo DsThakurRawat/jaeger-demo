@@ -261,7 +261,8 @@ reports a cancelled scheduled run:
 
    ```bash
    for workflow in ci-deploy-demo.yml ci-opensearch-recovery.yml ci-opensearch-volume-expand.yml; do
-     gh api "repos/jaegertracing/jaeger-demo/actions/workflows/$workflow/runs?per_page=20" \
+     gh api --paginate \
+       "repos/jaegertracing/jaeger-demo/actions/workflows/$workflow/runs?per_page=100" \
        --jq '.workflow_runs[] | select(.status != "completed") | {id, event, status, created_at, html_url}'
    done
    ```
