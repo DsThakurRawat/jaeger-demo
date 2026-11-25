@@ -51,8 +51,11 @@ and `expected_config_sha`. `prepare` builds the lock-verified
 `.helmfile-locked.yaml`, `images` resolves and validates digest-mode images before
 any step holds the OCI API key, `diff` reports changes read-only, and `reconcile`
 applies all ten releases, OCI before OTel, through `release_phases.py`, verifies
-both stacks even when nothing changed, restarts the trace generators, patches the
-fingerprints above for each verified stack and writes `deploy-record.json`.
+both stacks even when nothing changed, patches the fingerprints above for each
+verified stack and writes `deploy-record.json`. Only an apply in `digest` image mode
+restarts the trace generators, before each stack's checks; a `live` apply and a
+companion install change no pod template. A companion install first requires every
+allowlisted object of its namespace to exist with the reviewed ownership.
 `helmfile/images.yaml` selects `live` image references or `digest` promotion. The
 `operations` CI job runs it on kind as the deployer
 ([Helmfile engine](../../docs/releases.md#helmfile-engine)).

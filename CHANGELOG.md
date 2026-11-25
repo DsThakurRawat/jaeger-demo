@@ -31,11 +31,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   reconciles all ten releases from lock-verified charts, OCI before OTel, retries
   failed releases with sync, refuses pending ones before any write, verifies both
   stacks even when nothing changed, and installs a first companion only on a
-  one-namespace `helmfile_operation=install-companion` dispatch. Images come from
+  one-namespace `helmfile_operation=install-companion` dispatch, and only when every
+  allowlisted object there already carries the reviewed ownership. Images come from
   the live references (`helmfile/images.yaml` `mode: live`) or, in `digest` mode,
-  are resolved and validated before any step holds the OCI API key. Each run
-  uploads `deploy-record.json` for 90 days. A new `operations` CI job rehearses it
-  on kind as the deployer.
+  are resolved for the run's upstream commit and validated before any step holds
+  the OCI API key. Adoption runs (`live` mode and companion installs) restart no
+  trace generator. The OTel Certificates must be present and Ready, which the
+  scripts only log. Each run uploads `deploy-record.json` for 90 days. A new
+  `operations` CI job rehearses it on kind as the deployer. Setting
+  `DEMO_DEPLOY_ENGINE` needs `mode: digest` first, and returning to the scripts
+  needs de-adoption first.
   (refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
 
 - `scripts/demo/live_drift.py`, a read-only drift report that compares every

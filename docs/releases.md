@@ -505,12 +505,24 @@ companion installs and the no-op apply that follows, is
 
 The job sets `DEPLOY_ENGINE` from these. With `scripts` the job runs exactly the
 script path: the Helmfile steps are skipped and **Reconcile demo components** runs
-`deploy.py`. Leave `DEMO_DEPLOY_ENGINE` unset until manual adoption and a verified
-no-op apply ([migration plan](MIGRATION.md) phase 6). Unsetting it, or dispatching
-with `engine=scripts`, is the fallback: a verified Helmfile run patches the five
-component fingerprints in `default/jaeger-demo-deployment-revisions` one key at a
-time, as `deploy.py` does, so the next script run does not select components only
-because Helmfile deployed them.
+`deploy.py`.
+
+Leave `DEMO_DEPLOY_ENGINE` unset until manual adoption and a verified no-op apply
+([migration plan](MIGRATION.md) phase 6). Before setting it to `helmfile`, merge the
+reviewed change that sets [helmfile/images.yaml](../helmfile/images.yaml) to
+`mode: digest`: a scheduled run refuses `live` mode, so with `live` every scheduled
+run would stop at **Resolve and validate images**.
+
+Going back to the scripts is not a switch flip once a companion is installed. The
+scripts `kubectl apply` the supplemental objects that the companion releases then
+own. First pause the schedule and let every queued or running writer finish
+([failure handling](#failure-handling)), then complete
+[De-adopt companion releases](cutover.md#de-adopt-companion-releases) for each
+adopted namespace, and only then unset `DEMO_DEPLOY_ENGINE` or dispatch with
+`engine=scripts`. A verified Helmfile apply patches the five component
+fingerprints in `default/jaeger-demo-deployment-revisions` one key at a time, as
+`deploy.py` does, so the first script run after that does not select components
+only because Helmfile deployed them.
 
 A manual Helmfile run requires `expected_config_sha`, and the first step refuses
 the run without it. A reviewer approves it in `demo-apply` as usual:
@@ -533,7 +545,16 @@ gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
 
 It runs `release_phases.install_args`: a plain `helm install` of `demo-resources`,
 not atomic and without `--take-ownership`, and only while Helm reports that release
-absent. A scheduled run never installs.
+absent. Before it, with reads only, it refuses the run while any release in the four
+namespaces is `pending-*`, and unless every object that
+[charts/demo-resources/allowlist.yaml](../charts/demo-resources/allowlist.yaml) lists
+for that namespace exists and carries exactly the reviewed ownership: the
+`app.kubernetes.io/managed-by: Helm` label, the `meta.helm.sh/release-name:
+demo-resources` and `meta.helm.sh/release-namespace` annotations and the keep
+policy ([companion adoption](helmfile-companions.md)). Helm would otherwise create
+a missing object, with a new UID and, for a Service, a new ClusterIP. A companion
+install reads no image and restarts nothing, so no pod template changes. A
+scheduled run never installs.
 
 ### Images
 
@@ -547,11 +568,13 @@ absent. A scheduled run never installs.
   source commit, and records compatibility as `live: not revalidated`. A scheduled
   run refuses this mode, and so does a manual run with an image tag input.
 - **`digest`**, set by a later reviewed pull request after adoption. **Resolve and
-  validate images** runs `promotion_images.py resolve` with the image tag inputs,
-  renders both Jaeger releases with `helmfile template` and no cluster, and runs the
-  Jaeger configuration gate. An incompatible image fails that step, before any
-  step holds the OCI API key. Reconcile applies only a selection whose
-  compatibility receipt matches it and the configuration commit.
+  validate images** selects the images for the upstream `main` commit that **Resolve
+  upstream Jaeger main** already exported as `MAIN_SHA`, with the image tag inputs,
+  so the summary and the selection name one commit. It renders both Jaeger releases
+  with `helmfile template` and no cluster, and runs the Jaeger configuration gate.
+  An incompatible image fails that step, before any step holds the OCI API key.
+  Reconcile applies only a selection whose compatibility receipt matches it and the
+  configuration commit.
 
 ### What a Helmfile run does
 
@@ -559,9 +582,10 @@ Before the first step that holds the OCI API key:
 
 1. **Prepare the pinned Helmfile toolchain** verifies Helm 4.3.2, Helmfile 1.8.4,
    helm-diff 3.15.15 and kubeconform against `scripts/demo/helmfile-tools.lock.json`.
-2. **Prepare the pinned charts** builds the Jaeger chart at its pinned commit,
-   checks its dependency archives, and writes `.helmfile-locked.yaml` from archives
-   that match `scripts/demo/chart-archives.lock.json`.
+2. **Prepare the pinned charts** builds the Jaeger chart, fails unless its checkout
+   is at `JAEGER_CHART_COMMIT` of `scripts/demo/jaeger-chart.sh`, checks its
+   dependency archives, and writes `.helmfile-locked.yaml` from archives that match
+   `scripts/demo/chart-archives.lock.json`. Its Helm calls get no kubeconfig.
 3. **Resolve and validate images**, as above.
 
 **Reconcile demo components** then runs `helmfile_deploy.py reconcile`, which uses
@@ -569,11 +593,16 @@ the pinned tools for every Helm and Helmfile call:
 
 1. Refuses a run that is not a schedule or a dispatch on `main`, whose checkout is
    not the workflow revision, or whose operation, namespace or image inputs do not
-   fit the rules above. It checks again that `.helmfile-locked.yaml` is current and
-   that each archive it names still matches the lock.
-2. Reads, without writing: the image values, `default/jaeger-demo-deployment-revisions`
-   (an apply requires it), one `helm list` per release namespace, `helm history
-   --max 1` for each selected release, and the OpenSearch data claim and volume.
+   fit the rules above. It also refuses `HELM_DRIVER` other than Secrets and any
+   `HELM_KUBECONTEXT`, `HELM_NAMESPACE`, `HELMFILE_KUBE_CONTEXT`,
+   `HELMFILE_NAMESPACE`, `HELMFILE_ENVIRONMENT` or `HELMFILE_HELM_BINARY`, as `diff`
+   does. It checks again that `.helmfile-locked.yaml` is current, that each archive
+   it names still matches the lock and that the Jaeger chart is at its pinned commit.
+2. Reads, without writing: on an apply the image values and
+   `default/jaeger-demo-deployment-revisions`, which it requires; one `helm list`
+   per release namespace; `helm history --max 1` for each selected release, which
+   must agree with the listing in status and revision; for a companion install the
+   checks above; and the OpenSearch data claim and volume.
 3. Runs `release_phases.run`: a release in any state but `deployed` or `failed`,
    or absent without a requested first install, stops the run here, before any
    write. Then the OCI releases (`default/prometheus`, `default/jaeger`,
@@ -589,20 +618,30 @@ the pinned tools for every Helm and Helmfile call:
 
    A companion uses `-f helmfile-resources.yaml.gotmpl` with the values of
    `companion_values.py`. A `deployed` release is applied, so an empty diff changes
-   nothing; a `failed` one is synced, even with an empty diff. There is no global
+   nothing; a `failed` one is synced, even with an empty diff. Each release must be
+   `deployed` afterwards, or the run fails there. There is no global
    `--rollback-on-failure`: Helmfile passes it to Helm only for the two Jaeger
    releases, which set `atomic: true`.
-4. Verifies each stack even when nothing changed. OCI: rollouts of `jaeger`,
-   `jaeger-hotrod`, `trace-generator` and `prometheus-grafana`, then
-   `stack_health.py --stack oci`. OTel: rollouts of OpenSearch, Dashboards, Jaeger,
-   HotROD, the generator, the collector agent, the frontend and the load generator;
-   the OpenSearch data claim and volume unchanged; `verify_trace.py` with the chart
-   versions of `helmfile.yaml`; every Certificate in `jaeger`, `opensearch` and
-   `otel-demo` Ready; then `stack_health.py --stack otel`. The health checks are
-   retried up to ten times, 30 seconds apart. OTel never starts when OCI fails.
-5. After each verified stack, restarts its trace generator, as the scripts do
-   until [#2](https://github.com/jaegertracing/jaeger-demo/issues/2), and, on an
-   apply, patches that stack's component fingerprints.
+4. On an apply in `digest` mode only, restarts the stack's trace generator and waits
+   for it before the stack's checks, as the scripts do until
+   [#2](https://github.com/jaegertracing/jaeger-demo/issues/2). A `live` mode apply
+   and a companion install are adoption steps and restart nothing.
+5. Verifies each stack even when nothing changed, and records it as verified as soon
+   as its checks pass. OCI: rollouts of `jaeger`, `jaeger-hotrod`, `trace-generator`
+   and `prometheus-grafana`, then `stack_health.py --stack oci`. OTel: rollouts of
+   OpenSearch, Dashboards, Jaeger, HotROD, the generator, the collector agent, the
+   frontend and the load generator; the OpenSearch data claim and volume unchanged;
+   `verify_trace.py` with the chart versions of `helmfile.yaml`; the Certificates
+   `jaeger/jaeger-demo-tls`, `opensearch/opensearch-demo-tls` and
+   `otel-demo/otel-demo-tls` present and Ready; then `stack_health.py --stack otel`.
+   The Certificate names come from the TLS Secrets of the issuer-annotated Ingresses
+   in the companion sources. This is stricter than the scripts, which only log
+   Certificate readiness: a missing or unready one fails the run. The `default`
+   Certificate is not checked, because the deployer role lists Certificates only in
+   the OTel namespaces. The health checks are retried up to ten times, 30 seconds
+   apart. OTel never starts when OCI fails.
+6. On an apply, after a stack's checks pass, patches that stack's component
+   fingerprints.
 
 To see what a run would change, run the same preparation and then the read-only
 `diff` with a kubeconfig for the cluster. It reports a release that is not
@@ -616,13 +655,22 @@ python3 scripts/demo/helmfile_deploy.py diff
 
 The **Helmfile deploy driver rehearsal** CI job runs the driver on a kind cluster
 as a user bound to `ops/rbac/deployer.yaml`, with synthetic application charts,
-the real `demo-resources` chart and stub image and health checks.
+the real `demo-resources` chart and stub image selection, registry lookup, health
+and trace checks. Its live-mode pass reads fixture Jaeger and HotROD Deployments and
+runs the production rollout, storage and Certificate checks.
 
 ### When a Helmfile run fails
 
 - **Refused** (the record's `outcome`): nothing was written. Fix the input or the
   state the error names. A release in a `pending-*` or `unknown` state, or a
-  missing application release, needs an operator before any run continues.
+  missing application release, needs an operator before any run continues. A listing
+  and history that disagree mean another writer was active: let it finish and run
+  again.
+- **The live image read or the OpenSearch binding read refuses**, for example while
+  a Deployment is still rolling out or a Pod is not on its registry digest: this is
+  operator repair under the adoption runbook
+  ([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)). Do not fall back
+  to the scripts to get past it.
 - **Failed** after a write: the releases before the failure were reconciled and
   later ones were not touched. A failed OCI check leaves every OTel release as it
   was. A Jaeger release that fails rolls back by itself (`atomic`); any other
@@ -631,9 +679,10 @@ the real `demo-resources` chart and stub image and health checks.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
   [De-adopt companion releases](cutover.md#de-adopt-companion-releases) step 1,
   then install again.
-- To return to the scripts, unset `DEMO_DEPLOY_ENGINE` or dispatch with
-  `engine=scripts`. The general rules above (Slack notification, rollback by
-  recorded revision, no OpenSearch downgrade) apply unchanged.
+- To return to the scripts, follow [the engine switch](#the-engine-switch): pause,
+  drain the writers and de-adopt first. The general rules above (Slack
+  notification, rollback by recorded revision, no OpenSearch downgrade) apply
+  unchanged.
 
 ### Deployment record
 
@@ -645,9 +694,12 @@ reference, source commit and digest, the compatibility receipt or `live: not
 revalidated`, the tool versions and archive SHA-256 of the toolchain lock, the
 chart archive SHA-256s and Jaeger chart commit, each selected release's status and
 revision before, method, revision after and whether it changed, the stack check
-results, the patched fingerprints and the outcome. It holds no Helm value, Secret,
-diff or storage identifier: anyone who can read the repository's Actions can read
-both. Copy what a rollback needs into the private release record before the
+results, the generator restarts, the patched fingerprints and the outcome. A
+failure is recorded as the operation, release or stack, the exception type and a
+fixed message, never the command line, command output or an endpoint. It holds no
+Helm value, Secret, diff or storage identifier: anyone who can read the
+repository's Actions can read both. On an error the command prints only its type;
+the commands' own output above it in the log has the detail. Copy what a rollback needs into the private release record before the
 artifact expires.
 
 ## Helmfile acceptance

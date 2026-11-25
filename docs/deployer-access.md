@@ -357,9 +357,11 @@ calls, such as its `helm status` checks and the revision ConfigMap, is covered
 only by the access reviews of `check`. The `operations` job runs the Helmfile
 engine, `helmfile_deploy.py`, on its own kind cluster as a user bound to this role:
 `helm list` per namespace, `helm history`, the per-release Helmfile apply and sync,
-the first companion install, the generator restarts and the fingerprint patches,
-on synthetic application charts and the real `demo-resources` chart. Its live
-image reads and stack checks are stubbed there. The job also does not prove the
+the companion object reads and first install, the generator restarts, the
+fingerprint patches, the live image reads through `kubectl proxy`, and the
+rollout, OpenSearch claim and Certificate checks, on synthetic application charts,
+fixture workloads and the real `demo-resources` chart. Only the registry lookup,
+the public health checks and the trace write are stubbed there. The job also does not prove the
 production cluster: it shows nothing about the bindings an administrator
 applied, OCI IAM policies, or group grants outside Kubernetes. The production
 check above still applies.
