@@ -121,7 +121,10 @@ deployment.
   It renders the six releases without cluster access and lists every object that has
   no record. `--write` adds the records; review them, then update
   `ops/rbac/deployer.yaml` until `deployer_access_test.py` passes
-  ([deployer access](docs/deployer-access.md#changing-the-role)). The
+  ([deployer access](docs/deployer-access.md#changing-the-role)). Both modes
+  also render the CRDs with `--include-crds` and fail when their names differ from
+  the named CRD `get` grant that the drift report uses; change that grant and
+  `MONITORING_CRDS` in `scripts/demo/deployer_access.py` together. The
   `Helmfile render and adoption rehearsal` CI job runs the check.
 - **OCI CLI.** `scripts/demo/oci-cli-constraints.txt` records what the deployment
   runner installed, including packages already present, not only new ones (see its
@@ -196,8 +199,8 @@ schemas in those streams. It checks exact API group, version and kind, applies
 strict field and type checks, and fails on missing schemas. Native optional fields
 accept Kubernetes' null-as-omitted representation. Server-side defaulting, CEL and
 webhook behavior are tested against Kubernetes during adoption rehearsals.
-The credential-free rehearsal rendered 222 application objects plus 12 supplemental
-objects and validated all 234, including ten CRDs, with zero skips.
+The credential-free rehearsal renders 220 application objects plus 12 supplemental
+objects at the current pins and validates all 232, including ten CRDs, with zero skips.
 
 Renovate discovers all four tool releases and opens reviewable updates. For a version
 change, refresh that tool's checksums from its official release and review the lock diff:
