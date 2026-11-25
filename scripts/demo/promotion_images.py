@@ -140,9 +140,15 @@ def config_commit():
     return value
 
 
-def resolve(event, overrides):
-    head = run(["git", "ls-remote", CORE, "refs/heads/main"]).strip().split()
-    require(len(head) == 2 and COMMIT.fullmatch(head[0]) and head[1] == "refs/heads/main", "Unexpected core main")
+def resolve(event, overrides, core_main=None):
+    """Select both images for one upstream main commit. core_main, when given, is that commit
+    as an earlier step already resolved it, so the run and its selection name the same one."""
+    if core_main is None:
+        head = run(["git", "ls-remote", CORE, "refs/heads/main"]).strip().split()
+        require(len(head) == 2 and COMMIT.fullmatch(head[0]) and head[1] == "refs/heads/main", "Unexpected core main")
+    else:
+        require(COMMIT.fullmatch(core_main), "Unexpected core main")
+        head = [core_main]
     env = {"PATH": os.environ["PATH"], "MAIN_SHA": head[0], "GITHUB_EVENT_NAME": event}
     for name, tag in overrides.items():
         if tag is not None:

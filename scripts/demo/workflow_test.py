@@ -812,7 +812,9 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn('env', step)
                 self.assertNotIn('uses', step)
                 self.assertEqual([], list(secret_references(step)))
-                # A step whose script names kubectl or helm must hold the OCI secrets; these must not.
+                # The secret-holder rule matches a step's own script text only, so these scripts must not
+                # name kubectl or helm. It cannot see the Helm the Python runs: helmfile_deploy_test.py
+                # checks that prepare and images run Helm with KUBECONFIG=/dev/null.
                 self.assertIsNone(re.search(r'\b(kubectl|helm)\b', step['run']))
                 self.assertIsInstance(step['timeout-minutes'], int)
         self.assertEqual(HELMFILE_PREPARATION, names[configure - 3:configure])

@@ -163,6 +163,26 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(selected["sources"], sources)
         self.assertNotEqual(selected["configCommit"], selected["coreMain"])
 
+    def test_a_given_core_main_is_used_without_asking_the_remote(self):
+        sources = {k: source(k) for k in p.REPOS}
+        seen = []
+
+        def run(cmd, **kwargs):
+            seen.append(cmd[0])
+            self.assertNotEqual("git", cmd[0])
+            self.assertEqual("a" * 40, kwargs["env"]["MAIN_SHA"])
+            Path(kwargs["env"]["GITHUB_ENV"]).write_text("".join("JAEGER_DEMO_" + n.upper() + "_IMAGE_TAG=" + d["tag"] + "\n"
+                                                                 for n, d in sources.items()))
+            return ""
+
+        with patch.object(p, "run", side_effect=run), patch.object(p, "config_commit", return_value="c" * 40), \
+                patch.object(p, "registry_image", side_effect=sources.values()):
+            selected = p.resolve("schedule", {"jaeger": None, "hotrod": None}, core_main="a" * 40)
+        self.assertEqual("a" * 40, selected["coreMain"])
+        self.assertEqual(["bash"], seen)
+        with self.assertRaisesRegex(ValueError, "Unexpected core main"):
+            p.resolve("schedule", {"jaeger": None, "hotrod": None}, core_main="main")
+
     def resolve_with(self, overrides, resolved):
         """Run resolve() against a shared resolver that exports the given tags."""
         def run(cmd, **kwargs):

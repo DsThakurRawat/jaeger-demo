@@ -28,6 +28,7 @@ import time
 import yaml
 
 import chart_archives
+import companion_ownership
 import companion_values
 import deploy
 import helmfile_selection
@@ -61,8 +62,13 @@ MODES = ("live", "digest")
 OPERATIONS = ("apply", "install-companion")
 EVENTS = ("schedule", "workflow_dispatch")
 NOT_REVALIDATED = "live: not revalidated"
+NOT_USED = "not used: install-companion"
 COMMIT = re.compile(r"[0-9a-f]{40}")
 IMAGE_INPUTS = ("JAEGER_DEMO_IMAGE_TAG", "JAEGER_DEMO_JAEGER_IMAGE_TAG", "JAEGER_DEMO_HOTROD_IMAGE_TAG")
+# Environment that would point Helm or Helmfile at another storage driver, context, namespace,
+# environment or binary than the ones the driver passes explicitly.
+HELM_OVERRIDES = ("HELM_KUBECONTEXT", "HELM_NAMESPACE", "HELMFILE_KUBE_CONTEXT", "HELMFILE_NAMESPACE",
+                  "HELMFILE_ENVIRONMENT", "HELMFILE_HELM_BINARY")
 # Every release runs alone, upgrades in place and never installs or creates a namespace. Values
 # come only from the state, so --reset-values drops anything an earlier writer set by hand. There
 # is no global --rollback-on-failure: each release's own atomic setting applies.
@@ -77,13 +83,28 @@ OTEL_ROLLOUTS = (("opensearch", "statefulset", "opensearch-cluster-single"),
                  ("jaeger", "deployment", "jaeger-hotrod"), ("jaeger", "deployment", "trace-generator"),
                  ("otel-demo", "daemonset", "otel-collector-agent"), ("otel-demo", "deployment", "frontend"),
                  ("otel-demo", "deployment", "load-generator"))
+# The deployer role lists Certificates in these namespaces only.
 CERTIFICATE_NAMESPACES = ("jaeger", "opensearch", "otel-demo")
+ISSUER_ANNOTATIONS = ("cert-manager.io/cluster-issuer", "cert-manager.io/issuer")
+KINDS = {"ConfigMap": "configmap", "Service": "service", "Deployment": "deployment.apps",
+         "Ingress": "ingress.networking.k8s.io"}
 HEALTH_ATTEMPTS, HEALTH_DELAY = 10, 30
 REEXEC = "JAEGER_DEMO_HELMFILE_DEPLOY_PINNED"
+# What the record and summary say when a step fails. Never the exception text, which can carry
+# command lines, endpoints, object names or command output.
+FAILURES = {"guards": "Reading the configuration failed", "charts": "Verifying the locked charts failed",
+            "images": "Reading the image values failed", "read": "Reading the release state failed",
+            "reconcile": "The Helm or Helmfile command for this release failed",
+            "restart": "Restarting the trace generator failed", "verify": "The stack checks failed",
+            "fingerprints": "Recording the component fingerprints failed"}
 
 
 class Refused(ValueError):
-    """The run stops before any cluster access or change."""
+    """The run stops before any change. Its message is fixed text that names only reviewed identifiers."""
+
+
+class Failed(RuntimeError):
+    """A check failed after a change. Its message is fixed text that names only reviewed identifiers."""
 
 
 def require(condition, message):
@@ -123,6 +144,22 @@ def kube_version():
     return json.loads(TOOLS_LOCK.read_text())["kubernetesSchema"]["version"].removeprefix("v")
 
 
+def jaeger_chart_commit():
+    return re.search(r'^JAEGER_CHART_COMMIT="([0-9a-f]{40})"$', JAEGER_CHART.read_text(), re.MULTILINE)[1]
+
+
+def chart_checkout_head(path):
+    result = subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def check_helm_context(env):
+    """Like handover.check_helm_context: Helm and Helmfile use only what the driver passes them."""
+    require(env.get("HELM_DRIVER", "") in ("", "secret", "secrets"), "Helm must keep releases in Secrets; unset HELM_DRIVER")
+    for name in HELM_OVERRIDES:
+        require(not env.get(name), f"Unset {name}: the driver names every release's namespace and uses the current context")
+
+
 def refuse_live_inputs(env):
     require(env.get("GITHUB_EVENT_NAME") != "schedule",
             "A scheduled Helmfile run resolves its images: live mode is for manual adoption runs only")
@@ -146,7 +183,20 @@ def chart_versions(root):
             for r in yaml.safe_load((Path(root) / SOURCE).read_text())["releases"]}
 
 
-def verify_locked_charts(root):
+def expected_certificates(root):
+    """The Certificates cert-manager keeps for the OTel routes: one per TLS Secret of an issuer-annotated Ingress."""
+    expected = set()
+    for ns, values in companion_values.source_values(root)["companions"].items():
+        if ns not in CERTIFICATE_NAMESPACES:
+            continue
+        for obj in values["objects"]:
+            annotations = obj["metadata"].get("annotations") or {}
+            if obj["kind"] == "Ingress" and set(ISSUER_ANNOTATIONS) & set(annotations):
+                expected.update((ns, tls["secretName"]) for tls in obj["spec"].get("tls", []))
+    return sorted(expected)
+
+
+def verify_locked_charts(root, head=chart_checkout_head):
     """Check, just before use, that the derived state is current and installs only locked archives."""
     root = Path(root)
     state = root / APPLICATIONS
@@ -168,8 +218,9 @@ def verify_locked_charts(root):
         else:
             require(chart == "./" + JAEGER_CHARTS + "/charts/jaeger", f"Unexpected local chart {chart}")
     require(set(verified) == set(lock["charts"]), "The derived state does not use every locked chart archive")
+    commit = jaeger_chart_commit()
+    require(head(root / JAEGER_CHARTS) == commit, f"The Jaeger chart checkout is not at the pinned commit {commit}")
     chart_archives.dependencies(root / JAEGER_CHARTS / "charts/jaeger/charts", root=root)
-    commit = re.search(r'^JAEGER_CHART_COMMIT="([0-9a-f]{40})"$', JAEGER_CHART.read_text(), re.MULTILINE)[1]
     return {"charts": verified, "jaegerChartCommit": commit, "jaegerDependencies": lock["jaegerDependencies"]}
 
 
@@ -193,19 +244,26 @@ def git_head(root, run):
 
 # ---------------------------------------------------------------- prepare
 
-def prepare(root=ROOT, run=run_command):
+def prepare(root=ROOT, run=run_command, locked_state=chart_archives.locked_state, head=chart_checkout_head):
     """Verify every chart the engine installs. Reaches public chart sources only, never a cluster."""
     root = Path(root)
-    env = offline_env()
     charts = root / JAEGER_CHARTS
     charts.parent.mkdir(parents=True, exist_ok=True)
-    run(["bash", "-c", 'source "$1" && prepare_jaeger_chart "$2"', "prepare", JAEGER_CHART, charts], env=env)
+    run(["bash", "-c", 'set -euo pipefail; source "$1"; prepare_jaeger_chart "$2"', "prepare", JAEGER_CHART, charts],
+        env=offline_env())
+    commit = jaeger_chart_commit()
+    require(head(charts) == commit, f"The Jaeger chart checkout is not at the pinned commit {commit}")
     chart_archives.dependencies(charts / "charts/jaeger/charts", root=root)
     archives = root / CHART_ARCHIVES
     archives.mkdir(parents=True, exist_ok=True)
-    state = chart_archives.locked_state(root, archives)
-    verified = verify_locked_charts(root)
-    print(f"{state.relative_to(root)} installs only lock-verified archives: {', '.join(sorted(verified['charts']))}")
+
+    def pull(args, **kwargs):
+        # helm pull needs no cluster; give it none.
+        return subprocess.run(args, env=offline_env(), **kwargs)
+
+    state = locked_state(root, archives, run=pull)
+    verified = verify_locked_charts(root, head=head)
+    print(f"{Path(state).name} installs only lock-verified archives: {', '.join(sorted(verified['charts']))}")
     return verified
 
 
@@ -223,9 +281,14 @@ def images(env, root=ROOT, run=run_command, resolve=None, validate=None):
         print(f"Image mode live: reconcile reads the live references; compatibility is recorded as '{NOT_REVALIDATED}'")
         return None
     event = env.get("GITHUB_EVENT_NAME", "")
+    core = env.get("MAIN_SHA") or None
+    # The workflow resolved upstream main once, before this step. Select images for that commit.
+    require(core is None or COMMIT.fullmatch(core), "MAIN_SHA is not a full commit")
+    require(core or env.get("GITHUB_ACTIONS") != "true", "MAIN_SHA is required: run Resolve upstream Jaeger main first")
     overrides = {"jaeger": env.get("JAEGER_DEMO_JAEGER_IMAGE_TAG") or None,
                  "hotrod": env.get("JAEGER_DEMO_HOTROD_IMAGE_TAG") or None}
-    selection = (resolve or promotion_images.resolve)(event, overrides)
+    selection = (resolve or promotion_images.resolve)(event, overrides, core_main=core)
+    require(core is None or selection.get("coreMain") == core, "The image selection names another upstream main commit")
     data = (json.dumps(selection, indent=2, sort_keys=True) + "\n").encode()
     (work / SELECTION).write_bytes(data)
     renders = {}
@@ -278,13 +341,13 @@ def live_image_values(observed, policies):
     return {"images": values}, record
 
 
-def read_live_images(run):
+def read_live_images(run, resolve_image=promotion_images.registry_image):
     """Read the live Jaeger and HotROD references of both stacks with GET requests only."""
     kubeconfig = os.environ.get("KUBECONFIG") or str(Path.home() / ".kube/config")
     require(os.pathsep not in kubeconfig, "Use a single kubeconfig file")
     context = run(["kubectl", "config", "current-context"], capture=True).stdout.strip()
     with live_observation.reader(kubeconfig, context) as get:
-        observed = live_observation.snapshot(get, [], list(promotion_images.STACKS))["images"]
+        observed = live_observation.snapshot(get, [], list(promotion_images.STACKS), resolve_image=resolve_image)["images"]
         policies = {}
         for stack, ns in promotion_images.STACKS.items():
             policies[stack] = {}
@@ -296,7 +359,7 @@ def read_live_images(run):
 
 
 def resolve_values(mode, root, head, run, live_images, env):
-    """Return the application state values file, the image record and the compatibility entry."""
+    """Return the application state values file, the image record, the compatibility entry and core main."""
     work = workdir(root)
     if mode == "digest":
         return digest_images(root, head)
@@ -327,15 +390,52 @@ def history(run, key):
     if result.returncode:
         if "release: not found" in (result.stderr or ""):
             return None
-        raise RuntimeError(f"helm history {key} failed: {(result.stderr or '').strip()[-500:]}")
+        # The log keeps Helm's own message; the record and the exception do not.
+        print((result.stderr or "").strip()[-500:], file=sys.stderr, flush=True)
+        raise Failed(f"helm history of {key} failed")
     entry, = json.loads(result.stdout)
-    return {"revision": entry["revision"], "status": entry["status"], "chart": entry.get("chart"),
+    return {"revision": int(entry["revision"]), "status": entry["status"], "chart": entry.get("chart"),
             "appVersion": entry.get("app_version")}
 
 
 def listings(run):
     return {ns: json.loads(run(["helm", *release_phases.list_args(ns)], capture=True).stdout or "[]")
             for ns in release_phases.NAMESPACES}
+
+
+def listed_releases(found):
+    return {ns + "/" + entry["name"]: entry for ns, entries in found.items() for entry in entries}
+
+
+def check_listing_agrees(rows, found, before):
+    """The named history is read after the listing. A disagreement means a write in between: stop."""
+    listed = listed_releases(found)
+    for row in rows:
+        key = row["id"]
+        if key in listed:
+            named = before[key]
+            require(named is not None and named["status"] == listed[key]["status"]
+                    and named["revision"] == int(listed[key]["revision"]),
+                    f"{key} changed between its listing and its history; another writer may be active")
+
+
+def companion_preflight(run, namespace):
+    """A first install may only take over existing allowlisted objects that carry the reviewed ownership.
+
+    Helm would create a missing object, with a new UID and, for a Service, a new ClusterIP.
+    """
+    allowlist = yaml.safe_load(companion_ownership.ALLOWLIST.read_text())
+    for kind, names in allowlist[namespace].items():
+        for name in names:
+            live = run(["kubectl", "-n", namespace, "get", KINDS[kind], name, "--ignore-not-found", "-o", "json"],
+                       capture=True).stdout
+            require(live.strip(), f"{namespace}/{kind}/{name} is missing: a first companion install only adopts existing objects")
+            try:
+                patch = companion_ownership.ownership_patch(namespace, kind, name, json.loads(live))
+            except ValueError:
+                raise Refused(f"{namespace}/{kind}/{name} has foreign or conflicting ownership") from None
+            require(patch == [], f"{namespace}/{kind}/{name} lacks the reviewed demo-resources ownership; "
+                    "apply the ownership patches first (docs/cutover.md)")
 
 
 # ---------------------------------------------------------------- verification
@@ -347,8 +447,7 @@ def retry(check, attempts=HEALTH_ATTEMPTS, delay=HEALTH_DELAY, sleep=time.sleep)
         except (ValueError, OSError) as error:
             if attempt == attempts:
                 raise
-            print(f"Health check attempt {attempt}/{attempts} failed ({type(error).__name__}: {error}); retrying",
-                  flush=True)
+            print(f"Health check attempt {attempt}/{attempts} failed ({type(error).__name__}); retrying", flush=True)
             sleep(delay)
 
 
@@ -371,18 +470,23 @@ class ProductionChecks:
         return [f"{ns}/{kind}/{name}" for ns, kind, name in items]
 
     def certificates(self):
-        found = 0
+        """Every expected Certificate exists and is Ready. The scripts only log this; here it gates."""
+        listed = {}
         for ns in CERTIFICATE_NAMESPACES:
             items = json.loads(self.run(["kubectl", "-n", ns, "get", "certificates.cert-manager.io", "-o", "json"],
                                         capture=True).stdout)["items"]
-            for item in items:
-                ready = [c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Ready"]
-                if not ready or ready[0].get("status") != "True":
-                    raise RuntimeError(f"Certificate {ns}/{item['metadata']['name']} is not Ready")
-                found += 1
-        if not found:
-            raise RuntimeError("No Certificate found in the OTel namespaces")
-        return found
+            listed.update({(ns, item["metadata"]["name"]): item for item in items})
+        expected = expected_certificates(self.root)
+        if not expected:
+            raise Failed("No Certificate is expected for the OTel routes")
+        for ns, name in expected:
+            item = listed.get((ns, name))
+            if item is None:
+                raise Failed(f"Certificate {ns}/{name} is missing")
+            ready = [c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Ready"]
+            if not ready or ready[0].get("status") != "True":
+                raise Failed(f"Certificate {ns}/{name} is not Ready")
+        return [f"{ns}/{name}" for ns, name in expected]
 
     def verify(self, stack):
         if stack == "oci":
@@ -390,7 +494,7 @@ class ProductionChecks:
             return {"rollouts": rolled, "health": retry(lambda: self.health("oci"), sleep=self.sleep)}
         rolled = self.rollouts(OTEL_ROLLOUTS)
         if self.before is None or self.binding() != self.before:
-            raise RuntimeError("The OpenSearch data claim or its bound volume changed during the run")
+            raise Failed("The OpenSearch data claim or its bound volume changed during the run")
         versions = chart_versions(self.root)
         self.trace(versions["opensearch/opensearch"], versions["opensearch/opensearch-dashboards"])
         certificates = self.certificates()
@@ -405,6 +509,7 @@ def guards(env, root, run):
     require(event in EVENTS, "The Helmfile engine runs only on a schedule or a manual dispatch")
     require(env.get("GITHUB_REF") == "refs/heads/main", "The Helmfile engine deploys main only")
     require(env.get("DEPLOY_ENGINE", "helmfile") == "helmfile", "DEPLOY_ENGINE does not select the Helmfile engine")
+    check_helm_context(env)
     head = git_head(root, run)
     require(env.get("GITHUB_SHA") == head, "The checkout differs from the workflow revision")
     if event == "workflow_dispatch":
@@ -425,6 +530,17 @@ def guards(env, root, run):
     return event, operation, namespace, mode, head
 
 
+def error_entry(stage, error):
+    """What the record says about a failure: where, which type, and a fixed message."""
+    if isinstance(error, (Refused, Failed)) or stage["operation"] == "gate":
+        # Our own refusals and release_phases' state refusals name reviewed identifiers only.
+        message = str(error)
+    else:
+        message = FAILURES.get(stage["operation"], "The run failed")
+    return {"operation": stage["operation"], "release": stage.get("release"), "stack": stage.get("stack"),
+            "type": type(error).__name__, "message": message}
+
+
 def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
               verify_charts=verify_locked_charts, sleep=time.sleep):
     """Reconcile the selected releases and record the run. Returns the record; raises on failure."""
@@ -432,12 +548,16 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
     record_path = root / RECORD
     record_path.unlink(missing_ok=True)
     record = {"engine": "helmfile", "event": env.get("GITHUB_EVENT_NAME"), "run": env.get("GITHUB_RUN_ID"),
-              "outcome": "refused", "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": []}
+              "outcome": "refused", "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": [],
+              "generatorRestarts": []}
+    stage = {"operation": "guards", "release": None, "stack": None}
     wrote = []
     try:
         event, operation, namespace, mode, head = guards(env, root, run)
         record.update(operation=operation, companionNamespace=None if namespace == "none" else namespace,
-                      imageMode=mode, configCommit=head, tools=tool_versions(), charts=verify_charts(root))
+                      imageMode=mode, configCommit=head, tools=tool_versions())
+        stage["operation"] = "charts"
+        record["charts"] = verify_charts(root)
         rows = release_rows(root)
         install = frozenset()
         if operation == "install-companion":
@@ -450,14 +570,27 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
             (work / f"companion-{ns}.json").write_text(json.dumps(values, indent=2, sort_keys=True) + "\n")
 
         # Reads only from here until release_phases.run.
-        values, image_record, compatibility, core = resolve_values(mode, root, head, run, live_images, env)
-        record.update(coreMain=core, images=image_record, compatibility=compatibility)
+        stage["operation"] = "images"
+        values = None
+        if operation == "apply":
+            values, image_record, compatibility, core = resolve_values(mode, root, head, run, live_images, env)
+            record.update(coreMain=core, images=image_record, compatibility=compatibility)
+        else:
+            # A companion install renders no application release, so it needs no image values.
+            record.update(coreMain=env.get("MAIN_SHA") if COMMIT.fullmatch(env.get("MAIN_SHA", "")) else None,
+                          images=None, compatibility=NOT_USED)
+        stage["operation"] = "read"
         if operation == "apply":
             state = run(["kubectl", "-n", "default", "get", "configmap", deploy.STATE, "--ignore-not-found",
                          "-o", "json"], capture=True).stdout
             require(state.strip(), f"The Helmfile engine requires the existing {deploy.STATE} ConfigMap")
         found = listings(run)
+        if operation == "install-companion":
+            pending = sorted(key for key, entry in listed_releases(found).items() if entry["status"].startswith("pending"))
+            require(not pending, "A companion is installed only while no release is pending: " + ", ".join(pending))
+            companion_preflight(run, namespace)
         before = {row["id"]: history(run, row["id"]) for row in rows}
+        check_listing_agrees(rows, found, before)
         statuses = release_phases.selected_statuses(
             rows, found, lambda key: before[key]["status"] if before[key] else None)
         entries = {}
@@ -469,12 +602,17 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
             record["releases"].append(entries[row["id"]])
         checks = checks or ProductionChecks(root, run, sleep=sleep)
         checks.prepare({release_phases.stack_of(row["id"]) for row in rows} | {"oci"})
+        # Adoption must not change a pod template: the generator restart is for applies in digest
+        # mode only, the routine deployments after adoption (parity with the scripts until #2).
+        restart = operation == "apply" and mode == "digest"
 
         def reconcile_one(row, method):
             entry = entries[row["id"]]
             entry["method"] = method
+            stage.update(operation="reconcile", release=row["id"], stack=None)
             wrote.append(row["id"])
             print(f"::group::{method} {row['id']}", flush=True)
+            after = {}
             try:
                 if method == "install":
                     ns = row["id"].split("/")[0]
@@ -483,21 +621,33 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
                 else:
                     run(helmfile_command(root, row, method, values, work / COMPANION_VALUES), cwd=root)
             finally:
-                after = history(run, row["id"]) or {}
+                # A failed read here must neither hide the original error nor leave the group open.
+                try:
+                    after = history(run, row["id"]) or {}
+                except Exception as error:  # noqa: BLE001
+                    print(f"::warning::Could not read the history of {row['id']} ({type(error).__name__})", flush=True)
                 entry.update(revisionAfter=after.get("revision"), statusAfter=after.get("status"),
                              changed=after.get("revision") != entry["revisionBefore"])
                 print("::endgroup::", flush=True)
+            if after.get("status") != "deployed":
+                raise Failed(f"{row['id']} is {after.get('status') or 'unreadable'} after {method}, not deployed")
 
         def verify_stack(stack):
             print(f"::group::Verify {stack}", flush=True)
             try:
+                if restart:
+                    # Before the checks, so they exercise the restarted generator.
+                    stage.update(operation="restart", release=None, stack=stack)
+                    ns = GENERATOR[stack]
+                    run(["kubectl", "-n", ns, "rollout", "restart", "deployment/trace-generator"])
+                    run(["kubectl", "-n", ns, "rollout", "status", "deployment/trace-generator", "--timeout=5m"])
+                    record["generatorRestarts"].append(stack)
+                stage.update(operation="verify", release=None, stack=stack)
                 record["checks"][stack] = checks.verify(stack)
-                # Parity with the scripts until #2: restart the generator after a verified stack.
-                ns = GENERATOR[stack]
-                run(["kubectl", "-n", ns, "rollout", "restart", "deployment/trace-generator"])
-                run(["kubectl", "-n", ns, "rollout", "status", "deployment/trace-generator", "--timeout=5m"])
+                record["verifiedStacks"].append(stack)
                 if operation == "apply":
                     # Keep the script engine's records current, one key at a time as deploy.py writes them.
+                    stage.update(operation="fingerprints", release=None, stack=stack)
                     for name, (target, _, _) in deploy.COMPONENTS.items():
                         if target == stack:
                             patch = json.dumps({"data": {name: deploy.fingerprint(name, root)}})
@@ -507,13 +657,13 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
             finally:
                 print("::endgroup::", flush=True)
 
-        receipt = release_phases.run(rows, statuses, reconcile_one, verify_stack, install=install)
-        record["verifiedStacks"] = receipt["verifiedStacks"]
+        stage.update(operation="gate", release=None, stack=None)
+        release_phases.run(rows, statuses, reconcile_one, verify_stack, install=install)
         record["outcome"] = "succeeded"
         return record
     except BaseException as error:
         record["outcome"] = "failed" if wrote else "refused"
-        record["error"] = f"{type(error).__name__}: {error}"
+        record["error"] = error_entry(stage, error)
         raise
     finally:
         record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -532,8 +682,10 @@ def summary(record):
     if isinstance(compatibility, dict):
         compatibility = f"passed for selection {compatibility.get('selectionSHA256')}"
     lines.append(f"- Compatibility: {compatibility}")
-    if record.get("error"):
-        lines.append(f"- Error: {record['error']}")
+    error = record.get("error")
+    if error:
+        where = error["release"] or error["stack"] or "run"
+        lines.append(f"- Error: {error['operation']} ({where}), {error['type']}: {error['message']}")
     if record["releases"]:
         lines += ["", "| Release | Status before | Revision before | Method | Revision after | Changed |",
                   "| --- | --- | --- | --- | --- | --- |"]
@@ -551,6 +703,7 @@ def summary(record):
 def diff(env, root=ROOT, run=run_command, live_images=None):
     """Read-only: report which releases Helmfile would change. Returns the per-release result."""
     root = Path(root)
+    check_helm_context(env)
     mode = image_mode(root)
     head = git_head(root, run)
     values = resolve_values(mode, root, head, run, live_images, env)[0]
@@ -598,9 +751,14 @@ def main(argv=None):
             return 1 if "error" in diff(env).values() else 0
         else:
             reconcile(env)
-    except (Refused, ValueError, KeyError, OSError, RuntimeError, subprocess.CalledProcessError,
-            yaml.YAMLError) as error:
-        print(f"error: {type(error).__name__}: {error}", file=sys.stderr)
+    except (Refused, Failed) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    except Exception as error:  # noqa: BLE001
+        # Like live_observation: no traceback and no exception data, which can hold command lines,
+        # endpoints or command output. Commands print their own diagnostics above.
+        print(f"error: {args.command} failed ({type(error).__name__}); see the log above and deploy-record.json",
+              file=sys.stderr)
         return 1
     return 0
 

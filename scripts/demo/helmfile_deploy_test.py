@@ -1,13 +1,19 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import yaml
+
+import companion_ownership
 import deploy
 import helmfile_deploy as hd
 import release_phases
@@ -31,6 +37,19 @@ def done(args, stdout="", returncode=0, stderr=""):
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
 
+ALLOWLIST = yaml.safe_load((ROOT / "charts/demo-resources/allowlist.yaml").read_text())
+RESOURCES = {resource: kind for kind, resource in hd.KINDS.items()}
+
+
+def companion_object(ns, kind, name, owned=True):
+    meta = {"namespace": ns, "name": name, "uid": "uid-" + name, "resourceVersion": "7"}
+    if owned:
+        meta["labels"] = {"app.kubernetes.io/managed-by": "Helm"}
+        meta["annotations"] = {"meta.helm.sh/release-name": "demo-resources", "meta.helm.sh/release-namespace": ns,
+                               "helm.sh/resource-policy": "keep"}
+    return {"apiVersion": companion_ownership.API[kind], "kind": kind, "metadata": meta}
+
+
 class Cluster:
     """A fake runner holding Helm releases. helmfile apply changes only the releases in `changes`."""
 
@@ -42,6 +61,13 @@ class Cluster:
             else:
                 self.releases[key]["status"] = status
         self.changes, self.state, self.calls = set(changes), state, []
+        # The allowlisted companion objects, adopted by the reviewed ownership patches.
+        self.objects = {(ns, kind, name): companion_object(ns, kind, name)
+                        for ns, kinds in ALLOWLIST.items() for kind, names in kinds.items() for name in names}
+        self.stuck, self.broken_history, self.failing = set(), set(), set()
+        self.written = set()
+        # The revision a listing reports, when it differs from the release's history.
+        self.listed_revision = {}
 
     def __call__(self, args, check=True, capture=False, env=None, cwd=None):
         args = [str(a) for a in args]
@@ -50,11 +76,14 @@ class Cluster:
             return done(args, HEAD + "\n")
         if args[:2] == ["helm", "list"]:
             ns = args[3]
-            listed = [{"name": key.split("/")[1], "namespace": ns, "status": rel["status"]}
+            listed = [{"name": key.split("/")[1], "namespace": ns, "status": rel["status"],
+                       "revision": str(self.listed_revision.get(key, rel["revision"]))}
                       for key, rel in self.releases.items() if key.startswith(ns + "/") and rel["status"] != "unknown"]
             return done(args, json.dumps(listed))
         if args[:2] == ["helm", "history"]:
             key = args[4] + "/" + args[2]
+            if key in self.broken_history and key in self.written:
+                return done(args, "", 1, "Error: connection to https://10.0.0.1 refused, token=SECRET-TOKEN")
             if key not in self.releases:
                 return done(args, "", 1, "Error: release: not found")
             rel = self.releases[key]
@@ -68,12 +97,18 @@ class Cluster:
             selector = dict(part.split("=") for part in args[args.index("-l") + 1].split(","))
             key = selector["namespace"] + "/" + selector["name"]
             method = args[args.index("--skip-deps") + 1]
+            self.written.add(key)
+            if key in self.failing:
+                raise subprocess.CalledProcessError(1, args, stderr="password=SECRET-TOKEN at https://10.0.0.1")
             rel = self.releases[key]
             if method == "sync" or key in self.changes or rel["status"] != "deployed":
-                rel.update(revision=rel["revision"] + 1, status="deployed")
+                rel.update(revision=rel["revision"] + 1, status="failed" if key in self.stuck else "deployed")
             return done(args)
-        if args[:5] == ["kubectl", "-n", "default", "get", "configmap"]:
+        if args[:6] == ["kubectl", "-n", "default", "get", "configmap", deploy.STATE]:
             return done(args, json.dumps({"data": {}}) if self.state else "")
+        if args[0] == "kubectl" and args[3] == "get" and args[4] in RESOURCES:
+            live = self.objects.get((args[2], RESOURCES[args[4]], args[5]))
+            return done(args, json.dumps(live) if live else "")
         return done(args)
 
     def writes(self):
@@ -85,14 +120,16 @@ class Cluster:
 
 
 class Checks:
-    def __init__(self, fail=()):
-        self.fail, self.calls = set(fail), []
+    def __init__(self, fail=(), log=None):
+        self.fail, self.calls, self.log = set(fail), [], log
 
     def prepare(self, stacks):
         self.calls.append(("prepare", tuple(sorted(stacks))))
 
     def verify(self, stack):
         self.calls.append(("verify", stack))
+        if self.log is not None:
+            self.log.append(["verify", stack])
         if stack in self.fail:
             raise RuntimeError(f"{stack} health failed")
         return {"health": {"stack": stack}}
@@ -235,10 +272,10 @@ class DriverTest(unittest.TestCase):
         def incompatible(*args):
             raise ValueError("Jaeger rejected the oci configuration")
 
-        selection = {"sources": {}, "configCommit": HEAD}
+        selection = {"sources": {}, "configCommit": HEAD, "coreMain": CORE}
         with self.assertRaisesRegex(ValueError, "rejected"):
-            hd.images(dict(self.env), root=self.root, run=template, resolve=lambda event, overrides: selection,
-                      validate=incompatible)
+            hd.images(dict(self.env), root=self.root, run=template,
+                      resolve=lambda event, overrides, core_main=None: selection, validate=incompatible)
         self.assertEqual(2, len(renders))
         for args, kubeconfig in renders:
             self.assertEqual(hd.os.devnull, kubeconfig)
@@ -252,9 +289,9 @@ class DriverTest(unittest.TestCase):
         self.mode("digest")
         seen = {}
 
-        def resolve(event, overrides):
-            seen.update(event=event, overrides=overrides)
-            return {"sources": {"jaeger": {"reference": "r", "sourceCommit": "s"}}}
+        def resolve(event, overrides, core_main=None):
+            seen.update(event=event, overrides=overrides, core=core_main)
+            return {"coreMain": core_main, "sources": {"jaeger": {"reference": "r", "sourceCommit": "s"}}}
 
         def validate(data, digest, renders, runtime):
             seen.update(sha=digest == hashlib.sha256(data).hexdigest(), stacks=sorted(renders), runtime=runtime)
@@ -263,11 +300,28 @@ class DriverTest(unittest.TestCase):
         calls = []
         hd.images(dict(self.env, JAEGER_DEMO_HOTROD_IMAGE_TAG="abc"), root=self.root,
                   run=lambda args, **kw: calls.append(args) or done(args, "x"), resolve=resolve, validate=validate)
+        # The selection is made for the upstream commit the workflow resolved once, MAIN_SHA.
         self.assertEqual({"event": "workflow_dispatch", "overrides": {"jaeger": None, "hotrod": "abc"}, "sha": True,
-                          "stacks": ["oci", "otel"], "runtime": "docker"}, seen)
+                          "stacks": ["oci", "otel"], "runtime": "docker", "core": CORE}, seen)
         self.assertEqual(["stack=oci,component=jaeger", "stack=otel,component=jaeger"],
                          [c[c.index("-l") + 1] for c in calls])
         self.assertTrue((self.root / hd.WORK / hd.RECEIPT).is_file())
+
+    def test_images_selects_for_the_workflows_upstream_commit_only(self):
+        self.mode("digest")
+
+        def other(event, overrides, core_main=None):
+            return {"coreMain": "9" * 40, "sources": {}}
+
+        never = lambda *args, **kwargs: self.fail("rendered for another commit")  # noqa: E731
+        with self.assertRaisesRegex(ValueError, "another upstream main commit"):
+            hd.images(dict(self.env), root=self.root, run=never, resolve=other, validate=never)
+        env = dict(self.env, GITHUB_ACTIONS="true")
+        del env["MAIN_SHA"]
+        with self.assertRaisesRegex(ValueError, "MAIN_SHA is required"):
+            hd.images(env, root=self.root, run=never, resolve=other, validate=never)
+        with self.assertRaisesRegex(ValueError, "not a full commit"):
+            hd.images(dict(self.env, MAIN_SHA="main"), root=self.root, run=never, resolve=other, validate=never)
 
     def test_images_in_live_mode_does_nothing_but_refuses_a_schedule(self):
         hd.images(dict(self.env), root=self.root, run=None, resolve=None, validate=None)
@@ -361,20 +415,43 @@ class DriverTest(unittest.TestCase):
         self.assertEqual([[name] for name in ("oci-jaeger", "oci-monitoring", "opensearch", "otel-jaeger", "otel-demo")],
                          patched)
 
-    def test_the_generator_restarts_after_each_verified_stack(self):
+    def test_the_generator_restarts_only_on_a_digest_apply_and_before_the_stack_checks(self):
+        self.mode("digest")
+        self.digest_inputs()
         cluster = Cluster()
-        self.reconcile(cluster)
-        restarts = [c[2] for c in cluster.calls if "restart" in c]
-        self.assertEqual(["default", "jaeger"], restarts)
-        # The OCI restart follows the OCI checks and precedes the first OTel release.
-        index = [i for i, c in enumerate(cluster.calls) if "restart" in c][0]
-        first_otel = [i for i, c in enumerate(cluster.calls) if c[0] == "helmfile" and "namespace=opensearch,name=opensearch" in c][0]
-        self.assertLess(index, first_otel)
+        record = self.reconcile(cluster, Checks(log=cluster.calls), GITHUB_EVENT_NAME="schedule", EXPECTED_CONFIG_SHA="")
+        steps = [c[:2] if c[0] == "verify" else ("restart", c[2]) for c in cluster.calls
+                 if c[0] == "verify" or "restart" in c]
+        self.assertEqual([("restart", "default"), ["verify", "oci"], ("restart", "jaeger"), ["verify", "otel"]], steps)
+        self.assertEqual(["oci", "otel"], record["generatorRestarts"])
+        # Each restart waits for its rollout before the checks.
+        restart = [i for i, c in enumerate(cluster.calls) if "restart" in c][0]
+        self.assertEqual(["kubectl", "-n", "default", "rollout", "status", "deployment/trace-generator", "--timeout=5m"],
+                         cluster.calls[restart + 1])
+        # Live mode is adoption: no pod template may change, so nothing restarts.
+        self.mode("live")
+        cluster = Cluster()
+        record = self.reconcile(cluster)
+        self.assertEqual([], [c for c in cluster.calls if "restart" in c])
+        self.assertEqual([], record["generatorRestarts"])
 
     def test_install_companion_installs_only_an_absent_named_companion_without_atomic_or_ownership(self):
         env = {"HELMFILE_OPERATION": "install-companion", "COMPANION_NAMESPACE": "jaeger"}
         cluster = Cluster({"jaeger/demo-resources": None})
-        record = self.reconcile(cluster, **env)
+
+        def no_image_read(run):
+            raise AssertionError("A companion install read the live images")
+
+        self.checks = Checks()
+        record = hd.reconcile(dict(self.env, **env), root=self.root, run=cluster, checks=self.checks,
+                              live_images=no_image_read, verify_charts=lambda root: {"charts": {}})
+        # Adoption changes no pod template: a companion install never restarts a generator.
+        self.assertEqual([], [c for c in cluster.calls if "restart" in c])
+        self.assertEqual((None, hd.NOT_USED), (record["images"], record["compatibility"]))
+        # Every allowlisted object of the namespace was read before the install.
+        reads = [c for c in cluster.calls if c[:4] == ["kubectl", "-n", "jaeger", "get"]]
+        self.assertEqual({(RESOURCES[c[4]], c[5]) for c in reads},
+                         {(kind, name) for kind, names in ALLOWLIST["jaeger"].items() for name in names})
         install, = [c for c in cluster.calls if c[:2] == ["helm", "install"]]
         self.assertEqual(["helm", *release_phases.install_args("jaeger", self.root / "charts/demo-resources",
                                                                self.root / hd.WORK / "companion-jaeger.json")], install)
@@ -394,6 +471,96 @@ class DriverTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not absent"):
             self.reconcile(cluster, **env)
         self.assertEqual([], cluster.writes())
+
+    def test_a_companion_install_refuses_a_missing_or_unadopted_object(self):
+        env = {"HELMFILE_OPERATION": "install-companion", "COMPANION_NAMESPACE": "default"}
+        service = ("default", "Service", "prometheus")
+        for case, change, message in (
+                ("missing", lambda c: c.objects.pop(service), "default/Service/prometheus is missing"),
+                ("unadopted", lambda c: c.objects.update({service: companion_object(*service, owned=False)}),
+                 "lacks the reviewed demo-resources ownership"),
+                ("foreign", lambda c: c.objects[service]["metadata"]["annotations"].update(
+                    {"meta.helm.sh/release-name": "other"}), "foreign or conflicting ownership")):
+            with self.subTest(case=case):
+                cluster = Cluster({"default/demo-resources": None})
+                change(cluster)
+                with self.assertRaisesRegex(ValueError, message):
+                    self.reconcile(cluster, **env)
+                self.assertEqual([], cluster.writes())
+                self.assertEqual("refused", self.record()["outcome"])
+
+    def test_a_companion_install_refuses_while_any_release_is_pending(self):
+        cluster = Cluster({"otel-demo/demo-resources": None, "opensearch/opensearch": "pending-upgrade"})
+        with self.assertRaisesRegex(ValueError, "no release is pending: opensearch/opensearch"):
+            self.reconcile(cluster, HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE="otel-demo")
+        self.assertEqual([], cluster.writes())
+
+    def test_a_listing_that_disagrees_with_the_named_history_refuses(self):
+        cluster = Cluster()
+        cluster.listed_revision["jaeger/jaeger"] = 3
+        with self.assertRaisesRegex(ValueError, "jaeger/jaeger changed between its listing and its history"):
+            self.reconcile(cluster)
+        self.assertEqual([], cluster.writes())
+
+    def test_a_release_that_is_not_deployed_after_its_write_fails_the_run(self):
+        cluster = Cluster({"default/prometheus": "failed"})
+        cluster.stuck.add("default/prometheus")
+        with self.assertRaisesRegex(RuntimeError, "default/prometheus is failed after sync, not deployed"):
+            self.reconcile(cluster)
+        record = self.record()
+        self.assertEqual(("failed", "reconcile", "default/prometheus", "Failed"),
+                         (record["outcome"], record["error"]["operation"], record["error"]["release"],
+                          record["error"]["type"]))
+        self.assertEqual([], self.checks.calls[1:])
+
+    def test_helm_context_overrides_are_refused(self):
+        for name, value in (("HELM_DRIVER", "configmap"), ("HELM_KUBECONTEXT", "prod"), ("HELM_NAMESPACE", "jaeger"),
+                            ("HELMFILE_KUBE_CONTEXT", "prod"), ("HELMFILE_NAMESPACE", "jaeger"),
+                            ("HELMFILE_ENVIRONMENT", "other"), ("HELMFILE_HELM_BINARY", "/tmp/helm")):
+            with self.subTest(name=name):
+                self.assert_refused(name if name != "HELM_DRIVER" else "unset HELM_DRIVER", **{name: value})
+                with self.assertRaisesRegex(ValueError, "HELM"):
+                    hd.diff(dict(self.env, **{name: value}), root=self.root, run=Cluster())
+        hd.check_helm_context({"HELM_DRIVER": "secret"})
+
+    def test_each_verified_stack_is_recorded_as_its_checks_pass(self):
+        cluster = Cluster()
+        with self.assertRaises(RuntimeError):
+            self.reconcile(cluster, Checks(fail={"otel"}))
+        record = self.record()
+        self.assertEqual((["oci"], "verify", "otel"), (record["verifiedStacks"], record["error"]["operation"],
+                                                      record["error"]["stack"]))
+
+    def test_errors_are_recorded_without_command_output_or_command_lines(self):
+        cluster = Cluster()
+        cluster.failing.add("default/jaeger")
+        cluster.broken_history.add("default/jaeger")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(subprocess.CalledProcessError):
+            self.reconcile(cluster)
+        # The failed history read neither replaced the command's error nor left the log group open.
+        self.assertEqual(output.getvalue().count("::group::"), output.getvalue().count("::endgroup::"))
+        record = self.record()
+        self.assertEqual({"operation": "reconcile", "release": "default/jaeger", "stack": None,
+                          "type": "CalledProcessError", "message": hd.FAILURES["reconcile"]}, record["error"])
+        for text in ((self.root / hd.RECORD).read_text(), self.summary.read_text()):
+            for leaked in ("SECRET-TOKEN", "10.0.0.1", "helmfile -f", "--state-values-file"):
+                self.assertNotIn(leaked, text)
+
+    def test_main_prints_no_traceback_or_exception_data(self):
+        stderr = io.StringIO()
+        with patch.object(hd, "pinned_tools", return_value=True), \
+                patch.object(hd, "reconcile", side_effect=RuntimeError("token=SECRET-TOKEN https://10.0.0.1")), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(1, hd.main(["reconcile"]))
+        self.assertNotIn("SECRET-TOKEN", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertIn("reconcile failed (RuntimeError)", stderr.getvalue())
+        with patch.object(hd, "pinned_tools", return_value=True), \
+                patch.object(hd, "reconcile", side_effect=hd.Refused("A manual Helmfile run requires expected_config_sha")), \
+                contextlib.redirect_stderr(stderr):
+            self.assertEqual(1, hd.main(["reconcile"]))
+        self.assertIn("requires expected_config_sha", stderr.getvalue())
 
     def test_an_absent_companion_blocks_apply(self):
         cluster = Cluster({"opensearch/demo-resources": None})
@@ -453,36 +620,76 @@ class DriverTest(unittest.TestCase):
                 "releases:\n  - {name: a, namespace: default, chart: ./.tools/chart-archives/a-1.0.0.tgz}\n"
                 "  - {name: jaeger, namespace: default, chart: ./.tools/helm-charts/charts/jaeger}\n")
 
+        pinned = hd.jaeger_chart_commit()
+
+        def at(commit):
+            return lambda path: commit if path == root / ".tools/helm-charts" else None
+
         state()
-        self.assertEqual({"a-1.0.0.tgz": lock["charts"]["a-1.0.0.tgz"]}, hd.verify_locked_charts(root)["charts"])
+        verified = hd.verify_locked_charts(root, head=at(pinned))
+        self.assertEqual(({"a-1.0.0.tgz": lock["charts"]["a-1.0.0.tgz"]}, pinned),
+                         (verified["charts"], verified["jaegerChartCommit"]))
+        for moved in ("0" * 40, None):
+            with self.subTest(head=moved), self.assertRaisesRegex(ValueError, "not at the pinned commit"):
+                hd.verify_locked_charts(root, head=at(moved))
         state("0" * 64)
         with self.assertRaisesRegex(ValueError, "stale"):
-            hd.verify_locked_charts(root)
+            hd.verify_locked_charts(root, head=at(pinned))
         state()
         (root / ".tools/chart-archives/a-1.0.0.tgz").write_bytes(b"b")
         with self.assertRaisesRegex(ValueError, "differs from its reviewed SHA-256"):
-            hd.verify_locked_charts(root)
+            hd.verify_locked_charts(root, head=at(pinned))
         (root / ".helmfile-locked.yaml").unlink()
         with self.assertRaisesRegex(ValueError, "run helmfile_deploy.py prepare"):
-            hd.verify_locked_charts(root)
+            hd.verify_locked_charts(root, head=at(pinned))
+
+    def test_prepare_fails_fast_pins_the_chart_commit_and_pulls_without_a_cluster(self):
+        calls, pulls = [], []
+
+        def run(args, **kwargs):
+            calls.append(([str(a) for a in args], kwargs.get("env", {}).get("KUBECONFIG")))
+            return done(args)
+
+        def locked_state(root, dest, run=None):
+            # Stand in for chart_archives.locked_state: record the environment its helm pull gets.
+            env = {}
+            with patch.object(hd.subprocess, "run", side_effect=lambda args, **kw: env.update(kw.get("env", {}))):
+                run(["helm", "pull", "x"])
+            pulls.append(env.get("KUBECONFIG"))
+            return root / ".helmfile-locked.yaml"
+
+        with patch.object(hd.chart_archives, "dependencies"), \
+                patch.object(hd, "verify_locked_charts", return_value={"charts": {}}):
+            hd.prepare(self.root, run=run, locked_state=locked_state, head=lambda path: hd.jaeger_chart_commit())
+        (command, kubeconfig), = calls
+        self.assertEqual(["bash", "-c", 'set -euo pipefail; source "$1"; prepare_jaeger_chart "$2"'], command[:3])
+        self.assertEqual((hd.os.devnull, [hd.os.devnull]), (kubeconfig, pulls))
+        with patch.object(hd.chart_archives, "dependencies") as dependencies, \
+                self.assertRaisesRegex(ValueError, "not at the pinned commit"):
+            hd.prepare(self.root, run=run, locked_state=locked_state, head=lambda path: "0" * 40)
+        dependencies.assert_not_called()
 
     # ------------------------------------------------------------ production checks
 
     def test_production_checks_compare_the_data_binding_and_require_ready_certificates(self):
         calls = []
         bindings = iter([("claim", "uid", "pv"), ("claim", "uid", "pv")])
-        certificates = {"items": [{"metadata": {"name": "c"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}
+        expected = {"jaeger": "jaeger-demo-tls", "opensearch": "opensearch-demo-tls", "otel-demo": "otel-demo-tls"}
+        # Derived from the issuer-annotated Ingresses of the companion sources, not typed in.
+        self.assertEqual(sorted(expected.items()), hd.expected_certificates(ROOT))
+        certificates = {ns: {"items": [{"metadata": {"name": name}, "status": {"conditions": [
+            {"type": "Ready", "status": "True"}]}}]} for ns, name in expected.items()}
 
         def run(args, **kwargs):
             calls.append([str(a) for a in args])
-            return done(args, json.dumps(certificates))
+            return done(args, json.dumps(certificates.get(args[2], {"items": []})))
 
         checks = hd.ProductionChecks(ROOT, run, health=lambda stack: {"stack": stack},
                                      trace=lambda *versions: calls.append(["trace", *versions]),
                                      binding=lambda: next(bindings), sleep=lambda s: None)
         checks.prepare({"oci", "otel"})
         evidence = checks.verify("otel")
-        self.assertEqual(3, evidence["readyCertificates"])
+        self.assertEqual([f"{ns}/{name}" for ns, name in sorted(expected.items())], evidence["readyCertificates"])
         self.assertIn(["trace", "3.10.0", "3.10.0"], calls)
         self.assertEqual(len(hd.OTEL_ROLLOUTS), len([c for c in calls if "rollout" in c]))
         self.assertTrue(evidence["openSearchDataBindingUnchanged"])
@@ -492,12 +699,17 @@ class DriverTest(unittest.TestCase):
         checks.prepare({"otel"})
         with self.assertRaisesRegex(RuntimeError, "data claim or its bound volume changed"):
             checks.verify("otel")
-        certificates["items"][0]["status"]["conditions"][0]["status"] = "False"
+        certificates["opensearch"]["items"][0]["status"]["conditions"][0]["status"] = "False"
         checks = hd.ProductionChecks(ROOT, run, health=lambda stack: {}, trace=lambda *v: None,
                                      binding=lambda: ("c", "u", "p"), sleep=lambda s: None)
         checks.prepare({"otel"})
-        with self.assertRaisesRegex(RuntimeError, "is not Ready"):
+        with self.assertRaisesRegex(RuntimeError, "opensearch/opensearch-demo-tls is not Ready"):
             checks.verify("otel")
+        # A missing expected Certificate fails even when every listed one is Ready.
+        certificates["opensearch"]["items"][0]["status"]["conditions"][0]["status"] = "True"
+        certificates["otel-demo"]["items"][0]["metadata"]["name"] = "another-tls"
+        with self.assertRaisesRegex(RuntimeError, "otel-demo/otel-demo-tls is missing"):
+            checks.certificates()
         oci = hd.ProductionChecks(ROOT, run, health=lambda stack: {"stack": stack}, sleep=lambda s: None)
         calls.clear()
         self.assertEqual({"stack": "oci"}, oci.verify("oci")["health"])
