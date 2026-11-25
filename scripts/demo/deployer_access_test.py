@@ -18,7 +18,7 @@ MANUAL_USER = "ocid1.user.oc1..aaaaexamplemanual"
 # it may only name these.
 CLUSTER_KINDS = {
     "namespaces", "clusterroles", "clusterrolebindings", "mutatingwebhookconfigurations",
-    "validatingwebhookconfigurations", "persistentvolumes", "storageclasses",
+    "validatingwebhookconfigurations", "persistentvolumes", "storageclasses", "customresourcedefinitions",
 }
 
 
@@ -197,11 +197,32 @@ class DeployerAccessTests(unittest.TestCase):
             "scripts/demo/deploy.py": ['"get", kind, name', '"pvc"'],
             "examples/otel-demo/opensearch-expand-volume.sh": ["patch pvc", "get storageclass", "get pv ",
                                                                'STORAGE_CLASS="oci-bv"'],
+            # The drift report reads every rendered object, the CRDs included, by name.
+            "scripts/demo/live_drift.py": ["from deployer_access import MONITORING_CRDS", "get(item_path(key, routes))"],
         }.items():
             text = (root / path).read_text()
             for command in commands:
                 with self.subTest(path=path, command=command):
                     self.assertIn(command, text)
+
+    def test_the_drift_report_reads_the_monitoring_crds_by_name_only(self):
+        import live_drift
+        self.assertEqual(d.MONITORING_CRDS, live_drift.MONITORING_CRDS)
+        group, resource = "apiextensions.k8s.io", "customresourcedefinitions"
+        self.assertEqual([rule for rule in ROLES[d.DEPLOYER, ""] if resource in rule["resources"]],
+                         [{"apiGroups": [group], "resources": [resource], "resourceNames": list(d.MONITORING_CRDS),
+                           "verbs": ["get"]}])
+        for identity in d.IDENTITIES:
+            for name in d.MONITORING_CRDS:
+                self.assertTrue(d.allowed(identity, R("", group, resource, "get", name), ROLES))
+            # check proves the cluster denies another CRD and the collection.
+            for request in [R("", group, resource, "get", "certificates.cert-manager.io"),
+                            R("", group, resource, "list", ""), R("", group, resource, "watch", "")]:
+                with self.subTest(identity=identity, request=request):
+                    self.assertFalse(d.allowed(identity, request, ROLES))
+                    self.assertIn(request, d.denied(identity))
+            for verb in ("patch", "update", "delete"):
+                self.assertFalse(d.allowed(identity, R("", group, resource, verb, d.MONITORING_CRDS[0]), ROLES))
 
     def test_bindings_name_both_users_and_keep_the_second_role_for_the_manual_identity(self):
         items = d.bindings(MANUAL_USER, SCHEDULED_USER)["items"]

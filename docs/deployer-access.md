@@ -41,6 +41,7 @@ watch by name.
 | `jaeger`, `opensearch`, `otel-demo` | Read Pod logs, endpoints, events and Certificates | Certificate readiness and failure diagnostics in `examples/otel-demo/deploy-all.sh` |
 | `kube-system` | Get, patch and delete five named Services, list Services | Monitoring scrape Services, `kubectl cluster-info` |
 | Cluster | Get, patch and delete seven named ClusterRoles (with `bind` and `escalate`) and seven named ClusterRoleBindings. Create a ClusterRole or ClusterRoleBinding of any name. Get, patch and delete the two named admission webhook configurations. Three namespace lookups. | Monitoring and OTel demo chart RBAC, monitoring hooks |
+| Cluster | Get the monitoring chart's ten CustomResourceDefinitions (`*.monitoring.coreos.com`) by name. No list or watch, and no other CRD. | `live_drift.py` [drift report](helmfile-applications.md#live-drift-report) |
 
 The verbs cover a release that Helm stored with either apply method. With
 client-side apply Helm creates and patches; with server-side apply it creates by

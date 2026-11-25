@@ -38,6 +38,19 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   on kind as the deployer.
   (refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
 
+- `scripts/demo/live_drift.py`, a read-only drift report that compares every
+  object the Helmfile render would own, rendered with the live Jaeger and HotROD
+  images, with the live object, and classifies each as identical, explained by a
+  fixed reason code, unexplained or missing. It prints identities, reason codes and
+  hashes only, never a live-only map key, and exits non-zero on any unexplained or
+  missing object. `--output` writes the report outside the checkout.
+  `docs/helmfile-applications.md` has the operator command and the reason codes.
+  The deployer role gains a named `get` on the monitoring chart's ten CRDs for it,
+  and no list; `chart_objects.py --check` fails when the rendered CRDs differ from
+  that grant.
+  ([#148](https://github.com/jaegertracing/jaeger-demo/pull/148),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
+
 - A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
   kind cluster without production credentials: the API server accepts the role,
   `deployer_access.py check` finds no difference for either identity and catches
