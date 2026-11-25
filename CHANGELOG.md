@@ -54,14 +54,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `demo-resources` companions beside the script path, fails when the two differ in
   an object identity or hook event, renders the companions again as their first
   `helm install` so an install-only object needs a record, and requires Helm
-  history records for all ten releases. `deployer_access.py` gains a row for each Helmfile path command (`helm
-  list -n`, `helm history`, `helm diff upgrade`, `helmfile apply`/`sync` and the
-  first companion `helm install`, which only the manual identity runs) and denies a
-  collection delete of release records. Upgrades keep Helm 4's default `--server-side=auto`, and the model
-  covers releases stored with either apply method. The offline model finds no difference for either identity, so
-  `ops/rbac/deployer.yaml` is unchanged. The `deployer-access` CI job also runs the
-  read-only Helmfile path commands, `helm diff` included, as the scheduled fixture
-  user with no refused request in the audit log.
+  history records for all ten releases. `deployer_access.py` gains a row for each
+  Helmfile path command (`helm list -n`, `helm history`, `helm diff upgrade`,
+  `helmfile apply`/`sync`, and the first companion `helm install`, which only the
+  manual identity runs) and denies a collection delete of release records.
+  Upgrades keep Helm 4's default `--server-side=auto`, and the model covers
+  releases stored with either apply method. The offline model finds no difference
+  for either identity, so `ops/rbac/deployer.yaml` is unchanged. The
+  `deployer-access` CI job also runs the read-only Helmfile path commands, a
+  `helmfile diff` of the monitoring release from `.helmfile-locked.yaml` included,
+  as the scheduled fixture user with no refused request in the audit log.
   (fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
 ### Changed

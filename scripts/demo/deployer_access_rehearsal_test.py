@@ -162,20 +162,23 @@ class ProductionPathTests(unittest.TestCase):
                          re.findall(r"HELM_PROM_CMD=\(([^)]*)\)", script))
         self.assertNotIn("--wait=", script)
 
-    def test_the_diff_uses_the_monitoring_words_and_the_helmfile_apply_flags(self):
-        words = rehearsal.monitoring_command((ROOT / "examples/oci/deploy-all.sh").read_text())
-        self.assertEqual(["helm", "diff", "upgrade", "prometheus", "/charts/kps.tgz",
-                          "--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true",
-                          "-f", "monitoring-values.yaml", "--namespace", "default", "--reset-values",
-                          "--allow-unreleased=false", "--suppress-secrets"],
-                         rehearsal.diff_command(words, Path("/charts/kps.tgz")))
-        # The flags are the ones the release phase rehearsal gives Helmfile apply.
-        phases = (ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
-        for flag in ("--allow-unreleased=false", '"--suppress-secrets"', '"--reset-values"'):
-            self.assertIn(flag, phases)
-        for broken in (["--timeout=20m0s", "prometheus", "$PROMETHEUS_STACK_CHART"], ["prometheus", "chart"]):
-            with self.subTest(broken=broken), self.assertRaisesRegex(ValueError, "Unexpected monitoring helm words"):
-                rehearsal.diff_command(broken, "/charts/kps.tgz")
+    def test_the_diff_is_a_helmfile_diff_of_the_locked_state_with_the_apply_diff_arguments(self):
+        state = ROOT / ".helmfile-locked.yaml"
+        self.assertEqual(["helmfile", "--file", str(state), "--selector", "namespace=default,name=prometheus",
+                          "--skip-deps", "diff", "--reset-values", "--diff-args=--allow-unreleased=false",
+                          "--suppress-secrets"], rehearsal.helmfile_diff_command(state))
+        self.assertEqual(".helmfile-locked.yaml", rehearsal.chart_archives.LOCKED_STATE)
+        # The same diff arguments the Helmfile apply of both Helmfile rehearsals passes.
+        for path in ("release-phases", "companion-adoption"):
+            text = (ROOT / "scripts/demo/rehearsals" / path / "exercise.py").read_text()
+            for flag in ('"--reset-values"', "--diff-args=--allow-unreleased=false", '"--suppress-secrets"'):
+                with self.subTest(path=path, flag=flag):
+                    self.assertIn(flag, text)
+        # It runs as the scheduled user inside the audited window that must hold no refusal.
+        source = (ROOT / "scripts/demo/rehearsals/deployer-access/exercise.py").read_text()
+        body = source[source.index("    def helmfile_reads():"):source.index('    audited("helmfile-reads", helmfile_reads)')]
+        self.assertIn('ok(run(helmfile_diff_command(state), configs["scheduled"]', body)
+        self.assertNotIn("\"helm\", \"diff\"", source, "the diff comes from the Helmfile state, not deploy-all.sh words")
 
     def test_monitoring_command_must_be_unique_and_complete(self):
         with self.assertRaisesRegex(ValueError, "one monitoring helm command"):

@@ -88,8 +88,8 @@ What the rows rest on, from Helm 4.3.2 and helm-diff 3.15.15:
   Grafana admin password of `default/prometheus`) and Grafana's
   PersistentVolumeClaim, which only a release that renders a Grafana claim reaches;
   none does. A chart bump that adds a `lookup` of another kind fails `helm diff`
-  with a refusal; the `deployer-access` CI job runs `helm diff` on the monitoring
-  release as the scheduled identity
+  with a refusal; the `deployer-access` CI job runs `helmfile diff` on the
+  monitoring release as the scheduled identity
   ([tested against a real API server](#tested-against-a-real-api-server)).
 - **Apply method.** Neither `helmfile.yaml` nor the Helmfile path passes
   `--server-side` to an upgrade, so Helm 4.3.2 uses its default `auto`: each
@@ -404,11 +404,15 @@ refusal that Helm logs and then ignores fails the job too.
 The scheduled user then runs the read-only commands of the
 [Helmfile path](#helmfile-path) on that release, in another audited window:
 `helm list` with `release_phases.list_args` for each release namespace,
-`helm history prometheus --max 1`, and `helm diff upgrade` of the head chart with
-this checkout's monitoring words and the Helmfile apply flags
-(`--reset-values --allow-unreleased=false --suppress-secrets`). The audit log must
-show no request refused to that user, which covers helm-diff's Helm 4 render and
-the monitoring chart's `lookup` of its Grafana Secret.
+`helm history prometheus --max 1`, and
+`helmfile --file .helmfile-locked.yaml --selector namespace=default,name=prometheus --skip-deps diff`
+with the diff arguments the Helmfile apply passes (`--reset-values`,
+`--diff-args=--allow-unreleased=false`, `--suppress-secrets`). The administrator
+first writes `.helmfile-locked.yaml` with `chart_archives.py state`, so the diff
+uses this checkout's Helmfile state and lock-verified chart, not the
+`deploy-all.sh` command. The audit log must show no request refused to that user,
+which covers Helmfile, helm-diff's Helm 4 render and the monitoring chart's
+`lookup` of its Grafana Secret.
 
 `prometheus-svc.yaml` is already applied when the scheduled user runs, as in
 production. Its `kubectl apply` patches the two Services only when the pull

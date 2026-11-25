@@ -21,7 +21,8 @@ again, so both ways Helm can have stored the production release are covered. The
 API audit log must show no request refused to that identity during either
 upgrade. The same identity then runs the read-only commands of the Helmfile
 path on that release: `helm list -n` for each release namespace, `helm history
---max 1` and `helm diff upgrade` with the Helmfile apply flags, again with no
+--max 1` and `helmfile diff` of the release from the lock-verified
+.helmfile-locked.yaml with the Helmfile apply's diff arguments, again with no
 request refused in the audit log. A probe release shows that an upgrade fails without a rule it needs and
 succeeds once the rule is back. Last, Helm must stop that identity before it
 changes anything in kube-system. No production credential is used.
@@ -171,21 +172,18 @@ def monitoring_command(script):
     return words
 
 
-def diff_command(words, archive):
-    """`helm diff upgrade` of the monitoring release with its deploy-all.sh words, as Helmfile apply runs it.
+# The diff arguments that the Helmfile apply of the release phase and companion rehearsals passes.
+DIFF_ARGS = ("--reset-values", "--diff-args=--allow-unreleased=false", "--suppress-secrets")
 
-    The flags are the Helmfile path's: no install, reset values, Secret data hidden. helm-diff has no
-    --timeout, so that pair is dropped.
+
+def helmfile_diff_command(state):
+    """A read-only `helmfile diff` of the monitoring release from the lock-verified Helmfile state.
+
+    Helmfile runs helm-diff with the arguments its apply passes: no install, reset values, Secret
+    data hidden. It changes nothing.
     """
-    words = list(words)
-    if "--timeout" in words:
-        at = words.index("--timeout")
-        del words[at:at + 2]
-    if any(word.startswith("--timeout") for word in words) or words.count("$PROMETHEUS_STACK_CHART") != 1:
-        raise ValueError("Unexpected monitoring helm words for helm diff")
-    words = [str(archive) if word == "$PROMETHEUS_STACK_CHART" else word for word in words]
-    return ["helm", "diff", "upgrade", *words, "--namespace", "default", "--reset-values",
-            "--allow-unreleased=false", "--suppress-secrets"]
+    return ["helmfile", "--file", str(state), "--selector", "namespace=default,name=prometheus", "--skip-deps",
+            "diff", *DIFF_ARGS]
 
 
 def seed_inputs(root):
@@ -470,10 +468,14 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
 
     # 8. The read-only commands of the Helmfile path, as the scheduled identity on the release it just
     # upgraded: the listing of each release namespace from release_phases.list_args, the status read by
-    # name, and helm-diff, whose Helm 4 render (helm template --dry-run=server --is-upgrade) runs the
-    # monitoring chart's lookup calls. The audit log must show no request refused meanwhile.
-    head_archive = archive if seed is head else ok(run(
-        [sys.executable, SCRIPTS / "chart_archives.py", "pull", "kube-prometheus-stack", head["version"], temp], admin))
+    # name, and `helmfile diff` of the release from this checkout's lock-verified state, whose helm-diff
+    # renders with Helm 4 (helm template --dry-run=server --is-upgrade) and so runs the monitoring
+    # chart's lookup calls. The audit log must show no request refused meanwhile. The administrator
+    # writes the state first: pulling the archives needs no cluster access.
+    archives = temp / "chart-archives"
+    archives.mkdir()
+    state = Path(ok(run([sys.executable, SCRIPTS / "chart_archives.py", "state", archives], admin)))
+    assert state == ROOT / chart_archives.LOCKED_STATE, state
     reads = {}
 
     def helmfile_reads():
@@ -483,8 +485,7 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
         latest = json.loads(ok(run(["helm", "history", "prometheus", "-n", "default", "--max", "1", "-o", "json"],
                                    configs["scheduled"])))
         assert [entry["status"] for entry in latest] == ["deployed"], latest
-        ok(run(diff_command(head["words"], head_archive), configs["scheduled"], cwd=ROOT / OCI,
-               timeout=UPGRADE_SECONDS))
+        ok(run(helmfile_diff_command(state), configs["scheduled"], cwd=ROOT, timeout=UPGRADE_SECONDS))
 
     audited("helmfile-reads", helmfile_reads)
     assert reads["default"] == ["prometheus"], reads
@@ -537,7 +538,7 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
                        "seed": {"from": "head" if reason else "base", "reason": reason,
                                 "chart": Path(archive).name},
                        "headChart": f"kube-prometheus-stack-{head['version']}.tgz", "revisions": upgrades},
-        "helmfileReads": {"listed": reads, "diff": "prometheus"}, "auditedRefusals": audit,
+        "helmfileReads": {"listed": reads, "diff": "helmfile diff default/prometheus"}, "auditedRefusals": audit,
         "upgradeWithoutRule": control, "refusedInKubeSystem": refused, "productionAccess": False,
     }
 
