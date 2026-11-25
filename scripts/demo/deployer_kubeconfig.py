@@ -45,7 +45,8 @@ def impersonating(config, context, user, groups=(), base=Path(".")):
     """Return a kubeconfig with only `context`, whose user entry impersonates `user`."""
     if not USER.fullmatch(user or ""):
         raise ValueError("The deployer identity must be an OCI user OCID (ocid1.user.oc1..)")
-    if not isinstance(config, dict) or config.get("kind", "Config") != "Config":
+    # `oci ce cluster create-kubeconfig` writes `kind: ""`, which kubectl accepts like an absent kind.
+    if not isinstance(config, dict) or config.get("kind") not in (None, "", "Config"):
         raise ValueError("Not a kubeconfig")
     selected = named(config.get("contexts"), context, "context")
     details = selected.get("context") or {}
