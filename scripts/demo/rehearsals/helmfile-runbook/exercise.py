@@ -66,6 +66,8 @@ def rehearsal(name):
 fixture = rehearsal("helmfile-deploy")
 
 CONTEXT = "kind-jaeger-demo-runbook-fixture"
+# The run attempt the runbook's record steps name. Each dispatch here stands for a first attempt.
+ATTEMPT = "1"
 # Fixture identities in the OCI user OCID form; bound to the committed roles like the production ones.
 MANUAL = "ocid1.user.oc1..aaaarehearsalrunbookmanual"
 SCHEDULED = "ocid1.user.oc1..aaaarehearsalrunbookscheduled"
@@ -244,7 +246,7 @@ def exercise(cfg, context):
     # What the runbook's session blocks set in the operator's shell.
     session = {"REVIEWED_COMMIT": head, "ADMIN_KUBECONFIG": str(cfg), "ADMIN_CONTEXT": context,
                "MANUAL_USER_OCID": MANUAL, "SCHEDULED_USER_OCID": SCHEDULED, "RECORD": str(record_dir),
-               "KUBECONFIG": str(deployer), "CONTEXT": context}
+               "KUBECONFIG": str(deployer), "CONTEXT": context, "RUN_ATTEMPT": ATTEMPT}
     os.umask(0o077)
     ran = []
 
@@ -315,7 +317,8 @@ def exercise(cfg, context):
                                       live_images=live_images, sleep=lambda s: None)
         except (ValueError, RuntimeError, subprocess.CalledProcessError) as caught:
             error = caught
-        target = record_dir / "runs" / run_id
+        # Where the runbook keeps the approved attempt's record; every rehearsal dispatch is attempt 1.
+        target = record_dir / "runs" / f"{run_id}-{ATTEMPT}"
         target.mkdir(parents=True)
         shutil.copy(root / helmfile_deploy.RECORD, target / helmfile_deploy.RECORD)
         return json.loads((target / helmfile_deploy.RECORD).read_text()), error
@@ -538,6 +541,16 @@ def exercise(cfg, context):
     assert "failed" in out and ("field is immutable" in out or "forbidden" in out), out
     block("statefulset-claim")
     assert "The new selector matches the running Pod" in block("statefulset-selector").stdout
+    # The orphan delete refuses unless that comparison matched: a selector the running Pod does not
+    # match stops the repair with nothing deleted.
+    labels_file = record_dir / "opensearch-pod-labels.json"
+    matched = labels_file.read_text()
+    labels_file.write_text(json.dumps({"app": "another-selector"}))
+    result = block("statefulset-orphan", expect_failure=True)
+    assert "does not match the running Pod" in result.stderr, result.stderr
+    assert admin_json("-n", "opensearch", "get", "statefulset", "opensearch-cluster-single")["metadata"]["uid"] == \
+        before["metadata"]["uid"], "The refused orphan delete deleted the StatefulSet"
+    labels_file.write_text(matched)
     block("statefulset-orphan")
     pod = admin_json("-n", "opensearch", "get", "pod", "opensearch-cluster-single-0")
     assert not pod["metadata"].get("ownerReferences"), pod["metadata"].get("ownerReferences")

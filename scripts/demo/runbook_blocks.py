@@ -30,7 +30,7 @@ STRICT_OPEN, STRICT_CLOSE = "bash -euo pipefail <<'EOF'", "EOF"
 # The variables the runbook documents. A block reads no other variable of the operator's shell.
 VARIABLES = frozenset({"REVIEWED_COMMIT", "ADMIN_KUBECONFIG", "ADMIN_CONTEXT", "MANUAL_USER_OCID",
                        "SCHEDULED_USER_OCID", "RECORD", "KUBECONFIG", "CONTEXT", "ns", "release", "REVISION",
-                       "RUN_ID", "STEP", "FROM"})
+                       "RUN_ID", "RUN_ATTEMPT", "STEP", "FROM"})
 GUARD = re.compile(r"\$\{(\w+):[?=]")
 REFERENCE = re.compile(r"\$\{?([A-Za-z_]\w*)")
 # A command that reaches the cluster through the current kubeconfig.

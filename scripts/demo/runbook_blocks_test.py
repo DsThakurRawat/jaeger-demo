@@ -97,12 +97,31 @@ class RunbookBlocksTest(unittest.TestCase):
     def test_the_downloaded_artifact_is_the_one_the_workflow_uploads(self):
         steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["deploy"]["steps"]
         upload, = [step for step in steps if step.get("name") == "Upload the deployment record"]
-        name = upload["with"]["name"].replace("${{ github.run_id }}", "$RUN_ID").replace("${{ github.run_attempt }}", "1")
+        self.assertEqual("deploy-record-${{ github.run_id }}-${{ github.run_attempt }}", upload["with"]["name"])
+        name = upload["with"]["name"].replace("${{ github.run_id }}", "$RUN_ID").replace(
+            "${{ github.run_attempt }}", "$RUN_ATTEMPT")
         self.assertEqual("deploy-record.json", upload["with"]["path"])
         downloads = section_commands(r"\bgh run download\b")
         self.assertEqual(1, len(downloads), downloads)
         self.assertIn(f'--name "{name}"', downloads[0])
         self.assertIn('gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo', downloads[0])
+        self.assertIn('--dir "$HOME/helmfile-adoption-runs/$RUN_ID-$RUN_ATTEMPT"', downloads[0])
+        # The attempt is resolved from the run before the download, never assumed.
+        self.assertNotIn("-$RUN_ID-1", downloads[0])
+        resolved = section_commands(r"\bgh run view\b")
+        self.assertEqual(1, len(resolved), resolved)
+        self.assertIn("--json attempt --jq .attempt", resolved[0])
+        # Every Cloud Shell step reads the record of the approved attempt.
+        paths = section_commands(r"\$RECORD/runs/")
+        self.assertTrue(paths)
+        for line in paths:
+            self.assertIn("$RECORD/runs/$RUN_ID-$RUN_ATTEMPT", line)
+
+    def test_no_block_deletes_a_pod(self):
+        # The engine reads the OpenSearch Pod before its first write; a deleted Pod stops the recreate.
+        self.assertEqual([], section_commands(r"\bdelete\s+(pods?\b|pod/)"))
+        text = "\n".join(runbook_blocks.section(runbook_blocks.DOC.read_text())[1])
+        self.assertNotIn("Delete an orphaned OpenSearch Pod", text)
 
     def test_an_unmarked_bash_block_fails(self):
         text = document(("<!-- rehearse: one -->", strict(': "${ns:?}"', 'echo "$ns"')), (None, "echo two"))

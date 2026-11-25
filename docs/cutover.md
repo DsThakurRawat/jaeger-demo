@@ -436,7 +436,6 @@ something the role deliberately does not grant:
 | `deployer_access.py check --user`, both identities | It creates SubjectAccessReviews, which the role does not grant |
 | Read Certificates in `default` | The role lists Certificates only in the three OTel namespaces |
 | Read events and Pod logs in `default` | The role reads Pods and ReplicaSets there, not events or logs |
-| Delete an orphaned OpenSearch Pod | The role creates and deletes no Pod |
 
 **Run each block as shown.** A block that does work is one
 `bash -euo pipefail <<'EOF'` command, so it stops at the first failure and exits
@@ -456,7 +455,7 @@ single command.
 | `KUBECONFIG`, `CONTEXT` | Cloud Shell | The deployer kubeconfig, `$RECORD/deployer.kubeconfig`, and its only context |
 | `ns` | Both | A release namespace: `default`, `jaeger`, `opensearch` or `otel-demo` |
 | `release`, `REVISION` | Cloud Shell | A release name in `$ns`, and the revision to return to |
-| `RUN_ID` | Both | The run of **Deploy Jaeger Demo to OKE** whose record a step reads |
+| `RUN_ID`, `RUN_ATTEMPT` | Both | The run of **Deploy Jaeger Demo to OKE** whose record a step reads, and the attempt of that run that the reviewer approved |
 | `STEP`, `FROM` | Cloud Shell | The name of an identity capture, and the earlier capture to compare it with (`baseline` unless a step says otherwise) |
 
 The deployer kubeconfig holds the OCID it impersonates and the cluster endpoint.
@@ -485,8 +484,8 @@ GitHub, OCI, the public demo or the real charts, and its marker says what the
 rehearsal does instead: a workflow dispatch becomes a call of
 `helmfile_deploy.reconcile` with the environment the dispatch gives the
 **Reconcile demo components** step (stub image lookup, health and trace checks),
-which writes the record to `$RECORD/runs/$RUN_ID` in place of the download and
-upload. A block marked `session` sets shell state only.
+which writes the record to `$RECORD/runs/$RUN_ID-$RUN_ATTEMPT` in place of the
+download and upload. A block marked `session` sets shell state only.
 [scripts/demo/runbook_blocks_test.py](../scripts/demo/runbook_blocks_test.py),
 part of `make test`, fails when a bash block of this section has no marker or the
 wrong form, when a rehearse id is duplicated or missing from the rehearsal's step
@@ -499,7 +498,7 @@ Cloud Shell, GitHub and the production bindings are not rehearsed.
 ### Operator shell
 
 On the maintainer's machine, with the GitHub CLI signed in, set the reviewed
-commit, and `ns` and `RUN_ID` when a step says so:
+commit, and `ns`, `RUN_ID` and `RUN_ATTEMPT` when a step says so:
 
 <!-- session: shell state on the maintainer's machine -->
 ```bash
@@ -858,40 +857,52 @@ namespaces is pending or in an unknown state, and the live drift classification
 of the companion's objects finds nothing but ownership. Then it runs a plain
 `helm install` without `--take-ownership` and restarts nothing
 ([what a companion install checks](releases.md#helmfile-engine)). Find the run
-on the maintainer's machine and export its ID there and in Cloud Shell:
+on the maintainer's machine:
 
 <!-- not-rehearsed: GitHub workflow runs -->
 ```bash
-gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml --event workflow_dispatch --limit 3 --json databaseId,headSha,status,conclusion,url
+gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml --event workflow_dispatch --limit 3 --json databaseId,attempt,headSha,status,conclusion,url
 ```
+
+The workflow uploads each attempt's record as its own artifact,
+`deploy-record-<run id>-<attempt>`, and a re-run is a new attempt of the same run.
+The record itself names the run but not the attempt, so the run ID together with
+the attempt-specific artifact is what binds a record to the run the reviewer
+approved. Export the run ID and the attempt the reviewer approved, there and in
+Cloud Shell:
 
 <!-- session: shell state, on both machines -->
 ```bash
-read -rp "Run ID: " RUN_ID && export RUN_ID
+read -rp "Run ID: " RUN_ID && read -rp "Approved attempt: " RUN_ATTEMPT && export RUN_ID RUN_ATTEMPT
 ```
 
-Wait for the run and download its record on the maintainer's machine. A re-run has
-another attempt number in the artifact name:
+Wait for the run and download that attempt's record on the maintainer's machine.
+The block resolves the run's latest attempt and stops if it is not the approved
+one, because then a later attempt has run since:
 
-<!-- not-rehearsed: GitHub runs and artifacts; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID -->
+<!-- not-rehearsed: GitHub runs and artifacts; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID-$RUN_ATTEMPT -->
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RUN_ID:?}"
+: "${RUN_ID:?}" "${RUN_ATTEMPT:?}"
+latest=$(gh run view "$RUN_ID" --repo jaegertracing/jaeger-demo --json attempt --jq .attempt)
+[[ "$latest" == "$RUN_ATTEMPT" ]] ||
+  { echo "Stop: the run's latest attempt is $latest, not the approved attempt $RUN_ATTEMPT" >&2; exit 1; }
 gh run watch "$RUN_ID" --repo jaegertracing/jaeger-demo --exit-status || echo "The run did not succeed; keep its record"
-gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo --name "deploy-record-$RUN_ID-1" \
-  --dir "$HOME/helmfile-adoption-runs/$RUN_ID"
+gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo --name "deploy-record-$RUN_ID-$RUN_ATTEMPT" \
+  --dir "$HOME/helmfile-adoption-runs/$RUN_ID-$RUN_ATTEMPT"
 EOF
 ```
 
-Upload `$HOME/helmfile-adoption-runs/$RUN_ID/deploy-record.json` to Cloud Shell,
-which puts it in the home directory, and move it into the record there:
+Upload `$HOME/helmfile-adoption-runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json` to
+Cloud Shell, which puts it in the home directory, and move it into the record
+there under the attempt's name:
 
-<!-- not-rehearsed: a Cloud Shell upload; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID -->
+<!-- not-rehearsed: a Cloud Shell upload; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID-$RUN_ATTEMPT -->
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RECORD:?}" "${RUN_ID:?}"
-mkdir -p "$RECORD/runs/$RUN_ID"
-mv -n "$HOME/deploy-record.json" "$RECORD/runs/$RUN_ID/deploy-record.json"
+: "${RECORD:?}" "${RUN_ID:?}" "${RUN_ATTEMPT:?}"
+mkdir -p "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT"
+mv -n "$HOME/deploy-record.json" "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json"
 EOF
 ```
 
@@ -903,7 +914,7 @@ planner must find nothing left to patch:
 <!-- rehearse: install-check -->
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}" "${RUN_ID:?}" "${REVIEWED_COMMIT:?}"
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}" "${RUN_ID:?}" "${RUN_ATTEMPT:?}" "${REVIEWED_COMMIT:?}"
 jq -e --arg ns "$ns" --arg run "$RUN_ID" --arg commit "$REVIEWED_COMMIT" '
   .run == $run and .configCommit == $commit and .event == "workflow_dispatch"
   and .outcome == "succeeded" and .operation == "install-companion"
@@ -911,7 +922,7 @@ jq -e --arg ns "$ns" --arg run "$RUN_ID" --arg commit "$REVIEWED_COMMIT" '
   and .verifiedStacks == (if $ns == "default" then ["oci"] else ["oci", "otel"] end)
   and ([.releases[] | [.id, .statusBefore, .method, .revisionAfter, .statusAfter]]
        == [[$ns + "/demo-resources", "absent", "install", 1, "deployed"]])' \
-  "$RECORD/runs/$RUN_ID/deploy-record.json"
+  "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json"
 helm history demo-resources --namespace "$ns" --max 1 -o json |
   jq -e '(.[0].revision | tostring) == "1" and .[0].status == "deployed"'
 python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
@@ -955,15 +966,15 @@ that:
 <!-- rehearse: adoption-record -->
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RECORD:?}" "${RUN_ID:?}" "${REVIEWED_COMMIT:?}"
+: "${RECORD:?}" "${RUN_ID:?}" "${RUN_ATTEMPT:?}" "${REVIEWED_COMMIT:?}"
 jq -e --arg run "$RUN_ID" --arg commit "$REVIEWED_COMMIT" '
   .run == $run and .configCommit == $commit and .event == "workflow_dispatch"
   and .outcome == "succeeded" and .operation == "apply" and .imageMode == "live"
   and .compatibility == "live: not revalidated" and .verifiedStacks == ["oci", "otel"]
   and .generatorRestarts == [] and (.releases | length) == 10 and (.fingerprints | length) == 5
   and all(.releases[]; .statusBefore == "deployed" and .method == "apply" and .changed == false
-          and .revisionAfter == .revisionBefore)' "$RECORD/runs/$RUN_ID/deploy-record.json"
-jq '.images' "$RECORD/runs/$RUN_ID/deploy-record.json"
+          and .revisionAfter == .revisionBefore)' "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json"
+jq '.images' "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json"
 EOF
 ```
 
@@ -1145,10 +1156,10 @@ instead:
 <!-- rehearse: recorded-revisions -->
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RECORD:?}" "${RUN_ID:?}"
+: "${RECORD:?}" "${RUN_ID:?}" "${RUN_ATTEMPT:?}"
 jq -r '.releases[] | select(.changed != false)
   | [.id, (.revisionBefore // "none: de-adopt this companion instead"), .revisionAfter, .statusAfter] | @tsv' \
-  "$RECORD/runs/$RUN_ID/deploy-record.json"
+  "$RECORD/runs/$RUN_ID-$RUN_ATTEMPT/deploy-record.json"
 EOF
 ```
 
@@ -1236,8 +1247,12 @@ EOF
 ```
 
 Compare the selector of the new render, which the failed revision stores, with
-the running Pod's labels. When it still matches, the new StatefulSet adopts the
-running Pod:
+the running Pod's labels. The repair continues only when it still matches, so that
+the new StatefulSet adopts the running Pod. When it does not match, stop here
+without deleting anything and escalate: the orphaned Pod would block a Pod of the
+same name, and the engine reads that Pod and its claim before any write, so
+neither deleting the Pod nor dispatching recovers it. That case needs its own
+reviewed procedure, one that can validate the kept claim without the Pod:
 
 <!-- rehearse: statefulset-selector -->
 ```bash
@@ -1253,14 +1268,16 @@ if jq -e --slurpfile labels "$RECORD/opensearch-pod-labels.json" \
      'length == 1 and (.[0] | to_entries | all(.value == $labels[0][.key]))' "$RECORD/opensearch-selector.json" >/dev/null; then
   echo "The new selector matches the running Pod"
 else
-  echo "The new selector does not match the running Pod: the administrator deletes it before the dispatch"
+  echo "Stop: the new selector does not match the running Pod; delete nothing and escalate" >&2
+  exit 1
 fi
 EOF
 ```
 
 Delete the StatefulSet with orphan propagation. The garbage collector removes the
 owner reference from the Pod, which keeps running on its claim. The deployer role
-grants this `delete`:
+grants this `delete`. The block checks the selector comparison again and refuses
+unless it matched:
 
 <!-- rehearse: statefulset-orphan -->
 ```bash
@@ -1271,24 +1288,14 @@ if ! jq -e '.phase == "Bound" and .owners == []' "$RECORD/opensearch-claim-befor
   echo "Stop: the data claim is not Bound and unowned, or the StatefulSet would delete its claims" >&2
   exit 1
 fi
+if ! jq -e --slurpfile labels "$RECORD/opensearch-pod-labels.json" \
+     'length == 1 and (.[0] | to_entries | all(.value == $labels[0][.key]))' "$RECORD/opensearch-selector.json" >/dev/null; then
+  echo "Stop: the new selector does not match the running Pod; delete nothing and escalate" >&2
+  exit 1
+fi
 kubectl --namespace opensearch delete statefulset opensearch-cluster-single --cascade=orphan --wait=true
 kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json |
   jq -e '(.metadata.ownerReferences // []) == [] and .status.phase == "Running"'
-EOF
-```
-
-Only when the selector check said it does not match: the Pod would stay orphaned
-and the new StatefulSet could not create a Pod of the same name, so the
-administrator deletes the orphaned Pod now, before the dispatch, which the
-deployer role cannot. The claim stays, and the new StatefulSet creates the Pod on
-it again:
-
-<!-- not-rehearsed: the rehearsal's change keeps the selector, so its Pod is adopted and this branch does not occur -->
-```bash
-bash -euo pipefail <<'EOF'
-: "${ADMIN_KUBECONFIG:?}" "${ADMIN_CONTEXT:?}"
-kubectl --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" --namespace opensearch \
-  delete pod opensearch-cluster-single-0
 EOF
 ```
 
@@ -1433,7 +1440,7 @@ namespace is de-adopted may a run use `engine=scripts` again.
 ### Incidents and escalation
 
 - **Diagnostics first.** Before any retry, rollback or de-adoption, keep the
-  run URL and its log, the run's `deploy-record.json` in `$RECORD/runs`, the
+  run URL and its log, the attempt's `deploy-record.json` in `$RECORD/runs`, the
   `helm history` and `helm status` of each affected release, the events and Pods
   of its namespace, an identity capture (`STEP=incident-<UTC time>`) and, when the
   render is involved, a drift report. Do not delete or edit release records,
