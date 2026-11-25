@@ -24,6 +24,20 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- A Helmfile engine for **Deploy Jaeger Demo to OKE**, off by default. A scheduled
+  run uses it only when the `DEMO_DEPLOY_ENGINE` repository variable is `helmfile`,
+  and a manual run only with the new `engine=helmfile` input and
+  `expected_config_sha`; otherwise the job runs the scripts exactly as before. It
+  reconciles all ten releases from lock-verified charts, OCI before OTel, retries
+  failed releases with sync, refuses pending ones before any write, verifies both
+  stacks even when nothing changed, and installs a first companion only on a
+  one-namespace `helmfile_operation=install-companion` dispatch. Images come from
+  the live references (`helmfile/images.yaml` `mode: live`) or, in `digest` mode,
+  are resolved and validated before any step holds the OCI API key. Each run
+  uploads `deploy-record.json` for 90 days. A new `operations` CI job rehearses it
+  on kind as the deployer.
+  (refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
+
 - A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
   kind cluster without production credentials: the API server accepts the role,
   `deployer_access.py check` finds no difference for either identity and catches

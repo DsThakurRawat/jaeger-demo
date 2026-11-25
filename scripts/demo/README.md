@@ -44,6 +44,19 @@ and refuse a release in a `pending-*` state. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
 the dependent OTel Jaeger and application updates in that run.
 
+`helmfile_deploy.py` is the Helmfile engine of the same `deploy` job, off by
+default. A scheduled run uses it only while the repository variable
+`DEMO_DEPLOY_ENGINE` is `helmfile`, and a manual run only with `engine=helmfile`
+and `expected_config_sha`. `prepare` builds the lock-verified
+`.helmfile-locked.yaml`, `images` resolves and validates digest-mode images before
+any step holds the OCI API key, `diff` reports changes read-only, and `reconcile`
+applies all ten releases, OCI before OTel, through `release_phases.py`, verifies
+both stacks even when nothing changed, restarts the trace generators, patches the
+fingerprints above for each verified stack and writes `deploy-record.json`.
+`helmfile/images.yaml` selects `live` image references or `digest` promotion. The
+`operations` CI job runs it on kind as the deployer
+([Helmfile engine](../../docs/releases.md#helmfile-engine)).
+
 Deployment, the trace reset and volume expansion share the workflow concurrency
 group `jaeger-otel-demo-opensearch-recovery`, so one runs at a time and a running
 one is never cancelled. GitHub keeps one waiting run per group: a newer waiting

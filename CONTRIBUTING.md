@@ -111,9 +111,9 @@ deployment.
   download in the `deployer-access` job of `.github/workflows/ci.yml` is one of
   them and carries a literal SHA-256; replace it with the digest of the new
   release in the same commit.
-- **kind.** The `adoption` and `deployer-access` jobs in `.github/workflows/ci.yml`
+- **kind.** The `adoption`, `deployer-access` and `operations` jobs in `.github/workflows/ci.yml`
   each download kind with a literal SHA-256 and create their clusters from the
-  same `kindest/node` image digest. Change both jobs together;
+  same `kindest/node` image digest. Change all three jobs together;
   `scripts/demo/workflow_test.py` fails while they differ.
 - **Chart objects.** The deployer role is derived from the object inventory in
   `ops/rbac/chart-objects.json`. After a chart pin changes, run

@@ -157,8 +157,9 @@ for the job:
 | `ci-opensearch-volume-expand.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Expand and verify the OpenSearch volume |
 
 The checkout, the revision check, the OCI CLI installation
-and version check, the Helm setup action and the Slack notification run without
-them. The only action that receives them is the kubectl configuration,
+and version check, the three Helmfile preparation steps (toolchain, charts and
+images), the Helm setup action, the deployment record upload and the Slack
+notification run without them. The only action that receives them is the kubectl configuration,
 `oracle-actions/configure-kubectl-oke`, pinned by commit.
 `scripts/demo/workflow_test.py` fails if a secret appears at workflow or job
 level, in an action input or a script, under another name, as part of the set, or
@@ -352,7 +353,12 @@ the role does not let Helm start such a change. It does not run one.
 
 The rehearsal runs `deploy-all.sh`, not `deploy.py`. What `deploy.py` itself
 calls, such as its `helm status` checks and the revision ConfigMap, is covered
-only by the access reviews of `check`. The job also does not prove the
+only by the access reviews of `check`. The `operations` job runs the Helmfile
+engine, `helmfile_deploy.py`, on its own kind cluster as a user bound to this role:
+`helm list` per namespace, `helm history`, the per-release Helmfile apply and sync,
+the first companion install, the generator restarts and the fingerprint patches,
+on synthetic application charts and the real `demo-resources` chart. Its live
+image reads and stack checks are stubbed there. The job also does not prove the
 production cluster: it shows nothing about the bindings an administrator
 applied, OCI IAM policies, or group grants outside Kubernetes. The production
 check above still applies.

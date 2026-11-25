@@ -12,7 +12,8 @@ The daily 13:00 UTC job covers both Jaeger stacks, OpenSearch and Dashboards,
 the OTel sample application, and OCI monitoring. It runs the same workflow job
 and [deploy.py](scripts/demo/deploy.py) as a manual deployment, without a
 reviewer, and only while the `DEMO_SCHEDULE_ENABLED` repository variable is
-`true`. For current migration status and handover evidence, see
+`true`. It runs the Helmfile engine instead only while the `DEMO_DEPLOY_ENGINE`
+repository variable is `helmfile`. For current migration status and handover evidence, see
 [docs/MIGRATION.md](docs/MIGRATION.md). Schedule activation is tracked in the
 [handover runbook](docs/cutover.md#review-scheduled-scope).
 
@@ -127,7 +128,12 @@ flowchart TB
 ```
 
 The deployment workflow uses [scripts/demo/deploy.py](scripts/demo/deploy.py) to
-select changed components and invoke the stack scripts. The snapshot resolver
+select changed components and invoke the stack scripts. The same job can instead run
+the Helmfile engine, [scripts/demo/helmfile_deploy.py](scripts/demo/helmfile_deploy.py),
+which reconciles all ten Helmfile releases, OCI before OTel. It is off by default: a
+scheduled run selects it only while the `DEMO_DEPLOY_ENGINE` repository variable is
+`helmfile`, and a manual run only through its `engine` input
+([Helmfile engine](docs/releases.md#helmfile-engine)). The snapshot resolver
 selects Jaeger and HotROD images independently from upstream core commits. This
 repository's commit identifies configuration, never a product image.
 
@@ -154,9 +160,14 @@ flowchart TB
         schedule["schedule, 13:00 UTC<br/>while DEMO_SCHEDULE_ENABLED is true"] --> scheduled_env["Environment demo-scheduled<br/>no reviewer"]
         apply_env --> access["deployer_access.py check --self<br/>against ops/rbac/deployer.yaml"]
         scheduled_env --> access
-        access -- "role complete" --> reconcile["deploy.py selects components<br/>and runs the stack scripts"]
+        access -- "role complete" --> engine{"DEPLOY_ENGINE"}
+        engine -- "scripts (default)" --> reconcile["deploy.py selects components<br/>and runs the stack scripts"]
         reconcile --> otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo<br/>(an OpenSearch failure blocks the other two)"]
         otel -- "then, not gated on OTel" --> oci["OCI: default/jaeger, default/prometheus"]
+        engine -- "helmfile" --> helmfile["helmfile_deploy.py reconcile<br/>helmfile.yaml and helmfile-resources.yaml.gotmpl"]
+        helmfile --> hf_oci["OCI: default/prometheus, default/jaeger,<br/>default/demo-resources, then OCI checks"]
+        hf_oci -- "only after the OCI checks pass" --> hf_otel["OTel: four application releases,<br/>three demo-resources, then OTel checks"]
+        hf_otel --> record["deploy-record.json artifact, 90 days"]
     end
 
     state[("ConfigMap<br/>default/jaeger-demo-deployment-revisions")]
@@ -164,9 +175,11 @@ flowchart TB
     group{{"Concurrency group<br/>jaeger-otel-demo-opensearch-recovery"}}
     slack["Slack #jaeger-operations"]
     observer["demo-run-observer.yml<br/>runs that ended before any job started"]
-    helmfile["Helmfile candidate, helmfile.yaml<br/>not in production"]
+    variable["Repository variable DEMO_DEPLOY_ENGINE<br/>or the manual engine input"]
 
+    variable -. "selects" .-> engine
     reconcile -. "reads fingerprints,<br/>records each success" .-> state
+    helmfile -. "records the fingerprints<br/>of each verified stack" .-> state
     job -. "one writer at a time" .- group
     writers -. "one writer at a time" .- group
     job -- "failed, cancelled or timed out" --> slack
@@ -174,14 +187,18 @@ flowchart TB
     observer --> slack
 
     style helmfile stroke-dasharray: 5 5
+    style hf_oci stroke-dasharray: 5 5
+    style hf_otel stroke-dasharray: 5 5
+    style record stroke-dasharray: 5 5
 ```
 
 A scheduled run selects both Jaeger components every day, to refresh the snapshot
 images, plus every component whose fingerprint differs from its key in the
 ConfigMap. It upgrades existing releases in place only. A dashed outline marks the
-Helmfile candidate. It is validated locally and in PR CI; production continues to
-run the extracted scripts until operator acceptance
-([migration plan](docs/MIGRATION.md)).
+Helmfile engine. It is tested locally and in PR CI, including a kind rehearsal as
+the deployer. Its production use starts with manual adoption
+([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)), and the schedule
+switches to it only after that is verified ([migration plan](docs/MIGRATION.md)).
 
 Existing namespaces, release names, routes, Service addresses and PVCs are
 preserved. Certificate issuers and the shared cluster, ingress controller and

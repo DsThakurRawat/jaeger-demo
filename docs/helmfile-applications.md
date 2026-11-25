@@ -3,7 +3,7 @@
 
 # Helmfile application releases
 
-`helmfile.yaml` describes the six existing application releases. The current production deployment uses the extracted scripts. The commands below render public configuration for review.
+`helmfile.yaml` describes the six existing application releases. The deploy workflow uses the extracted scripts unless its [Helmfile engine](releases.md#helmfile-engine) is selected, which applies this state through `.helmfile-locked.yaml`. The commands below render public configuration for review.
 
 | Stack and component | Helm release | Prerequisites for the component |
 | --- | --- | --- |
