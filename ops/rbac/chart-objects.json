@@ -3,10 +3,10 @@
   "helm": "4.3.2",
   "targetKubernetes": "1.37.0",
   "chartArchiveSHA256": {
-    "opensearch-3.7.0.tgz": "987e1b10fc717bee1545996c204c08a606d29bbab6b057e469923a92e7983c30",
-    "opensearch-dashboards-3.7.0.tgz": "bf878bfdb1004879ccac2212fe9ed6c6884de1c44cec16fc84942c3c3d515b9c",
-    "opentelemetry-demo-0.42.7.tgz": "8641be206f5282f3c489a4fd8481d343039d1c21298e37feb6d324e6997a3f89",
-    "kube-prometheus-stack-93.6.1.tgz": "6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4"
+    "kube-prometheus-stack-93.6.1.tgz": "6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4",
+    "opensearch-3.10.0.tgz": "e42d5084e3e440c61dceb19def26b28a5586a6693a57229081e4caee70a4356b",
+    "opensearch-dashboards-3.10.0.tgz": "02a1adc978fce8a1e91fe94ec328dc8fd2d51ac0ca00d497c98c5ba2b8d975d6",
+    "opentelemetry-demo-0.42.7.tgz": "8641be206f5282f3c489a4fd8481d343039d1c21298e37feb6d324e6997a3f89"
   },
   "rederived": [
     {
@@ -3220,6 +3220,66 @@
         "delete"
       ],
       "source": "current / next upgrade / rollback example, history pruning also needs older revisions"
+    },
+    {
+      "component": "history",
+      "release": "demo-resources",
+      "scope": "default",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.demo-resources.v1",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "first install example; every revision needs the same access, and history pruning deletes older ones"
+    },
+    {
+      "component": "history",
+      "release": "demo-resources",
+      "scope": "jaeger",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.demo-resources.v1",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "first install example; every revision needs the same access, and history pruning deletes older ones"
+    },
+    {
+      "component": "history",
+      "release": "demo-resources",
+      "scope": "opensearch",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.demo-resources.v1",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "first install example; every revision needs the same access, and history pruning deletes older ones"
+    },
+    {
+      "component": "history",
+      "release": "demo-resources",
+      "scope": "otel-demo",
+      "apiGroup": "",
+      "resource": "secrets",
+      "name": "sh.helm.release.v1.demo-resources.v1",
+      "verbs": [
+        "get",
+        "create",
+        "update",
+        "delete"
+      ],
+      "source": "first install example; every revision needs the same access, and history pruning deletes older ones"
     }
   ],
   "license": "Copyright (c) 2026 The Jaeger Authors. SPDX-License-Identifier: Apache-2.0"

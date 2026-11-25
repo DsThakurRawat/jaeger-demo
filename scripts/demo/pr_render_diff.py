@@ -95,11 +95,13 @@ def revision(root):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES, stable=True):
-    """Render the six releases. `target`, `index`, `images` and `stable` let another check reuse this render.
+def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES, stable=True, state="helmfile.yaml"):
+    """Render the six releases. `target`, `index`, `images`, `stable` and `state` let another check reuse this render.
 
     `images` applies to the Helmfile render only; the script-era projection uses the fixture images.
     `stable` adds the public fixture Grafana password; without it the checkout's own values apply.
+    `state` is the application Helmfile, relative to root. Another check passes the lock-verified
+    state that scripts/demo/chart_archives.py writes, which has local archives and no repositories.
     """
     def fixture_values(name):
         return stable_values(name) if stable else []
@@ -132,19 +134,20 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
                 obj["metadata"].setdefault("namespace", ns)
             index(records, ns, "demo-resources", companions["objects"])
     else:
-        child(root, env, "helmfile", "-f", "helmfile.yaml", "repos")
-        for state in ("helmfile.yaml", "helmfile-resources.yaml.gotmpl"):
-            if not (root / state).is_file():
-                if state == "helmfile.yaml":
+        if state == "helmfile.yaml":
+            child(root, env, "helmfile", "-f", "helmfile.yaml", "repos")
+        for path in (state, "helmfile-resources.yaml.gotmpl"):
+            if not (root / path).is_file():
+                if path == state:
                     raise ValueError("Missing head Helmfile")
                 continue
-            fixture = temp / (state + ".json")
-            if state == "helmfile.yaml":
+            fixture = temp / (Path(path).name + ".json")
+            if path == state:
                 fixture.write_text(json.dumps({"images": images}))
             else:
                 # Use this revision's loader and its own supplemental source mapping.
                 fixture.write_bytes(child(root, env, sys.executable, "scripts/demo/companion_values.py"))
-            args = ["helmfile", "-f", state, "--state-values-file", str(fixture)]
+            args = ["helmfile", "-f", path, "--state-values-file", str(fixture)]
             releases = json.loads(child(root, env, *args, "list", "--output", "json"))
             for item in releases:
                 ns, name = identity_field(item["namespace"]), identity_field(item["name"])
