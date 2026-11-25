@@ -198,8 +198,7 @@ class DeployerAccessTests(unittest.TestCase):
             "examples/otel-demo/opensearch-expand-volume.sh": ["patch pvc", "get storageclass", "get pv ",
                                                                'STORAGE_CLASS="oci-bv"'],
             # The drift report reads every rendered object, the CRDs included, by name.
-            "scripts/demo/live_drift.py": ["MONITORING_CRDS", "get(item_path(key, routes))",
-                                           *('"%s"' % name.split(".")[0] for name in d.MONITORING_CRDS)],
+            "scripts/demo/live_drift.py": ["from deployer_access import MONITORING_CRDS", "get(item_path(key, routes))"],
         }.items():
             text = (root / path).read_text()
             for command in commands:

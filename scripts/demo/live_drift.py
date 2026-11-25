@@ -7,9 +7,10 @@
 The render uses the live Jaeger and HotROD image references of both stacks. Each
 object is identical, explained (with reason codes from REASONS), unexplained or
 missing. The report holds identities, classes, reason codes, field paths and
-SHA-256 hashes. It never holds a field value, Secret data, a raw UID or an API
-error body. Exit status: 0 when nothing is unexplained or missing, 1 when
-something is, 2 when the report could not be produced.
+SHA-256 hashes. It never holds a field value, Secret or ConfigMap data, a map key
+that only the live object has, a raw UID or an API error body. Exit status: 0 when
+nothing is unexplained or missing, 1 when something is, 2 when the report could
+not be produced.
 """
 
 import argparse
@@ -18,15 +19,14 @@ from collections import namedtuple
 import copy
 import decimal
 import hashlib
-import http.client
 import json
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 
 import yaml
 
+from deployer_access import MONITORING_CRDS
 import pr_render_diff
 from equivalence import TARGET
 from live_observation import RELEASES, canonical, discover, item_path, object_state, reader, require, snapshot
@@ -35,24 +35,20 @@ from promotion_images import REPOS, STACKS, registry_image
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPANION = "demo-resources"
-# The CRDs the monitoring chart renders with --include-crds. ops/rbac/deployer.yaml
-# grants a named get on exactly these; the report fails if the render differs.
-MONITORING_CRDS = tuple(plural + ".monitoring.coreos.com" for plural in (
-    "alertmanagerconfigs", "alertmanagers", "podmonitors", "probes", "prometheusagents",
-    "prometheuses", "prometheusrules", "scrapeconfigs", "servicemonitors", "thanosrulers"))
 CLASSES = ("identical", "explained", "unexplained", "missing")
 
 # The only reasons a difference may be explained by. docs/helmfile-applications.md lists them.
 REASONS = {
     "server-default": "Kubernetes API default for a field the render leaves unset, from a fixed list per kind",
     "server-quantity": "The API server's canonical form of a built-in resource quantity, equal in value to the render",
-    "crd-schema-default": "Default declared in the rendered CRD schema for a custom resource field the render leaves unset",
+    "crd-schema-default": "Default declared in the rendered CRD schema for a custom resource field the render leaves "
+                          "unset, under a parent the render sets",
     "helm-ownership": "Complete Helm ownership metadata of the expected release: the application release, "
                       "or demo-resources for an allowlisted companion",
     "companion-unadopted": "Allowlisted companion with no Helm ownership and no helm.sh/resource-policy, "
                            "which the ownership patch adds at adoption",
     "kubectl-last-applied": "kubectl apply annotation on an allowlisted companion, which the scripts create with kubectl apply",
-    "service-allocation": "Service clusterIP, clusterIPs, ipFamilies or ipFamilyPolicy that the render leaves unset",
+    "service-allocation": "Allocated Service clusterIP, clusterIPs, ipFamilies or ipFamilyPolicy that the render leaves unset",
     "webhook-ca-bundle": "caBundle that the admission patch hook writes into the two monitoring webhook configurations",
     "deployment-revision": "deployment.kubernetes.io/revision annotation that the Deployment controller writes",
     "daemonset-generation": "deprecated.daemonset.template.generation annotation that the DaemonSet controller writes",
@@ -77,11 +73,35 @@ RESTARTED = {"apps/v1:Deployment:default:trace-generator", "apps/v1:Deployment:j
              "apps/v1:Deployment:jaeger:jaeger"}
 WEBHOOKS = {"admissionregistration.k8s.io/v1:MutatingWebhookConfiguration:-:prometheus-kube-prometheus-admission",
             "admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration:-:prometheus-kube-prometheus-admission"}
+# Map-typed fields of built-in kinds and object metadata. An entry under them is never
+# omitted as empty, and a key only the live object has is not printed.
+MAP_FIELDS = {"labels", "annotations", "data", "binaryData", "stringData", "nodeSelector", "matchLabels", "selector",
+              "limits", "requests", "capacity", "hard", "parameters"}
+# Map keys the report may name although only the live object has them: they are fixed in this file.
+KNOWN_KEYS = {"app.kubernetes.io/managed-by", "meta.helm.sh/release-name", "meta.helm.sh/release-namespace",
+              "helm.sh/resource-policy", "kubectl.kubernetes.io/last-applied-configuration",
+              "kubectl.kubernetes.io/restartedAt", "deployment.kubernetes.io/revision",
+              "deprecated.daemonset.template.generation", "checksum/secret"}
+LIVE_ONLY = "<live-only>"
+# Non-pointer scalar fields of built-in kinds that the API server omits when they hold
+# their zero value (false, 0 or ""). A rendered zero equals an absent live field there
+# only. A pointer field, such as automountServiceAccountToken, keeps an explicit false.
+OMITTED_ZERO = {("hostNetwork",), ("hostPID",), ("hostIPC",), ("stdin",), ("stdinOnce",), ("tty",),
+                ("volumeMounts", "[]", "readOnly"), ("spec", "paused"), ("publishNotReadyAddresses",),
+                ("minReadySeconds",), ("initialDelaySeconds",), ("hostPort",), ("nodePort",), ("subPath",),
+                ("subPathExpr",), ("workingDir",), ("hostname",), ("subdomain",), ("nodeName",),
+                ("priorityClassName",), ("serviceAccountName",), ("env", "[]", "value")}
 
 # One rule: a reason, the apiVersion:Kind values it covers, a path pattern ("[]" is
 # any list index, "*" any map key), the expected live value (a constant, ANY, or a
-# function of the live parent object) and an optional predicate on the context.
-Rule = namedtuple("Rule", "reason kinds pattern value where", defaults=(None,))
+# function of the live parent object), an optional predicate on the context, and
+# whether a rendered zero value counts as unset. That holds only for a non-pointer
+# field that the API server defaults when it is zero.
+Rule = namedtuple("Rule", "reason kinds pattern value where zero", defaults=(None, False))
+Z = True  # marks a default the API server also applies to a rendered zero value
+POD_PREFIXES = {"apps/v1:Deployment": ("spec", "template", "spec"), "apps/v1:StatefulSet": ("spec", "template", "spec"),
+                "apps/v1:DaemonSet": ("spec", "template", "spec"), "batch/v1:Job": ("spec", "template", "spec"),
+                "batch/v1:CronJob": ("spec", "jobTemplate", "spec", "template", "spec")}
 
 
 def _pull_policy(container):
@@ -97,67 +117,73 @@ def _subject_group(subject):
 
 
 def _server_defaults():
-    pods = {"apps/v1:Deployment": ("spec", "template", "spec"), "apps/v1:StatefulSet": ("spec", "template", "spec"),
-            "apps/v1:DaemonSet": ("spec", "template", "spec"), "batch/v1:Job": ("spec", "template", "spec"),
-            "batch/v1:CronJob": ("spec", "jobTemplate", "spec", "template", "spec")}
-    pod = [(("dnsPolicy",), "ClusterFirst"), (("restartPolicy",), "Always"), (("schedulerName",), "default-scheduler"),
-           (("securityContext",), {}), (("terminationGracePeriodSeconds",), 30),
+    pod = [(("dnsPolicy",), "ClusterFirst", Z), (("restartPolicy",), "Always", Z),
+           (("schedulerName",), "default-scheduler", Z), (("securityContext",), {}, False),
+           (("terminationGracePeriodSeconds",), 30, False),
            # The API server mirrors serviceAccountName into the deprecated field.
-           (("serviceAccount",), lambda pod: pod.get("serviceAccountName"))]
-    container = [(("terminationMessagePath",), "/dev/termination-log"), (("terminationMessagePolicy",), "File"),
-                 (("imagePullPolicy",), _pull_policy), (("resources",), {}), (("ports", "[]", "protocol"), "TCP"),
-                 (("env", "[]", "valueFrom", "fieldRef", "apiVersion"), "v1")]
+           (("serviceAccount",), lambda pod: pod.get("serviceAccountName"), Z)]
+    container = [(("terminationMessagePath",), "/dev/termination-log", Z), (("terminationMessagePolicy",), "File", Z),
+                 (("imagePullPolicy",), _pull_policy, Z), (("resources",), {}, False),
+                 (("ports", "[]", "protocol"), "TCP", Z), (("env", "[]", "valueFrom", "fieldRef", "apiVersion"), "v1", Z)]
     for probe in ("livenessProbe", "readinessProbe", "startupProbe"):
-        container += [((probe, "timeoutSeconds"), 1), ((probe, "periodSeconds"), 10), ((probe, "successThreshold"), 1),
-                      ((probe, "failureThreshold"), 3), ((probe, "httpGet", "scheme"), "HTTP"),
-                      ((probe, "httpGet", "path"), "/"), ((probe, "grpc", "service"), "")]
+        container += [((probe, "timeoutSeconds"), 1, Z), ((probe, "periodSeconds"), 10, Z),
+                      ((probe, "successThreshold"), 1, Z), ((probe, "failureThreshold"), 3, Z),
+                      ((probe, "httpGet", "scheme"), "HTTP", Z), ((probe, "httpGet", "path"), "/", Z),
+                      ((probe, "grpc", "service"), "", False)]
     for hook in ("postStart", "preStop"):
-        container += [(("lifecycle", hook, "httpGet", "scheme"), "HTTP"), (("lifecycle", hook, "httpGet", "path"), "/")]
-    volume = [(("configMap", "defaultMode"), 420), (("secret", "defaultMode"), 420), (("projected", "defaultMode"), 420),
-              (("downwardAPI", "defaultMode"), 420), (("hostPath", "type"), ""),
-              (("downwardAPI", "items", "[]", "fieldRef", "apiVersion"), "v1"),
-              (("projected", "sources", "[]", "downwardAPI", "items", "[]", "fieldRef", "apiVersion"), "v1"),
-              (("projected", "sources", "[]", "serviceAccountToken", "expirationSeconds"), 3600)]
+        container += [(("lifecycle", hook, "httpGet", "scheme"), "HTTP", Z), (("lifecycle", hook, "httpGet", "path"), "/", Z)]
+    volume = [(("configMap", "defaultMode"), 420, False), (("secret", "defaultMode"), 420, False),
+              (("projected", "defaultMode"), 420, False), (("downwardAPI", "defaultMode"), 420, False),
+              (("hostPath", "type"), "", False), (("downwardAPI", "items", "[]", "fieldRef", "apiVersion"), "v1", Z),
+              (("projected", "sources", "[]", "downwardAPI", "items", "[]", "fieldRef", "apiVersion"), "v1", Z),
+              (("projected", "sources", "[]", "serviceAccountToken", "expirationSeconds"), 3600, False)]
     rules = []
-    for kind, prefix in pods.items():
-        rules += [Rule("server-default", {kind}, prefix + path, value) for path, value in pod]
+    for kind, prefix in POD_PREFIXES.items():
+        rules += [Rule("server-default", {kind}, prefix + path, value, None, zero) for path, value, zero in pod]
         for field in ("containers", "initContainers"):
-            rules += [Rule("server-default", {kind}, prefix + (field, "[]") + path, value) for path, value in container]
-        rules += [Rule("server-default", {kind}, prefix + ("volumes", "[]") + path, value) for path, value in volume]
+            rules += [Rule("server-default", {kind}, prefix + (field, "[]") + path, value, None, zero)
+                      for path, value, zero in container]
+        rules += [Rule("server-default", {kind}, prefix + ("volumes", "[]") + path, value, None, zero)
+                  for path, value, zero in volume]
         # An unset pod template metadata reads back as an empty object.
         rules.append(Rule("server-default", {kind}, prefix[:-1] + ("metadata",), {}))
     rules.append(Rule("server-default", {"batch/v1:CronJob"}, ("spec", "jobTemplate", "metadata"), {}))
     workload = {
-        "apps/v1:Deployment": [(("replicas",), 1), (("revisionHistoryLimit",), 10), (("progressDeadlineSeconds",), 600),
-                               (("strategy", "type"), "RollingUpdate"), (("strategy", "rollingUpdate", "maxSurge"), "25%"),
-                               (("strategy", "rollingUpdate", "maxUnavailable"), "25%")],
-        "apps/v1:StatefulSet": [(("replicas",), 1), (("revisionHistoryLimit",), 10), (("podManagementPolicy",), "OrderedReady"),
-                                (("updateStrategy", "type"), "RollingUpdate"),
-                                (("updateStrategy", "rollingUpdate", "partition"), 0),
-                                (("updateStrategy", "rollingUpdate", "maxUnavailable"), 1),
-                                (("persistentVolumeClaimRetentionPolicy", "whenDeleted"), "Retain"),
-                                (("persistentVolumeClaimRetentionPolicy", "whenScaled"), "Retain"),
-                                (("volumeClaimTemplates", "[]", "apiVersion"), "v1"),
-                                (("volumeClaimTemplates", "[]", "kind"), "PersistentVolumeClaim"),
-                                (("volumeClaimTemplates", "[]", "spec", "volumeMode"), "Filesystem"),
-                                (("volumeClaimTemplates", "[]", "status", "phase"), "Pending")],
-        "apps/v1:DaemonSet": [(("revisionHistoryLimit",), 10), (("updateStrategy", "type"), "RollingUpdate"),
-                              (("updateStrategy", "rollingUpdate", "maxUnavailable"), 1),
-                              (("updateStrategy", "rollingUpdate", "maxSurge"), 0)],
-        "batch/v1:CronJob": [(("concurrencyPolicy",), "Allow"), (("suspend",), False), (("successfulJobsHistoryLimit",), 3),
-                             (("failedJobsHistoryLimit",), 1)],
-        "batch/v1:Job": [(("backoffLimit",), 6), (("completions",), 1), (("parallelism",), 1),
-                         (("completionMode",), "NonIndexed"), (("suspend",), False), (("manualSelector",), False),
-                         (("podReplacementPolicy",), "TerminatingOrFailed")],
-        "v1:Service": [(("type",), "ClusterIP"), (("sessionAffinity",), "None"), (("internalTrafficPolicy",), "Cluster"),
-                       (("ports", "[]", "protocol"), "TCP"), (("ports", "[]", "targetPort"), lambda port: port.get("port"))],
-        "apiextensions.k8s.io/v1:CustomResourceDefinition": [(("conversion", "strategy"), "None")],
+        "apps/v1:Deployment": [(("replicas",), 1, False), (("revisionHistoryLimit",), 10, False),
+                               (("progressDeadlineSeconds",), 600, False), (("strategy", "type"), "RollingUpdate", Z),
+                               (("strategy", "rollingUpdate", "maxSurge"), "25%", False),
+                               (("strategy", "rollingUpdate", "maxUnavailable"), "25%", False)],
+        "apps/v1:StatefulSet": [(("replicas",), 1, False), (("revisionHistoryLimit",), 10, False),
+                                (("podManagementPolicy",), "OrderedReady", Z), (("updateStrategy", "type"), "RollingUpdate", Z),
+                                (("updateStrategy", "rollingUpdate", "partition"), 0, False),
+                                (("updateStrategy", "rollingUpdate", "maxUnavailable"), 1, False),
+                                (("persistentVolumeClaimRetentionPolicy", "whenDeleted"), "Retain", Z),
+                                (("persistentVolumeClaimRetentionPolicy", "whenScaled"), "Retain", Z),
+                                (("volumeClaimTemplates", "[]", "apiVersion"), "v1", Z),
+                                (("volumeClaimTemplates", "[]", "kind"), "PersistentVolumeClaim", Z),
+                                (("volumeClaimTemplates", "[]", "spec", "volumeMode"), "Filesystem", False),
+                                (("volumeClaimTemplates", "[]", "status", "phase"), "Pending", Z)],
+        "apps/v1:DaemonSet": [(("revisionHistoryLimit",), 10, False), (("updateStrategy", "type"), "RollingUpdate", Z),
+                              (("updateStrategy", "rollingUpdate", "maxUnavailable"), 1, False),
+                              (("updateStrategy", "rollingUpdate", "maxSurge"), 0, False)],
+        "batch/v1:CronJob": [(("concurrencyPolicy",), "Allow", Z), (("suspend",), False, False),
+                             (("successfulJobsHistoryLimit",), 3, False), (("failedJobsHistoryLimit",), 1, False)],
+        "batch/v1:Job": [(("backoffLimit",), 6, False), (("completions",), 1, False), (("parallelism",), 1, False),
+                         (("completionMode",), "NonIndexed", False), (("suspend",), False, False),
+                         (("manualSelector",), False, False), (("podReplacementPolicy",), "TerminatingOrFailed", False)],
+        "v1:Service": [(("type",), "ClusterIP", Z), (("sessionAffinity",), "None", Z),
+                       (("internalTrafficPolicy",), "Cluster", False), (("ports", "[]", "protocol"), "TCP", Z),
+                       (("ports", "[]", "targetPort"), lambda port: port.get("port"), Z)],
+        "apiextensions.k8s.io/v1:CustomResourceDefinition": [(("conversion", "strategy"), "None", Z)],
     }
     for kind, fields in workload.items():
-        rules += [Rule("server-default", {kind}, ("spec",) + path, value) for path, value in fields]
-    rules.append(Rule("server-default", {"v1:Secret"}, ("type",), "Opaque"))
+        rules += [Rule("server-default", {kind}, ("spec",) + path, value, None, zero) for path, value, zero in fields]
+    # clusterIPs mirrors a rendered clusterIP such as None. An allocated address is service-allocation.
+    rules.append(Rule("server-default", {"v1:Service"}, ("spec", "clusterIPs"), lambda spec: [spec.get("clusterIP")],
+                      lambda ctx: at(ctx["render"], ("spec", "clusterIP")) is not ABSENT))
+    rules.append(Rule("server-default", {"v1:Secret"}, ("type",), "Opaque", None, Z))
     bindings = {"rbac.authorization.k8s.io/v1:RoleBinding", "rbac.authorization.k8s.io/v1:ClusterRoleBinding"}
-    rules.append(Rule("server-default", bindings, ("subjects", "[]", "apiGroup"), _subject_group))
+    rules.append(Rule("server-default", bindings, ("subjects", "[]", "apiGroup"), _subject_group, None, Z))
     webhooks = {"admissionregistration.k8s.io/v1:MutatingWebhookConfiguration",
                 "admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration"}
     for path, value in ((("failurePolicy",), "Fail"), (("matchPolicy",), "Equivalent"), (("namespaceSelector",), {}),
@@ -187,6 +213,22 @@ RULES = tuple(_server_defaults()) + (
          ANY, _companion),
 )
 
+
+def _quantity_paths():
+    paths = []
+    for kind, prefix in POD_PREFIXES.items():
+        for field in ("containers", "initContainers"):
+            paths += [({kind}, prefix + (field, "[]", "resources", group, "*")) for group in ("limits", "requests")]
+        paths += [({kind}, prefix + ("resources", group, "*")) for group in ("limits", "requests")]
+        paths.append(({kind}, prefix + ("volumes", "[]", "emptyDir", "sizeLimit")))
+    paths += [({"apps/v1:StatefulSet"}, ("spec", "volumeClaimTemplates", "[]", "spec", "resources", group, "*"))
+              for group in ("limits", "requests")]
+    paths += [({"v1:PersistentVolumeClaim"}, ("spec", "resources", group, "*")) for group in ("limits", "requests")]
+    return tuple(paths)
+
+
+# The built-in fields that hold a resource quantity, which the API server stores in canonical form.
+QUANTITY_PATHS = _quantity_paths()
 QUANTITY = re.compile(r"([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))([eE][+-]?[0-9]+|[KMGTPE]i|[numkMGTPE]?)")
 SUFFIX = {"": 1, "n": decimal.Decimal("1e-9"), "u": decimal.Decimal("1e-6"), "m": decimal.Decimal("1e-3"),
           "k": 10 ** 3, "M": 10 ** 6, "G": 10 ** 9, "T": 10 ** 12, "P": 10 ** 15, "E": 10 ** 18,
@@ -195,13 +237,13 @@ SUFFIX = {"": 1, "n": decimal.Decimal("1e-9"), "u": decimal.Decimal("1e-6"), "m"
 
 def quantity(value):
     """The value of a Kubernetes quantity, or None when it is not one."""
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return None
     match = QUANTITY.fullmatch(str(value))
     if not match:
         return None
     number, suffix = decimal.Decimal(match[1]), match[2]
-    if suffix[:1] in ("e", "E"):
+    if re.fullmatch(r"[eE][+-]?[0-9]+", suffix):
         return number.scaleb(int(suffix[1:]))
     return number * SUFFIX[suffix]
 
@@ -245,10 +287,29 @@ def matches(pattern, path):
         for p, k in zip(pattern, path))
 
 
+def tail(patterns, path):
+    return any(len(path) >= len(p) and matches(p, path[-len(p):]) for p in patterns)
+
+
 def same(a, b):
     if a is ABSENT or b is ABSENT:
         return a is b
     return canonical(a) == canonical(b)
+
+
+def builtin_api(api):
+    """Built-in API groups: core, a group without a dot (apps, batch, policy) or a *.k8s.io group."""
+    group = api.rpartition("/")[0]
+    return not group or "." not in group or group.endswith(".k8s.io")
+
+
+def omitted(path, render, builtin):
+    """Whether the API server omits this rendered value, so that an absent live field equals it."""
+    if not (builtin or path[:1] == ("metadata",)) or (len(path) >= 2 and path[-2] in MAP_FIELDS):
+        return False  # a custom resource keeps what it is given; a map keeps every entry
+    if isinstance(render, (dict, list)):
+        return not render
+    return not isinstance(render, (dict, list)) and not render and tail(OMITTED_ZERO, path)
 
 
 def differences(render, live, builtin, path=()):
@@ -265,10 +326,21 @@ def differences(render, live, builtin, path=()):
     elif isinstance(render, list) and isinstance(live, list) and len(render) == len(live):
         for index, (r, v) in enumerate(zip(render, live)):
             yield from differences(r, v, builtin, path + (index,))
-    elif live is ABSENT and (builtin or path[:1] == ("metadata",)) and render is not ABSENT and not render:
-        return  # a built-in type, and object metadata, omit an empty or zero optional field
+    elif live is ABSENT and render is not ABSENT and omitted(path, render, builtin):
+        return
     elif render is ABSENT or live is ABSENT or not same(render, live):
         yield path, render, live
+
+
+def crd_scopes(rendered):
+    """(apiVersion, kind) to namespaced, for every version of every rendered CRD."""
+    scopes = {}
+    for _, obj in rendered:
+        if obj.get("kind") == "CustomResourceDefinition" and obj.get("apiVersion") == "apiextensions.k8s.io/v1":
+            spec = obj["spec"]
+            for version in spec["versions"]:
+                scopes[(spec["group"] + "/" + version["name"], spec["names"]["kind"])] = spec["scope"] == "Namespaced"
+    return scopes
 
 
 def identity(release, obj, namespaced):
@@ -330,11 +402,11 @@ def _schemas(items):
     return schemas
 
 
-def _schema_default(schema, path):
+def _schema_node(schema, path):
     node = schema
     for key in path:
         if not isinstance(node, dict):
-            return ABSENT
+            return None
         if isinstance(key, int):
             node = node.get("items")
         elif key in node.get("properties", {}):
@@ -342,8 +414,60 @@ def _schema_default(schema, path):
         elif isinstance(node.get("additionalProperties"), dict):
             node = node["additionalProperties"]
         else:
-            return ABSENT
-    return node.get("default", ABSENT) if isinstance(node, dict) else ABSENT
+            return None
+    return node if isinstance(node, dict) else None
+
+
+def _schema_default(schema, path):
+    node = _schema_node(schema, path)
+    return node.get("default", ABSENT) if node else ABSENT
+
+
+def _defaulted(schema, render, path):
+    """The API server applies a schema default only under a parent that exists or is itself defaulted."""
+    parent = path[:-1]
+    if not parent or at(render, parent) is not ABSENT:
+        return True
+    if isinstance(parent[-1], int):
+        return False
+    return _schema_default(schema, parent) is not ABSENT and _defaulted(schema, render, parent)
+
+
+def _merge(base, extra):
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+    return base
+
+
+def grafana_uses_lookup(root=ROOT):
+    """Whether the checkout leaves the Grafana admin password to the chart's lookup of the live Secret.
+
+    The offline render sets a public fixture password, which hides the checkout's own
+    choice. Read the release's values: anything that may set the password, or that
+    this cannot read (a template, set or secrets), counts as an explicit password.
+    """
+    state = yaml.safe_load((root / "helmfile.yaml").read_text())
+    found = [r for r in state.get("releases", []) if (r.get("namespace"), r.get("name")) == ("default", "prometheus")]
+    if len(found) != 1 or any(found[0].get(key) for key in ("set", "setString", "secrets", "valuesTemplate")):
+        return False
+    values = {}
+    for entry in found[0].get("values", []):
+        if isinstance(entry, str):
+            if not entry.endswith((".yaml", ".yml")):
+                return False
+            entry = yaml.safe_load((root / entry).read_text()) or {}
+        if not isinstance(entry, dict):
+            return False
+        _merge(values, entry)
+    grafana = values.get("grafana") or {}
+    env = grafana.get("env") or {}
+    return not (grafana.get("enabled") is False or grafana.get("adminPassword")
+                or (grafana.get("admin") or {}).get("existingSecret")
+                or any(key in env for key in ("GF_SECURITY_ADMIN_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD__FILE",
+                                              "GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION")))
 
 
 def grafana_checksum(data, password, quoted):
@@ -354,6 +478,8 @@ def grafana_checksum(data, password, quoted):
 
 
 def _grafana(ctx, path, render, live):
+    if not ctx["grafana_lookup"]:
+        return False  # the checkout chooses the password; the fixture password proves nothing
     if ctx["identity"] == GRAFANA_SECRET and path == ("data", "admin-password"):
         return isinstance(render, str) and isinstance(live, str) and bool(live)
     if ctx["identity"] != GRAFANA_DEPLOYMENT or path != GRAFANA_CHECKSUM:
@@ -371,19 +497,32 @@ def _grafana(ctx, path, render, live):
             and live in {grafana_checksum(data, live_data["admin-password"], quoted) for quoted in (False, True)})
 
 
+def _allocated(ctx, path, live):
+    """An address or family the API server allocated. It never allocates a headless None."""
+    if path not in ALLOCATION:
+        return False
+    if path == ("spec", "clusterIP"):
+        return isinstance(live, str) and live not in ("", "None")
+    if path == ("spec", "clusterIPs"):
+        # The first entry is always the clusterIP itself.
+        return (isinstance(live, list) and bool(live) and live[0] == at(ctx["normalized"], ("spec", "clusterIP"))
+                and all(isinstance(ip, str) and ip not in ("", "None") for ip in live))
+    return True
+
+
 def explain(ctx, path, render, live):
     """The reason code that explains one leaf difference, or None."""
     kind = ctx["kind"]
     if _grafana(ctx, path, render, live):
         return "grafana-admin-password"
-    # A built-in type treats a zero value (such as targetPort: 0) as unset and defaults it.
-    zero = ctx["builtin"] and render is not ABSENT and not render and not isinstance(render, bool)
+    # A rendered zero counts as unset only for a rule that says the API server treats it so.
+    zero = (ctx["builtin"] and render is not ABSENT and not isinstance(render, (bool, dict, list)) and not render)
     if (render is ABSENT or zero) and live is not ABSENT:
-        if kind == "v1:Service" and path in ALLOCATION and render is ABSENT:
+        if kind == "v1:Service" and render is ABSENT and _allocated(ctx, path, live):
             return "service-allocation"
         for rule in RULES:
             if ((rule.kinds is None or kind in rule.kinds) and matches(rule.pattern, path)
-                    and (rule.where is None or rule.where(ctx))):
+                    and (render is ABSENT or rule.zero) and (rule.where is None or rule.where(ctx))):
                 if rule.value is ANY:
                     if render is ABSENT and isinstance(live, str):
                         return rule.reason
@@ -392,14 +531,14 @@ def explain(ctx, path, render, live):
                 if same(expected, live):
                     return rule.reason
         schema = ctx["schemas"].get((ctx["api"], ctx["kind_name"]))
-        if schema is not None and path[0] != "metadata":
+        if render is ABSENT and not ctx["builtin"] and schema is not None and path[0] != "metadata":
             default = _schema_default(schema, path)
-            if default is not ABSENT and same(default, live):
+            if default is not ABSENT and same(default, live) and _defaulted(schema, ctx["render"], path):
                 return "crd-schema-default"
-    if (ctx["builtin"] and render is not ABSENT and live is not ABSENT and len(path) >= 2
-            and (path[-2] in ("limits", "requests") or path[-1] in ("sizeLimit", "storage"))):
+    if (ctx["builtin"] and render is not ABSENT and isinstance(live, str)
+            and any(kind in kinds and matches(pattern, path) for kinds, pattern in QUANTITY_PATHS)):
         a, b = quantity(render), quantity(live)
-        if a is not None and a == b and isinstance(live, str):
+        if a is not None and a == b:
             return "server-quantity"
     return None
 
@@ -428,13 +567,32 @@ def _ownership(ctx, render, live):
     return reasons, unexplained
 
 
-def field(kind, path):
-    if kind == "v1:Secret" and path and path[0] in ("data", "stringData"):
-        path = path[:1]  # never name a Secret key
-    return "".join(f"[{p}]" if isinstance(p, int) else ("." if i else "") + p for i, p in enumerate(path))
+def _map_key(ctx, prefix, key):
+    """Whether `key` under `prefix` is a map key (named by data), not a fixed field name."""
+    if prefix and prefix[-1] in MAP_FIELDS:
+        return True
+    if ctx["builtin"] or prefix[:1] == ("metadata",):
+        return False
+    node = _schema_node(ctx["schemas"].get((ctx["api"], ctx["kind_name"])), prefix)
+    return not (node and key in node.get("properties", {}))  # unknown counts as a map key
 
 
-def classify(key, items, live, schemas):
+def field(ctx, path):
+    """A printable field path: no Secret or ConfigMap key, and no map key that only the live object has."""
+    if ctx["kind"] in ("v1:Secret", "v1:ConfigMap") and path[:1] in (("data",), ("binaryData",), ("stringData",)):
+        path = path[:1]
+    parts, node = [], ctx["render"]
+    for index, key in enumerate(path):
+        if (isinstance(key, str) and key not in KNOWN_KEYS and not (isinstance(node, dict) and key in node)
+                and _map_key(ctx, path[:index], key)):
+            parts.append(LIVE_ONLY)
+            break
+        parts.append(key)
+        node = at(node, (key,)) if node is not ABSENT else ABSENT
+    return "".join(f"[{p}]" if isinstance(p, int) else ("." if i else "") + p for i, p in enumerate(parts))
+
+
+def classify(key, items, live, schemas, grafana_lookup=False):
     release, raw, normalized = items[key]
     api, kind_name = raw["apiVersion"], raw["kind"]
     entry = {"identity": key, "release": release, "renderSHA256": digest(canonical(normalized)),
@@ -455,15 +613,15 @@ def classify(key, items, live, schemas):
             {"uid": uid, "clusterIP": spec.get("clusterIP"), "clusterIPs": spec.get("clusterIPs")}))
     render, current = copy.deepcopy(normalized), normalize_live(obj)
     ctx = {"identity": key, "release": release, "raw": raw, "api": api, "kind_name": kind_name,
-           "kind": api + ":" + kind_name, "builtin": (api, kind_name) not in schemas, "schemas": schemas,
-           "items": items, "live": live, "normalized": current}
+           "kind": api + ":" + kind_name, "builtin": builtin_api(api), "schemas": schemas, "items": items,
+           "live": live, "normalized": current, "render": render, "grafana_lookup": grafana_lookup}
     reasons, unexplained = _ownership(ctx, render, current)
     for path, r, v in differences(render, current, ctx["builtin"]):
         reason = explain(ctx, path, r, v)
         if reason:
             reasons.add(reason)
         else:
-            unexplained.append(field(ctx["kind"], path))
+            unexplained.append(field(ctx, path))
     entry["reasons"] = sorted(reasons)
     if unexplained:
         entry.update(unexplainedFields=sorted(set(unexplained)), **{"class": "unexplained"})
@@ -472,10 +630,13 @@ def classify(key, items, live, schemas):
     return entry
 
 
-def compare(items, live):
-    """Classify each planned identity against `live`, a map from identity to object or None."""
-    schemas = _schemas(items)
-    entries = [classify(key, items, live, schemas) for key in sorted(items)]
+def compare(items, live, grafana_lookup=False):
+    """Classify each planned identity against `live`, a map from identity to object or None.
+
+    `grafana_lookup` is grafana_uses_lookup() for the checkout that rendered `items`.
+    """
+    schemas = {k: v for k, v in _schemas(items).items() if not builtin_api(k[0])}
+    entries = [classify(key, items, live, schemas, grafana_lookup) for key in sorted(items)]
     summary = {name: sum(e["class"] == name for e in entries) for name in CLASSES}
     summary["total"] = len(entries)
     return {"objects": entries, "summary": summary}
@@ -512,42 +673,68 @@ def render_objects(root, temp, images):
     return rendered
 
 
+def read_live(get, rendered):
+    """Plan the render against server discovery and read each identity with a named GET.
+
+    A kind whose CRD is absent from the cluster takes its scope from the rendered CRD;
+    its objects are missing and are not read. Ambiguous discovery stops the report.
+    """
+    routes, _ = discover(get)
+    scopes = crd_scopes(rendered)
+
+    def namespaced(api, kind):
+        if (api, kind) in routes:
+            route = routes[(api, kind)]
+            require(route, "Ambiguous rendered kind")
+            return route[2]
+        require((api, kind) in scopes, "Unknown rendered kind")
+        return scopes[(api, kind)]
+
+    items = plan(rendered, namespaced)
+    live = {key: get(item_path(key, routes)) if routes.get(tuple(key.split(":")[:2])) else None
+            for key in sorted(items)}
+    return items, live
+
+
 def report(kubeconfig, context, root=ROOT, resolve_image=registry_image, open_reader=reader):
     revision = pr_render_diff.revision(root)
+    lookup = grafana_uses_lookup(root)
     with open_reader(kubeconfig, context) as get:
         images = live_images(get, resolve_image)
     with tempfile.TemporaryDirectory(prefix="demo-live-drift-") as staging:
         rendered = render_objects(root, Path(staging) / "render", images)
     with open_reader(kubeconfig, context) as get:
-        routes, _ = discover(get)
-
-        def namespaced(api, kind):
-            route = routes.get((api, kind))
-            require(route, "Unknown or ambiguous rendered kind")
-            return route[2]
-
-        items = plan(rendered, namespaced)
-        check_scope(items)
-        live = {key: get(item_path(key, routes)) for key in sorted(items)}
+        items, live = read_live(get, rendered)
+    check_scope(items)
     require(pr_render_diff.revision(root) == revision, "Checkout changed while reporting")
-    result = compare(items, live)
+    result = compare(items, live, lookup)
     result["renderInputs"] = {"revision": revision, "imagesSHA256": digest(canonical(images)),
                               "kubernetesTarget": " ".join(TARGET)}
     return result
 
 
-def main(argv=None):
+def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--kubeconfig", required=True)
     parser.add_argument("--context", required=True)
+    parser.add_argument("--output", type=Path, help="write the report to this file, outside the repository checkout")
     args = parser.parse_args(argv)
+    if args.output:
+        target = args.output.expanduser().resolve()
+        checkout = root.resolve()
+        if target == checkout or checkout in target.parents:
+            # An untracked file in the checkout makes the next report refuse the checkout.
+            parser.error("--output must be outside the repository checkout")
     try:
-        result = report(args.kubeconfig, args.context)
-    except (ValueError, KeyError, IndexError, TypeError, AttributeError, OSError, ArithmeticError,
-            http.client.HTTPException, subprocess.SubprocessError, yaml.YAMLError) as error:
+        result = report(args.kubeconfig, args.context, root)
+        text = json.dumps(result, indent=1, sort_keys=True) + "\n"
+        if args.output:
+            args.output.expanduser().write_text(text)
+    except Exception as error:  # noqa: BLE001
         # Never echo exception data. It can come from stored objects, Secrets or API error bodies.
         parser.exit(2, "Live drift report failed. Nothing was printed (" + type(error).__name__ + ").\n")
-    print(json.dumps(result, indent=1, sort_keys=True))
+    if not args.output:
+        print(text, end="")
     summary = result["summary"]
     return 1 if summary["unexplained"] or summary["missing"] else 0
 

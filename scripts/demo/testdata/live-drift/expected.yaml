@@ -55,7 +55,7 @@ objects:
     - server-default
     - server-quantity
     unexplainedFields:
-    - spec.selector.matchLabels.extra
+    - spec.selector.matchLabels.<live-only>
   apps/v1:Deployment:otel-demo:frontend:
     class: unexplained
     reasons:
@@ -93,7 +93,7 @@ objects:
     reasons:
     - helm-ownership
     unexplainedFields:
-    - data.grafana.ini
+    - data
   v1:Secret:default:alertmanager-prometheus-kube-prometheus-alertmanager:
     class: unexplained
     reasons:
