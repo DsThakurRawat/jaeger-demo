@@ -59,6 +59,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#145](https://github.com/jaegertracing/jaeger-demo/pull/145),
   fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
 
+- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
+  pulls each repository chart through the existing SHA-256 check, requires its
+  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
+  `.helmfile-locked.yaml` with local archive paths and no repositories;
+  `make validate` renders from it. A changed archive is refused and deleted.
+  ([#146](https://github.com/jaegertracing/jaeger-demo/pull/146),
+  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
+
 ## 2026-11-24
 
 ### Added

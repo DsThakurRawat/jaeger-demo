@@ -96,7 +96,13 @@ deployment.
   this lock: `scripts/demo/chart_archives.py` pulls each chart at
   its pinned version from the publisher and installs it only when the archive's
   SHA-256 matches, and `scripts/demo/jaeger-chart.sh` checks the Jaeger chart's
-  built dependencies against `jaegerDependencies`. The update script never changes
+  built dependencies against `jaegerDependencies`. Helmfile enforces the lock too:
+  `python3 scripts/demo/chart_archives.py state <dir>` pulls each repository chart of
+  `helmfile.yaml` through the same check and writes the ignored
+  `.helmfile-locked.yaml`, whose `chart:` fields are the verified local archives and
+  which has no `repositories:`. It also requires each release's `version` to equal
+  its `deploy-all.sh` pin and lock entry. `make validate` renders from that state.
+  The update script never changes
   `jaegerDependencies`; maintain those entries by hand when the Jaeger chart
   commit changes its `Chart.lock`.
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
