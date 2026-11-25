@@ -36,6 +36,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
   fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
 
+### Changed
+
+- The owner decided to keep the community ingress-nginx controller in place, with no
+  replacement planned in this migration. This is an accepted risk for a public demo
+  whose data is disposable and which holds no credentials behind its routes. The
+  decision is revisited if an exploitable ingress-nginx CVE is published or when the
+  cluster is rebuilt.
+  ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
+  fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
 ## 2026-11-24
 
 ### Added
