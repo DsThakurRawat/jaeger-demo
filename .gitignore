@@ -3,6 +3,7 @@
 
 .tools/
 .helmfile-locked.yaml
+deploy-record.json
 __pycache__/
 *.pyc
 examples/oci/helm-charts/
