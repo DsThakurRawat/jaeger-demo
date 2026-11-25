@@ -11,9 +11,11 @@ lookup behind the live image read, the public health check and the trace check a
 they need public registries, a container runtime and the public demo. It proves the acceptance
 cases of #73: a healthy no-op creates no revision, a failed release with an empty diff is retried
 with sync, a pending release blocks before any write, failed OCI verification stops before OTel,
-and an incompatible image fails before the first write. A live-mode pass then reads the images of
-fixture Jaeger and HotROD Deployments and runs the production rollout, storage and Certificate
-checks.
+and an incompatible image fails before the first write. Adoption is shown to be a no-op apart from
+ownership: a changed generator pod template refuses a first companion install, and a changed
+application value refuses a live-mode apply. A live-mode pass then reads the images of fixture
+Jaeger and HotROD Deployments and runs the production rollout, running image, storage and
+Certificate checks.
 """
 
 import argparse
@@ -197,7 +199,9 @@ class Checks:
     def __init__(self, helm):
         self.helm, self.calls, self.fail = helm, [], set()
 
-    def prepare(self, stacks):
+    def prepare(self, stacks, images=None):
+        # The synthetic Jaeger releases run no workload, so the images they would run are not checked
+        # here; the live-mode pass runs the production check of the running images.
         self.calls.append(("prepare", tuple(sorted(stacks))))
 
     def verify(self, stack):
@@ -403,8 +407,20 @@ def exercise(cfg, context):
     # that adopts the existing objects. Adoption changes no pod template, so no generator restarts.
     for ns in release_phases.NAMESPACES:
         seed(ns)
+        if ns == "jaeger":
+            # The install would replace a changed generator pod template: the drift gate refuses it first.
+            generator = ctl + ["-n", ns, "set", "env", "deployment/trace-generator"]
+            subprocess.run(generator + ["REHEARSAL_DRIFT=1"], check=True, stdout=subprocess.DEVNULL)
+            gate = refused("beyond its ownership metadata (companion-drift)", HELMFILE_OPERATION="install-companion",
+                           COMPANION_NAMESPACE=ns)["adoptionGate"]
+            assert {"identity": "apps/v1:Deployment:jaeger:trace-generator", "class": "unexplained"} in gate["objects"], gate
+            assert not writes() and revisions()["jaeger/demo-resources"] is None
+            subprocess.run(generator + ["REHEARSAL_DRIFT-"], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(ctl + ["-n", ns, "rollout", "status", "deployment/trace-generator", "--timeout=5m"],
+                           check=True, stdout=subprocess.DEVNULL)
         adopted = uids(ns)
         record = reconcile(HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
+        assert "adoptionGate" not in record, record.get("adoptionGate")
         entry, = record["releases"]
         assert (entry["id"], entry["method"], entry["statusBefore"], entry["revisionAfter"], entry["statusAfter"]) == \
             (ns + "/demo-resources", "install", "absent", 1, "deployed"), entry
@@ -452,7 +468,7 @@ def exercise(cfg, context):
                                              "--values", str(stored), "--reset-values", "--detailed-exitcode"],
                                stdout=subprocess.DEVNULL)
         assert empty.returncode == 0, f"{key} must have an empty rendered diff"
-    planned = helmfile_deploy.diff(dict(base), root=root, run=run)
+    planned = helmfile_deploy.diff(dict(base), root=root, run=run, verify_charts=charts)
     assert planned == {row["id"]: "changes" if row["id"] in ("default/prometheus", "jaeger/jaeger") else "no changes"
                        for row in helmfile_deploy.release_rows(root)}, planned
     assert not writes() and not upgrades(), "diff wrote to the cluster"
@@ -517,9 +533,13 @@ def exercise(cfg, context):
         assert "rejected" in str(error)
     else:
         raise AssertionError("Incompatible image accepted")
-    record = refused("No validated image selection")
+    # The failed gate names the candidate and the rejected stack, and reconcile keeps that in its record.
+    gate = json.loads((root / helmfile_deploy.WORK / helmfile_deploy.GATE).read_text())
+    assert gate["rejectedStack"] == "oci" and gate["images"]["jaeger"]["reference"].endswith("3" * 40 + "@" + gate[
+        "images"]["jaeger"]["digest"]), gate
+    record = refused("gate rejected the candidate images")
     assert record["outcome"] == "refused" and [c[0] for c in commands] == ["git"], commands
-    assert helm_log.read_text() == "" and revisions() == before
+    assert record["imageGate"] == gate and helm_log.read_text() == "" and revisions() == before
 
     # 6. Live mode, as in adoption: the images come from running Deployments, and the production
     # rollout, storage and Certificate checks run as the deployer. Only health and the trace are stubs.
@@ -549,11 +569,39 @@ def exercise(cfg, context):
     (root / "helmfile/images.yaml").write_text("mode: live\n")
     production = helmfile_deploy.ProductionChecks(root, run, health=lambda stack: {"stack": stack, "stub": True},
                                                   trace=lambda *versions: None, sleep=lambda s: None)
-    commands.clear()
-    record = helmfile_deploy.reconcile(dict(base), root=root, run=run, checks=production, verify_charts=charts,
-                                       live_images=lambda r: helmfile_deploy.read_live_images(r, resolve_image=resolve_image))
+
+    def live_apply():
+        commands.clear()
+        helm_log.write_text("")
+        return helmfile_deploy.reconcile(
+            dict(base), root=root, run=run, checks=production, verify_charts=charts,
+            live_images=lambda r: helmfile_deploy.read_live_images(r, resolve_image=resolve_image))
+
+    # Adoption applies the live values as they are. The Jaeger releases still hold the digest-mode image
+    # values of case 4, so a live-mode apply would change them: the read-only diff refuses it first.
+    held = revisions()
+    try:
+        live_apply()
+    except ValueError as error:
+        assert "beyond its ownership metadata (live-diff)" in str(error), str(error)
+    else:
+        raise AssertionError("A live-mode apply that changes an application value was accepted")
+    record = json.loads((root / helmfile_deploy.RECORD).read_text())
+    assert record["adoptionGate"] == {"gate": "live-diff", "release": "default/jaeger", "result": "changes"}, record
+    assert not writes() and not upgrades() and revisions() == held
+    # As production before adoption: the script era deployed exactly the live references.
+    subprocess.run(seed_sync[:4] + [str(root / helmfile_deploy.WORK / helmfile_deploy.LIVE_VALUES)] + seed_sync[5:]
+                   + ["-l", "component=jaeger", "sync"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+    held = revisions()
+    record = live_apply()
     assert (record["outcome"], record["imageMode"], record["compatibility"], record["verifiedStacks"]) == \
         ("succeeded", "live", helmfile_deploy.NOT_REVALIDATED, ["oci", "otel"]), record
+    assert revisions() == held and not upgrades() and not any(r["changed"] for r in record["releases"])
+    # The running workloads still run exactly the live references, on their registry digests.
+    assert all(record["checks"][stack]["runningImages"] == {
+        name: f"docker.io/{LIVE_REPOS[workload]}:{LIVE_TAG}" for name, workload in (("jaeger", "jaeger"),
+                                                                                  ("hotrod", "jaeger-hotrod"))}
+               for stack in ("oci", "otel")), record["checks"]
     for stack in ("oci", "otel"):
         for name, workload in (("jaeger", "jaeger"), ("hotrod", "jaeger-hotrod")):
             image = record["images"][stack][name]
@@ -584,7 +632,9 @@ def exercise(cfg, context):
                       "ociFailureStoppedBeforeOTel": True, "selectorWithNeedsAppliedAlone": True,
                       "incompatibleImageStoppedBeforeClusterAccess": True, "fingerprintsPatchedOnlyWhenVerified": True,
                       "missingOrUnadoptedCompanionObjectRefused": True, "lookupSecretStableOnNoOp": True,
-                      "liveImagesReadAsDeployer": True, "productionChecksOnKind": True}))
+                      "liveImagesReadAsDeployer": True, "productionChecksOnKind": True,
+                      "changedGeneratorTemplateRefusedInstall": True, "changedValueRefusedLiveApply": True,
+                      "liveApplyNoOp": True, "runningImagesMatchedLiveReferences": True}))
 
 
 if __name__ == "__main__":
