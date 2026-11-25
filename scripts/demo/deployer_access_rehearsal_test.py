@@ -162,6 +162,21 @@ class ProductionPathTests(unittest.TestCase):
                          re.findall(r"HELM_PROM_CMD=\(([^)]*)\)", script))
         self.assertNotIn("--wait=", script)
 
+    def test_the_diff_uses_the_monitoring_words_and_the_helmfile_apply_flags(self):
+        words = rehearsal.monitoring_command((ROOT / "examples/oci/deploy-all.sh").read_text())
+        self.assertEqual(["helm", "diff", "upgrade", "prometheus", "/charts/kps.tgz",
+                          "--set", "crds.upgradeJob.enabled=true", "--set", "crds.upgradeJob.forceConflicts=true",
+                          "-f", "monitoring-values.yaml", "--namespace", "default", "--reset-values",
+                          "--allow-unreleased=false", "--suppress-secrets"],
+                         rehearsal.diff_command(words, Path("/charts/kps.tgz")))
+        # The flags are the ones the release phase rehearsal gives Helmfile apply.
+        phases = (ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
+        for flag in ("--allow-unreleased=false", '"--suppress-secrets"', '"--reset-values"'):
+            self.assertIn(flag, phases)
+        for broken in (["--timeout=20m0s", "prometheus", "$PROMETHEUS_STACK_CHART"], ["prometheus", "chart"]):
+            with self.subTest(broken=broken), self.assertRaisesRegex(ValueError, "Unexpected monitoring helm words"):
+                rehearsal.diff_command(broken, "/charts/kps.tgz")
+
     def test_monitoring_command_must_be_unique_and_complete(self):
         with self.assertRaisesRegex(ValueError, "one monitoring helm command"):
             rehearsal.monitoring_command("echo nothing\n")

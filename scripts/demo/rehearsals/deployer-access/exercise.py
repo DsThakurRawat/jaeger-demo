@@ -19,7 +19,10 @@ runs `helm upgrade --wait` with its hooks. The administrator moves the release
 back to the base by server-side apply, and the scheduled identity upgrades it
 again, so both ways Helm can have stored the production release are covered. The
 API audit log must show no request refused to that identity during either
-upgrade. A probe release shows that an upgrade fails without a rule it needs and
+upgrade. The same identity then runs the read-only commands of the Helmfile
+path on that release: `helm list -n` for each release namespace, `helm history
+--max 1` and `helm diff upgrade` with the Helmfile apply flags, again with no
+request refused in the audit log. A probe release shows that an upgrade fails without a rule it needs and
 succeeds once the rule is back. Last, Helm must stop that identity before it
 changes anything in kube-system. No production credential is used.
 """
@@ -44,6 +47,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import chart_archives
 import deployer_access
+import release_phases
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / "scripts/demo"
@@ -165,6 +169,23 @@ def monitoring_command(script):
     if words.count("prometheus") != 1 or words.count("$PROMETHEUS_STACK_CHART") != 1:
         raise ValueError("The monitoring helm command no longer names the prometheus release and chart")
     return words
+
+
+def diff_command(words, archive):
+    """`helm diff upgrade` of the monitoring release with its deploy-all.sh words, as Helmfile apply runs it.
+
+    The flags are the Helmfile path's: no install, reset values, Secret data hidden. helm-diff has no
+    --timeout, so that pair is dropped.
+    """
+    words = list(words)
+    if "--timeout" in words:
+        at = words.index("--timeout")
+        del words[at:at + 2]
+    if any(word.startswith("--timeout") for word in words) or words.count("$PROMETHEUS_STACK_CHART") != 1:
+        raise ValueError("Unexpected monitoring helm words for helm diff")
+    words = [str(archive) if word == "$PROMETHEUS_STACK_CHART" else word for word in words]
+    return ["helm", "diff", "upgrade", *words, "--namespace", "default", "--reset-values",
+            "--allow-unreleased=false", "--suppress-secrets"]
 
 
 def seed_inputs(root):
@@ -447,7 +468,28 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
     upgrades = [{"revision": revision, "by": by[revision], "applyMethod": methods[revision], "status": status}
                 for revision, status in revisions]
 
-    # 8. A probe release. Without the rule it needs the scheduled identity's upgrade fails, as
+    # 8. The read-only commands of the Helmfile path, as the scheduled identity on the release it just
+    # upgraded: the listing of each release namespace from release_phases.list_args, the status read by
+    # name, and helm-diff, whose Helm 4 render (helm template --dry-run=server --is-upgrade) runs the
+    # monitoring chart's lookup calls. The audit log must show no request refused meanwhile.
+    head_archive = archive if seed is head else ok(run(
+        [sys.executable, SCRIPTS / "chart_archives.py", "pull", "kube-prometheus-stack", head["version"], temp], admin))
+    reads = {}
+
+    def helmfile_reads():
+        for namespace in deployer_access.RELEASE_NAMESPACES:
+            listing = json.loads(ok(run(["helm", *release_phases.list_args(namespace)], configs["scheduled"])))
+            reads[namespace] = sorted(entry["name"] for entry in listing)
+        latest = json.loads(ok(run(["helm", "history", "prometheus", "-n", "default", "--max", "1", "-o", "json"],
+                                   configs["scheduled"])))
+        assert [entry["status"] for entry in latest] == ["deployed"], latest
+        ok(run(diff_command(head["words"], head_archive), configs["scheduled"], cwd=ROOT / OCI,
+               timeout=UPGRADE_SECONDS))
+
+    audited("helmfile-reads", helmfile_reads)
+    assert reads["default"] == ["prometheus"], reads
+
+    # 9. A probe release. Without the rule it needs the scheduled identity's upgrade fails, as
     # that user, before it changes anything; with the committed role the same upgrade succeeds.
     chart = temp / PROBE
     (chart / "templates").mkdir(parents=True)
@@ -470,7 +512,7 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
     assert history(PROBE) == [(1, "superseded"), (2, "deployed")], history(PROBE)
     control["withRule"] = {"revision": history(PROBE)[-1][0], "status": history(PROBE)[-1][1]}
 
-    # 9. Helm stops the scheduled identity before it changes anything in kube-system: its check of
+    # 10. Helm stops the scheduled identity before it changes anything in kube-system: its check of
     # whether each new object already exists is refused. Server dry runs, so a gap that let the
     # check through would still change nothing.
     before = {release: history(release) for release in ("prometheus", PROBE)}
@@ -495,7 +537,7 @@ def steps(source, context, baseline, temp, admin, base, run, ok):
                        "seed": {"from": "head" if reason else "base", "reason": reason,
                                 "chart": Path(archive).name},
                        "headChart": f"kube-prometheus-stack-{head['version']}.tgz", "revisions": upgrades},
-        "auditedRefusals": audit,
+        "helmfileReads": {"listed": reads, "diff": "prometheus"}, "auditedRefusals": audit,
         "upgradeWithoutRule": control, "refusedInKubeSystem": refused, "productionAccess": False,
     }
 
