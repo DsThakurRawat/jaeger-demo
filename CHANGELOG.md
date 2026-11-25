@@ -57,7 +57,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   history records for all ten releases. `deployer_access.py` gains a row for each Helmfile path command (`helm
   list -n`, `helm history`, `helm diff upgrade`, `helmfile apply`/`sync` and the
   first companion `helm install`) and denies a collection delete of release
-  records. The offline model finds no difference for either identity, so
+  records. Upgrades keep Helm 4's default `--server-side=auto`, and the model
+  covers releases stored with either apply method. The offline model finds no difference for either identity, so
   `ops/rbac/deployer.yaml` is unchanged. The `deployer-access` CI job also runs the
   read-only Helmfile path commands, `helm diff` included, as the scheduled fixture
   user with no refused request in the audit log.

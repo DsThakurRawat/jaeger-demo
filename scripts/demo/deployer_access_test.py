@@ -161,10 +161,48 @@ class DeployerAccessTests(unittest.TestCase):
         # helm-diff's requests were read from this release; another one must be read again.
         lock = json.loads((d.ROOT / "scripts/demo/helmfile-tools.lock.json").read_text())["tools"]
         self.assertIn("helm-diff " + lock["helm-diff"]["version"].lstrip("v"), d.HELMFILE_COMMANDS[2][1])
-        # helm-diff renders with --dry-run=server only under Helm 4; Helm 4 defaults to server-side apply.
+        # helm-diff renders with --dry-run=server only under Helm 4; Helm 4 upgrades default to --server-side=auto.
         self.assertTrue(lock["helm"]["version"].startswith("v4."), "review the rows for another Helm major")
         # Helm deletes revisions beyond historyMax, which is why an upgrade deletes Secrets.
         self.assertIn("historyMax: 10", (d.ROOT / "helmfile.yaml").read_text())
+
+    def test_upgrades_keep_the_stored_apply_method_and_both_methods_are_covered(self):
+        # Helm 4.3.2 upgrades default to --server-side=auto. Nothing on the Helmfile path overrides it
+        # for an upgrade; only the first companion install passes --server-side=true.
+        for path in ("helmfile.yaml", "helmfile-resources.yaml.gotmpl"):
+            text = (d.ROOT / path).read_text().lower()
+            self.assertNotIn("server-side", text)
+            self.assertNotIn("serverside", text)
+        phases = (d.ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
+        sync = phases[phases.index("sync = ["):phases.index("command = [", phases.index("sync = ["))]
+        self.assertNotIn("--server-side", sync)
+        flagged = [row[0] for row in d.HELMFILE_COMMANDS if "--server-side" in row[0]]
+        self.assertEqual(flagged, [d.HELMFILE_COMMANDS[4][0]])
+        self.assertIn("--server-side=true", flagged[0])
+        self.assertEqual(set(d.APPLY_METHODS), {"client-side", "server-side"})
+        # Every object a release holds can be upgraded with either stored method: it is read and
+        # patched, and in the release namespaces a new object can be created.
+        required = set(d.required("scheduled"))
+        records = json.loads(d.INVENTORY.read_text())["records"]
+        objects = [r for r in records if r["component"] not in ("history", "shared")]
+        self.assertTrue(objects)
+        for record in objects:
+            namespace = "" if record["scope"] == "cluster" else record["scope"]
+            for method, verbs in d.APPLY_METHODS.items():
+                for verb in verbs:
+                    if verb == "create" and namespace not in d.RELEASE_NAMESPACES:
+                        continue
+                    request = R(namespace, record["apiGroup"], record["resource"], verb,
+                                "" if verb in d.COLLECTION else record["name"])
+                    with self.subTest(method=method, request=request):
+                        self.assertIn(request, required)
+                        self.assertTrue(d.allowed("scheduled", request, ROLES))
+        # Without patch, an object of a client-side release could not be upgraded either way.
+        dropped = copy.deepcopy(ROLES)
+        for rule in dropped[d.DEPLOYER, "jaeger"]:
+            if rule["resources"] == ["configmaps", "serviceaccounts", "services"]:
+                rule["verbs"] = [verb for verb in rule["verbs"] if verb != "patch"]
+        self.assertIn(R("jaeger", "", "configmaps", "patch", "trace-script"), missing("scheduled", dropped))
 
     def test_check_reports_a_dropped_or_extra_helmfile_grant(self):
         def check_lines(identity, roles):

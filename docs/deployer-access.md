@@ -71,7 +71,7 @@ to both identities, because the scheduled identity runs the Helmfile engine once
 | `helm list -n <namespace> --max 0 -o json` | `release_phases.list_args` | list | Helm lists a namespace's release records by label, one namespace at a time |
 | `helm history <release> -n <namespace> --max 1 -o json` | the `read_status` callback of `release_phases.selected_statuses` | list | Reads one release's records when the listing omits it |
 | `helm diff upgrade --allow-unreleased=false --suppress-secrets` | `helmfile apply`, helm-diff 3.15.15 | list, get | Reads the stored manifest and hooks; its render runs the charts' `lookup` of a Secret |
-| `helmfile apply` or `sync` with `--install=false --reset-values --server-side=true` | the `reconcile` callback of `release_phases.run` | list, get, create, update, delete | Writes the new revision, marks the previous one superseded, reads a revision by name to roll back on failure, and deletes revisions beyond `historyMax` (10) |
+| `helmfile apply` or `sync` with `--install=false --reset-values` (Helm's default `--server-side=auto`) | the `reconcile` callback of `release_phases.run` | list, get, create, update, delete | Writes the new revision, marks the previous one superseded, reads a revision by name to roll back on failure, and deletes revisions beyond `historyMax` (10) |
 | `helm install demo-resources` with `--server-side=true --wait=legacy --create-namespace=false` | `release_phases.install_args` | list, create, update | Checks that the name is unused, writes revision 1 and records its status |
 
 What the rows rest on, from Helm 4.3.2 and helm-diff 3.15.15:
@@ -88,11 +88,18 @@ What the rows rest on, from Helm 4.3.2 and helm-diff 3.15.15:
   with a refusal; the `deployer-access` CI job runs `helm diff` on the monitoring
   release as the scheduled identity
   ([tested against a real API server](#tested-against-a-real-api-server)).
-- **Server-side apply.** With `--server-side=true` Helm creates and changes each
-  object with an apply patch. The API server authorizes that request as `patch`
-  and, when it creates the object, also as `create`. The object verbs from the
-  inventory include both in the release namespaces. Helm writes its release
-  records with plain create, update and delete; it never patches them.
+- **Apply method.** Neither `helmfile.yaml` nor the Helmfile path passes
+  `--server-side` to an upgrade, so Helm 4.3.2 uses its default `auto`: each
+  release keeps the apply method its last revision was stored with, and the
+  releases the scripts upgraded may hold either. Both read the live object first.
+  Client-side apply then changes an existing object with a strategic merge or merge
+  patch and creates a new one with a create request. Server-side apply sends an
+  apply patch, which the API server authorizes as `patch` and, when it creates the
+  object, also as `create`. `APPLY_METHODS` in `deployer_access.py` records this,
+  and the object verbs cover both methods: get and patch on every object, and
+  create in the release namespaces. Only the first companion install passes
+  `--server-side=true`, from `install_args()`. Helm writes its release records with
+  plain create, update and delete; it never patches them.
 - **First companion install.** Besides the records, Helm reads each object it
   would create, to refuse one that exists without this release's ownership, then
   applies it. Those are the object verbs of the companion's supplemental records.
