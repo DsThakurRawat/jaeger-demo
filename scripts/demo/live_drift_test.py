@@ -767,6 +767,51 @@ class ReviewRegressionTests(unittest.TestCase):
                                                       base + ".mode.default"])
         self.assertNotIn("S3cr3t", json.dumps(entry))
 
+    def test_live_only_volume_attribute_and_option_keys_are_never_printed(self):
+        volumes = [{"name": "v", "csi": {"driver": "d.example.test", "volumeAttributes": {"rendered": "a"}}},
+                   {"name": "f", "flexVolume": {"driver": "x/y", "options": {"rendered": "a"}}}]
+        render = deployment(pod={"volumes": volumes})
+        live = as_live(deployment(pod={"volumes": copy.deepcopy(volumes)}))
+        pod = live["spec"]["template"]["spec"]
+        pod["volumes"][0]["csi"]["volumeAttributes"]["bucketS3cr3t"] = "x"  # same list length, live-only keys
+        pod["volumes"][1]["flexVolume"]["options"]["tokenS3cr3t"] = "y"
+        entry = one("default/jaeger", render, live)
+        self.assertEqual(entry["unexplainedFields"], ["spec.template.spec.volumes[0].csi.volumeAttributes.<live-only>",
+                                                      "spec.template.spec.volumes[1].flexVolume.options.<live-only>"])
+        self.assertNotIn("S3cr3t", json.dumps(entry))
+
+    def test_an_empty_crd_schema_value_is_data_not_an_omitted_field(self):
+        schema = {"type": "object", "properties": {"spec": {"type": "object", "properties": {
+            "limits": {"type": "object", "default": {}},
+            "hosts": {"type": "array", "example": []},
+            "mode": {"type": "object", "enum": [{}]},
+            "default": {"type": "object", "properties": {}}}}}}
+        render = {"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+                  "metadata": {"name": "widgets.example.test"},
+                  "spec": {"group": "example.test", "scope": "Namespaced", "conversion": {"strategy": "None"},
+                           "names": {"kind": "Widget", "plural": "widgets"},
+                           "versions": [{"name": "v1", "served": True, "storage": True,
+                                         "schema": {"openAPIV3Schema": schema}}]}}
+        live = as_live(render, "default/prometheus")
+        del live["metadata"]["namespace"]
+        node = live["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+        # A property named `default` is a schema: the API server drops its empty `properties`.
+        del node["default"]["properties"]
+        self.assertEqual(one("default/prometheus", render, live, cluster=True)["class"], "explained")
+        del node["limits"]["default"]
+        del node["hosts"]["example"]
+        node["mode"]["enum"] = [None]
+        entry = one("default/prometheus", render, live, cluster=True)
+        base = "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties"
+        self.assertEqual(entry["unexplainedFields"], [base + ".hosts.example", base + ".limits.default",
+                                                      base + ".mode.enum[0]"])
+        self.assertTrue(d.schema_payload(("openAPIV3Schema", "properties", "x", "default")))
+        self.assertTrue(d.schema_payload(("openAPIV3Schema", "properties", "x", "enum", 0)))
+        self.assertFalse(d.schema_payload(("openAPIV3Schema", "properties", "x", "enum")))
+        self.assertFalse(d.schema_payload(("openAPIV3Schema", "properties", "default")))
+        self.assertFalse(d.schema_payload(("openAPIV3Schema", "properties", "default", "properties")))
+        self.assertFalse(d.schema_payload(("spec", "template", "default")))
+
     def test_a_missing_crd_makes_its_objects_missing_without_reading_them(self):
         rendered, _, live = fixture()
         crds = [obj for _, obj in rendered if obj["kind"] == "CustomResourceDefinition"]

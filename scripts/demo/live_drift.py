@@ -76,7 +76,8 @@ WEBHOOKS = {"admissionregistration.k8s.io/v1:MutatingWebhookConfiguration:-:prom
 # Map-typed fields of built-in kinds and object metadata. An entry under them is never
 # omitted as empty, and a key only the live object has is not printed.
 MAP_FIELDS = {"labels", "annotations", "data", "binaryData", "stringData", "nodeSelector", "matchLabels", "selector",
-              "limits", "requests", "capacity", "hard", "parameters"}
+              "limits", "requests", "capacity", "allocatable", "overhead", "hard", "parameters", "volumeAttributes",
+              "options"}
 # Map keys the report may name although only the live object has them: they are fixed in this file.
 KNOWN_KEYS = {"app.kubernetes.io/managed-by", "meta.helm.sh/release-name", "meta.helm.sh/release-namespace",
               "helm.sh/resource-policy", "kubectl.kubernetes.io/last-applied-configuration",
@@ -303,10 +304,33 @@ def builtin_api(api):
     return not group or "." not in group or group.endswith(".k8s.io")
 
 
+SCHEMA_CONTAINERS = {"properties", "patternProperties", "definitions", "dependencies"}
+
+
+def schema_payload(path):
+    """Whether `path` is inside a CRD schema's JSON value: a `default`, an `example` or an `enum` entry.
+
+    The API server keeps such a value as given, so an empty object or list there is data, not an
+    omitted field. A property that happens to be named `default` is a schema, not a value.
+    """
+    if "openAPIV3Schema" not in path:
+        return False
+    start = path.index("openAPIV3Schema")
+    for index in range(start + 1, len(path)):
+        key, parent = path[index], path[index - 1]
+        if parent in SCHEMA_CONTAINERS:
+            continue
+        if key in ("default", "example") or (key == "enum" and index < len(path) - 1):
+            return True
+    return False
+
+
 def omitted(path, render, builtin):
     """Whether the API server omits this rendered value, so that an absent live field equals it."""
     if not (builtin or path[:1] == ("metadata",)) or (len(path) >= 2 and path[-2] in MAP_FIELDS):
         return False  # a custom resource keeps what it is given; a map keeps every entry
+    if schema_payload(path):
+        return False  # a CRD schema default, example or enum value is kept even when empty
     if isinstance(render, (dict, list)):
         return not render
     return not isinstance(render, (dict, list)) and not render and tail(OMITTED_ZERO, path)
