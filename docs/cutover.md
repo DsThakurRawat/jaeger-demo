@@ -672,7 +672,7 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
      kubectl --namespace "$namespace" get certificates.cert-manager.io -o json |
        jq -r --arg namespace "$namespace" '.items[] | [$namespace, .metadata.name,
          ([.status.conditions[]? | select(.type == "Ready") | .status][0] // "Unknown")] | @tsv'
-   done | tee "$RECORD/certificates-before.tsv" | awk -F '\t' '$3 != "True" {bad = 1} END {exit bad || NR == 0}'
+   done | tee "$RECORD/certificates-before.tsv" | awk -F '\t' '{print} $3 != "True" {bad = 1} END {exit bad || NR == 0}'
    EOF
    ```
 
@@ -685,7 +685,7 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
      jq -r '.items[] | ["default", .metadata.name,
        ([.status.conditions[]? | select(.type == "Ready") | .status][0] // "Unknown")] | @tsv' |
      tee "$RECORD/certificates-default-before.tsv" |
-     awk -F '\t' '$3 != "True" {bad = 1} $2 == "demo-jaeger-tls" {found = 1} END {exit bad || !found}'
+     awk -F '\t' '{print} $3 != "True" {bad = 1} $2 == "demo-jaeger-tls" {found = 1} END {exit bad || !found}'
    EOF
    ```
 
