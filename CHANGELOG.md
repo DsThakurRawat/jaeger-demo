@@ -20,6 +20,18 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-25
+
+### Changed
+
+- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
+  pulls each repository chart through the existing SHA-256 check, requires its
+  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
+  `.helmfile-locked.yaml` with local archive paths and no repositories;
+  `make validate` renders from it. A changed archive is refused and deleted.
+  (PR link to be added,
+  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
+
 ## 2026-11-24
 
 ### Added
@@ -46,14 +58,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 
 ### Changed
-
-- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
-  pulls each repository chart through the existing SHA-256 check, requires its
-  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
-  `.helmfile-locked.yaml` with local archive paths and no repositories;
-  `make validate` renders from it. A changed archive is refused and deleted.
-  (PR link to be added,
-  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
 
 - `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
   owner and record that it is the retired community ingress-nginx, installed from

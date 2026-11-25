@@ -6,7 +6,9 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -168,7 +170,9 @@ class LockedStateTests(unittest.TestCase):
         self.dest = self.root / ".tools/chart-archives"
         self.dest.mkdir(parents=True)
         self.tampered = set()
-        names = {f"{name}-{chart_archives.pin(self.root, variable)}.tgz" for _, variable, name, _ in chart_archives.CHARTS}
+        self.calls = []
+        self.versions = {name: chart_archives.pin(self.root, variable) for _, variable, name, _ in chart_archives.CHARTS}
+        names = [f"{name}-{version}.tgz" for name, version in self.versions.items()]
         self.lock = {"charts": {n: sha(b"archive " + n.encode()) for n in names}, "jaegerDependencies": {}}
         self.write_lock()
 
@@ -176,6 +180,7 @@ class LockedStateTests(unittest.TestCase):
         (self.root / chart_archives.LOCK).write_text(json.dumps(self.lock))
 
     def run_helm(self, args, **kwargs):
+        self.calls.append(args)
         chart, version = args[2], args[args.index("--version") + 1]
         name = f"{chart}-{version}.tgz"
         body = b"tampered" if chart in self.tampered else b"archive " + name.encode()
@@ -185,10 +190,15 @@ class LockedStateTests(unittest.TestCase):
     def state(self):
         return chart_archives.locked_state(self.root, self.dest, run=self.run_helm)
 
+    def replace(self, relative, old, new):
+        path = self.root / relative
+        text = path.read_text()
+        self.assertEqual(1, text.count(old), f"{old!r} must occur exactly once in {relative}")
+        path.write_text(text.replace(old, new))
+
     def test_only_chart_fields_and_repositories_differ_from_helmfile(self):
         original = yaml.safe_load((self.root / "helmfile.yaml").read_text())
         derived = yaml.safe_load(self.state().read_text())
-        self.assertEqual((self.root / chart_archives.LOCKED_STATE).resolve(), self.state())
         self.assertNotIn("repositories", derived)
         self.assertEqual({k: v for k, v in original.items() if k not in ("repositories", "releases")},
                          {k: v for k, v in derived.items() if k != "releases"})
@@ -202,59 +212,119 @@ class LockedStateTests(unittest.TestCase):
                 continue
             locked += 1
             name = before["chart"].split("/")[1]
-            archive = self.root / after["chart"]
-            self.assertTrue(after["chart"].startswith("./") and after["chart"].endswith(f"/{name}-{before['version']}.tgz"))
-            self.assertEqual(b"archive " + archive.name.encode(), archive.read_bytes())
+            self.assertEqual(f"./.tools/chart-archives/{name}-{before['version']}.tgz", after["chart"])
+            self.assertEqual(b"archive " + (self.root / after["chart"]).name.encode(), (self.root / after["chart"]).read_bytes())
         self.assertEqual(4, locked)
+
+    def test_text_is_helmfile_with_only_chart_lines_and_repositories_changed(self):
+        before = (self.root / "helmfile.yaml").read_text().splitlines()
+        after = self.state().read_text().splitlines()
+        self.assertEqual(3, len([line for line in after if line.startswith("# ") and "sha256" in line or line.startswith("# Generated")]))
+        body = [line for line in after if not line.startswith("# Generated") and "sha256:" not in line]
+        removed = [line for line in before if line not in body]
+        self.assertTrue(all(line.startswith(("repositories:", "  - name:", "    url:")) or "chart: " in line for line in removed))
+        self.assertEqual(4, len([line for line in body if "chart: ./.tools/chart-archives/" in line]))
+
+    def test_header_records_the_inputs_and_output_is_deterministic(self):
+        first = self.state()
+        text = first.read_text()
+        self.assertIn("# helmfile.yaml sha256: " + sha((self.root / "helmfile.yaml").read_bytes()), text)
+        self.assertIn(f"# {chart_archives.LOCK} sha256: " + sha((self.root / chart_archives.LOCK).read_bytes()), text)
+        self.assertEqual(text, self.state().read_text())
+        self.assertEqual(sorted(f"{n}-{v}.tgz" for n, v in self.versions.items()), sorted(p.name for p in self.dest.iterdir()))
 
     def test_local_jaeger_chart_path_is_unchanged(self):
         derived = yaml.safe_load(self.state().read_text())
         jaegers = [r["chart"] for r in derived["releases"] if r["name"] == "jaeger"]
         self.assertEqual(["./.tools/helm-charts/charts/jaeger"] * 2, jaegers)
 
-    def test_version_mismatch_between_helmfile_lock_and_pin_is_refused(self):
-        for label, mutate in (("helmfile", lambda: self.edit_helmfile('version: "3.10.0"', 'version: "3.9.0"')),
-                              ("pin", lambda: self.edit_pin("examples/oci/deploy-all.sh", "93.6.1", "93.6.0")),
-                              ("lock", lambda: self.drop_lock("opensearch-dashboards-3.10.0.tgz"))):
-            with self.subTest(label), self.assertRaisesRegex(ValueError, "differs from its deploy-all.sh pin or lock entry"):
+    def test_version_mismatch_is_refused_before_any_pull_and_names_the_wrong_side(self):
+        dashboards = self.versions["opensearch-dashboards"]
+        cases = (
+            ("helmfile", lambda: self.replace("helmfile.yaml", f'chart: opensearch/opensearch-dashboards\n    version: "{dashboards}"',
+                                              'chart: opensearch/opensearch-dashboards\n    version: "0.0.1"'),
+             "differs from the deploy-all.sh pin"),
+            ("pin", lambda: self.replace("examples/oci/deploy-all.sh", self.versions["kube-prometheus-stack"], "0.0.1"),
+             "differs from the deploy-all.sh pin"),
+            ("lock", lambda: self.drop_lock(f"opensearch-dashboards-{dashboards}.tgz"), "has no entry in"),
+        )
+        for label, mutate, message in cases:
+            with self.subTest(label):
                 self.setUp()
                 mutate()
-                self.state()
-
-    def edit_helmfile(self, old, new):
-        path = self.root / "helmfile.yaml"
-        path.write_text(path.read_text().replace(old, new, 1))
-
-    def edit_pin(self, name, old, new):
-        path = self.root / name
-        path.write_text(path.read_text().replace(old, new, 1))
+                with self.assertRaisesRegex(ValueError, message):
+                    self.state()
+                self.assertEqual([], self.calls)
 
     def drop_lock(self, name):
         del self.lock["charts"][name]
         self.write_lock()
 
-    def test_unlocked_chart_or_repository_is_refused(self):
-        self.edit_helmfile("chart: opensearch/opensearch\n", "chart: opensearch/other\n")
+    def test_unlocked_chart_repository_and_top_level_keys_are_refused(self):
+        self.replace("helmfile.yaml", "chart: opensearch/opensearch\n", "chart: opensearch/other\n")
         with self.assertRaisesRegex(ValueError, "unlocked chart"):
             self.state()
         self.setUp()
-        self.edit_helmfile("https://opensearch-project.github.io/helm-charts", "https://example.com/charts")
+        self.replace("helmfile.yaml", "url: https://opensearch-project.github.io/helm-charts", "url: https://example.com/charts")
         with self.assertRaisesRegex(ValueError, "not the locked publisher"):
             self.state()
+        self.setUp()
+        with (self.root / "helmfile.yaml").open("a") as handle:
+            handle.write("environments: {}\n")
+        with self.assertRaisesRegex(ValueError, "top-level keys"):
+            self.state()
+        self.assertEqual([], self.calls)
 
     def test_an_archive_with_another_hash_is_refused_deleted_and_no_state_written(self):
         self.tampered.add("opensearch-dashboards")
-        with self.assertRaisesRegex(ValueError, "differs from approved SHA-256: opensearch-dashboards-3.10.0.tgz"):
+        with self.assertRaisesRegex(ValueError, "differs from approved SHA-256: opensearch-dashboards-"):
             self.state()
         self.assertEqual([], [p for p in self.dest.rglob("opensearch-dashboards-*.tgz")])
         self.assertFalse((self.root / chart_archives.LOCKED_STATE).exists())
 
-    def test_state_subcommand_writes_the_derived_state(self):
+    def test_a_refused_run_removes_the_previous_state(self):
+        self.state()
+        self.assertTrue((self.root / chart_archives.LOCKED_STATE).is_file())
+        self.tampered.add("opensearch")
+        with self.assertRaises(ValueError):
+            self.state()
+        self.assertFalse((self.root / chart_archives.LOCKED_STATE).exists())
+        self.assertFalse((self.root / (chart_archives.LOCKED_STATE + ".tmp")).exists())
+
+    def test_stale_pull_directories_are_removed_and_archives_are_always_re_pulled(self):
+        stale = self.dest / "opensearch-abcd1234"
+        stale.mkdir()
+        (stale / "old.tgz").write_bytes(b"x")
+        self.state()
+        self.assertFalse(stale.exists())
+        self.assertEqual(4, len(self.calls))
+        self.state()
+        self.assertEqual(8, len(self.calls))
+
+    def test_state_subcommand_writes_the_derived_state_and_reports_bad_input_in_one_line(self):
         stdout = io.StringIO()
         with mock.patch.object(chart_archives, "ROOT", self.root), \
                 mock.patch.object(chart_archives.subprocess, "run", self.run_helm), contextlib.redirect_stdout(stdout):
             self.assertEqual(0, chart_archives.main(["state", str(self.dest)]))
         self.assertEqual(str((self.root / chart_archives.LOCKED_STATE).resolve()), stdout.getvalue().strip())
+        (self.root / "helmfile.yaml").write_text("releases: [unclosed\n")
+        stderr = io.StringIO()
+        with mock.patch.object(chart_archives, "ROOT", self.root), contextlib.redirect_stderr(stderr):
+            self.assertEqual(1, chart_archives.main(["state", str(self.dest)]))
+        self.assertEqual(1, len(stderr.getvalue().strip().splitlines()))
+        self.assertTrue(stderr.getvalue().startswith("error: "))
+        (self.root / "helmfile.yaml").write_text("releases: [{name: x}]\n")
+        with mock.patch.object(chart_archives, "ROOT", self.root), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(1, chart_archives.main(["state", str(self.dest)]))
+
+    def test_pull_and_dependencies_do_not_need_pyyaml(self):
+        with mock.patch.dict(sys.modules, {"yaml": None}):
+            fixture = Fixture(self.temp.name + "-x")
+            self.addCleanup(shutil.rmtree, self.temp.name + "-x", True)
+            self.assertEqual(b"reviewed chart", fixture.pull().read_bytes())
+            with mock.patch.object(chart_archives, "ROOT", self.root), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(1, chart_archives.main(["state", str(self.dest)]))
+            self.assertIn("error: ", stderr.getvalue())
 
 
 if __name__ == "__main__":
