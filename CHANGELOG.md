@@ -96,8 +96,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the manual deployer identity through `scripts/demo/deployer_kubeconfig.py`. The
   `operations` CI job runs its marked commands verbatim on a second kind cluster,
   and `scripts/demo/runbook_blocks_test.py` keeps them in step with that rehearsal.
-  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  ([#156](https://github.com/jaegertracing/jaeger-demo/pull/156),
   refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
+
+- A `prometheus-operator-validated` reason code for the live drift report. The
+  monitoring chart's PrometheusRule mutating webhook adds that annotation, set to
+  `"true"`, to every rule it admits, so without the code every PrometheusRule is
+  reported as unexplained. Any other value, or the annotation on another kind,
+  stays unexplained
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
 
 ### Changed
 
@@ -145,10 +153,25 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   separate apply identity, and de-adoption deletes the companion's release records
   one by one by name, because the deployer role cannot delete a collection of
   Secrets. Both "Under revision" notes are gone.
-  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  ([#156](https://github.com/jaegertracing/jaeger-demo/pull/156),
   refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
 
+- The OTel demo's busybox init containers set `imagePullPolicy: IfNotPresent`, and
+  `checkout` requests its 64Mi memory limit, so the render states both instead of
+  leaving them to the API server default and to a manual change. An OTel demo
+  upgrade restarts each of these Deployments whose init container ran with
+  another pull policy
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
+
 ### Fixed
+
+- The live drift report instructions install PyYAML into a virtual environment.
+  The render's helper scripts do not inherit `PYTHONPATH`, so in Cloud Shell the
+  report failed with only `ValueError`. They also no longer say that the render
+  waits for [#146](https://github.com/jaegertracing/jaeger-demo/pull/146)
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
 
 - The chart archive list in `ops/rbac/chart-objects.json` still named the
   OpenSearch 3.7.0 archives. `chart_objects.py --write` now copies it from
@@ -161,7 +184,7 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `live` image mode the next apply is refused instead, because its read-only diff
   reports a release that is not `deployed` as changed; the text now says so and
   links the runbook's recovery steps.
-  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  ([#156](https://github.com/jaegertracing/jaeger-demo/pull/156),
   refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
 
 ## 2026-11-24

@@ -224,6 +224,17 @@ releases:
         served: true
         storage: true
   - apiVersion: monitoring.coreos.com/v1
+    kind: PrometheusRule
+    metadata:
+      name: prometheus-kube-prometheus-general.rules
+      namespace: default
+    spec:
+      groups:
+      - name: general.rules
+        rules:
+        - alert: Watchdog
+          expr: vector(1)
+  - apiVersion: monitoring.coreos.com/v1
     kind: ServiceMonitor
     metadata:
       name: prometheus-grafana
