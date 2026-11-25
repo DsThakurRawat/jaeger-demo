@@ -84,6 +84,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#146](https://github.com/jaegertracing/jaeger-demo/pull/146),
   fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
 
+- `docs/MIGRATION.md` now records the recovery role apply and the leftover cleanup
+  from the failed OpenSearch recovery run that the removed backup tooling left
+  behind. ([#151](https://github.com/jaegertracing/jaeger-demo/pull/151),
+  fixes [#149](https://github.com/jaegertracing/jaeger-demo/issues/149))
+
 ## 2026-11-24
 
 ### Added
