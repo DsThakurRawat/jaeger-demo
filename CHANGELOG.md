@@ -20,6 +20,14 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-26
+
+### Changed
+
+- `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
+  and the switch of the daily schedule to that engine
+  (refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+
 ## 2026-11-25
 
 ### Added
