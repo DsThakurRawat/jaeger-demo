@@ -108,7 +108,10 @@ deployment.
   It renders the six releases without cluster access and lists every object that has
   no record. `--write` adds the records; review them, then update
   `ops/rbac/deployer.yaml` until `deployer_access_test.py` passes
-  ([deployer access](docs/deployer-access.md#changing-the-role)). The
+  ([deployer access](docs/deployer-access.md#changing-the-role)). Both modes
+  also render the CRDs with `--include-crds` and fail when their names differ from
+  the named CRD `get` grant that the drift report uses; change that grant and
+  `MONITORING_CRDS` in `scripts/demo/deployer_access.py` together. The
   `Helmfile render and adoption rehearsal` CI job runs the check.
 - **OCI CLI.** `scripts/demo/oci-cli-constraints.txt` records what the deployment
   runner installed, including packages already present, not only new ones (see its

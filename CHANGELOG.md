@@ -28,10 +28,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   object the Helmfile render would own, rendered with the live Jaeger and HotROD
   images, with the live object, and classifies each as identical, explained by a
   fixed reason code, unexplained or missing. It prints identities, reason codes and
-  hashes only and exits non-zero on any unexplained or missing object.
+  hashes only, never a live-only map key, and exits non-zero on any unexplained or
+  missing object. `--output` writes the report outside the checkout.
   `docs/helmfile-applications.md` has the operator command and the reason codes.
   The deployer role gains a named `get` on the monitoring chart's ten CRDs for it,
-  and no list.
+  and no list; `chart_objects.py --check` fails when the rendered CRDs differ from
+  that grant.
   (refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
 
 ## 2026-11-24

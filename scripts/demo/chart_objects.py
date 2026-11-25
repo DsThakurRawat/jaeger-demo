@@ -18,6 +18,10 @@ compares names, kinds and scope, not manifests. A record that no pinned chart
 renders any more is reported and never removed: Helm deletes the object on the
 next upgrade, which needs the access, and a rollback target may still hold it.
 Remove such a record by hand once no release needs it.
+
+`--check` and `--write` also render the Helmfile releases with `--include-crds`
+and fail when the CRD names differ from the named CRD `get` grant in
+ops/rbac/deployer.yaml, which scripts/demo/live_drift.py reads them with.
 """
 
 import argparse
@@ -26,6 +30,7 @@ from pathlib import Path
 import sys
 import tempfile
 
+import deployer_access
 import pr_render_diff as render_diff
 
 
@@ -168,6 +173,38 @@ def gather(root, records, version):
     return found
 
 
+def rendered_crds(root, version):
+    """The CRD names the Helmfile releases render with --include-crds, which the drift report compares."""
+    names = set()
+
+    def index(_, namespace, release, docs):
+        names.update(obj["metadata"]["name"] for obj in docs if obj and obj["kind"] == "CustomResourceDefinition")
+
+    with tempfile.TemporaryDirectory(prefix="chart-crds-") as scratch:
+        render_diff.render(root, Path(scratch) / "render", False,
+                           target=["--kube-version", version, "--include-crds"], index=index)
+    return names
+
+
+def granted_crds(roles_path):
+    """The CRD names the deployer role may read by name."""
+    roles = deployer_access.load_roles(roles_path)
+    return {name for (role, namespace), rules in roles.items() if role == deployer_access.DEPLOYER and not namespace
+            for rule in rules if "customresourcedefinitions" in rule["resources"] for name in rule.get("resourceNames", [])}
+
+
+def report_crds(rendered, granted, out):
+    """Print the CRD names that the render and the grant do not share. Return whether they differ."""
+    if rendered == granted:
+        print(f"The {len(rendered)} rendered CRDs match the deployer role's named CRD reads.", file=out)
+        return False
+    for name in sorted(rendered - granted):
+        print(f"  - CRD rendered but not granted: {name}", file=out)
+    for name in sorted(granted - rendered):
+        print(f"  - CRD granted but not rendered: {name}", file=out)
+    return True
+
+
 def report(found, records, out):
     missing, hooks, unused = compare(found, records)
     print(f"Compared {len(found)} rendered objects with {len(reviewed_rows(records))} reviewed records.", file=out)
@@ -216,14 +253,22 @@ def main(argv=None, out=sys.stdout, root=ROOT):
     path = root / INVENTORY.relative_to(ROOT)
     document = json.loads(path.read_text())
     try:
-        found = gather(root, document["records"], kube_version(root / TOOLS.relative_to(ROOT)))
+        version = kube_version(root / TOOLS.relative_to(ROOT))
+        found = gather(root, document["records"], version)
+        crds = rendered_crds(root, version)
+        granted = granted_crds(root / deployer_access.ROLES.relative_to(ROOT))
     except (KeyError, TypeError, ValueError, OSError) as error:
         print("error: " + str(error), file=sys.stderr)
         return 2
     missing, hooks = report(found, document["records"], out)
+    crd_drift = report_crds(crds, granted, out)
+    if crd_drift:
+        # --write cannot fix this: the grant is an access change a person reviews.
+        print("\nThe rendered CRDs and the named CRD get grant in ops/rbac/deployer.yaml differ. Change the grant\n"
+              "and MONITORING_CRDS in scripts/demo/deployer_access.py together: " + PROCEDURE, file=sys.stderr)
     if not (missing or hooks):
         print("\nEvery rendered object has a reviewed record.", file=out)
-        return 0
+        return int(crd_drift)
     if args.write:
         count = rewrite(document, found)
         path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
@@ -231,7 +276,7 @@ def main(argv=None, out=sys.stdout, root=ROOT):
               "scripts/demo/deployer_access_test.py: it fails when ops/rbac/deployer.yaml does not cover the new\n"
               "objects. A change to that role is an access change that an administrator applies before the\n"
               "next deployment: " + PROCEDURE, file=out)
-        return 0
+        return int(crd_drift)
     print("\nThe pinned charts and " + str(path.relative_to(root)) + " differ. Run\n"
           "  python3 scripts/demo/chart_objects.py --write\n"
           "and review each record. Then run scripts/demo/deployer_access_test.py: it fails when\n"
