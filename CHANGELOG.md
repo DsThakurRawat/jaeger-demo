@@ -31,6 +31,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   cluster is rebuilt.
   ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
   fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+- `docs/MIGRATION.md` records the node pool initialization script being set and
+  verified on a new node.
+  (fixes [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
 
 ## 2026-11-24
 
