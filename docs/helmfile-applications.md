@@ -89,7 +89,7 @@ git clone https://github.com/jaegertracing/jaeger-demo.git && cd jaeger-demo
 git checkout "$REVIEWED_COMMIT"
 unset PYTHONPATH
 python3 -m venv "$HOME/live-drift-venv"
-"$HOME/live-drift-venv/bin/pip" install "$(grep '^PyYAML==' scripts/demo/oci-cli-constraints.txt)"
+"$HOME/live-drift-venv/bin/pip" install -c scripts/demo/oci-cli-constraints.txt PyYAML
 py="$HOME/live-drift-venv/bin/python3"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" CONTEXT="$(kubectl config current-context)"
 "$py" scripts/demo/helmfile_tools.py run -- "$py" scripts/demo/live_drift.py \

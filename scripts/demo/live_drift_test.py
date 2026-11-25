@@ -851,7 +851,9 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_a_missing_crd_makes_its_objects_missing_without_reading_them(self):
         rendered, _, live = fixture()
-        # The fixture renders no PrometheusRule CRD, so without discovery that kind is unknown, not missing.
+        # This test covers kinds whose CustomResourceDefinition the fixture renders. The fixture renders a
+        # PrometheusRule object but not its CRD, so with that kind absent from discovery the planner refuses it as
+        # unknown before any read. Leave that object out here.
         rendered = [(release, obj) for release, obj in rendered if obj["kind"] != "PrometheusRule"]
         crds = [obj for _, obj in rendered if obj["kind"] == "CustomResourceDefinition"]
         self.assertTrue(crds)
