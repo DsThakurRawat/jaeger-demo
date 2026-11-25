@@ -675,6 +675,37 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(job_limit - step_limit, 30)
         self.assertLess(job_limit, 360)
 
+    def test_adoption_job_runs_the_release_phases_rehearsal_on_a_cluster_created_after_the_adoption_one(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        adoption, = [i for i, run in enumerate(runs) if 'rehearsals/companion-adoption/exercise.py' in run]
+        phases, = [i for i, run in enumerate(runs) if 'rehearsals/release-phases/exercise.py' in run]
+        reset, = [i for i, run in enumerate(runs) if 'rehearsals/opensearch-reset/exercise.py' in run]
+        created = [i for i, run in enumerate(runs) if 'kind create cluster --name jaeger-demo-phases-fixture' in run]
+        self.assertEqual(1, len(created))
+        self.assertTrue(adoption < created[0] < phases)
+        self.assertIn('kind delete cluster --name jaeger-demo-adoption-fixture', runs[created[0]])
+        self.assertIn('--context kind-jaeger-demo-phases-fixture', runs[phases])
+        self.assertIn('phases-fixture.yaml', runs[phases])
+        self.assertNotIn('adoption-fixture', runs[phases])
+        # The reset rehearsal keeps its own cluster and stays last.
+        self.assertIn('kind delete cluster --name jaeger-demo-phases-fixture', runs[reset - 1])
+        self.assertEqual(len(runs) - 1, reset)
+
+    def test_every_rehearsal_context_in_ci_is_one_its_script_accepts(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        checked = 0
+        for run in (step['run'] for step in job['steps'] if 'run' in step):
+            script = re.search(r'(scripts/demo/rehearsals/[\w-]+/exercise\.py)', run)
+            if not script:
+                continue
+            context = re.search(r'--context (\S+)', run)[1]
+            source = (ROOT / script[1]).read_text()
+            choices = re.search(r'"--context",[^\n]*?choices=\(([^)]*)\)', source)[1]
+            self.assertIn(context, re.findall(r'"([^"]+)"', choices), script[1])
+            checked += 1
+        self.assertEqual(3, checked)
+
     def test_deployer_access_job_follows_adoption_with_a_limit_and_no_helm_action(self):
         jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
         names = list(jobs)

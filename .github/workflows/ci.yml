@@ -91,15 +91,23 @@ jobs:
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/companion-adoption/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
+    # The release phase rehearsal creates the release namespaces itself and installs its own
+    # companion, so it needs a cluster without what the adoption rehearsal left behind.
+    - name: Replace the fixture for the release phase rehearsal
+      working-directory: ${{ runner.temp }}
+      run: |
+        ./kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml"
+        ./kind create cluster --name jaeger-demo-phases-fixture --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
     - name: Verify failed-release retry, pending states, the OCI gate and direct Helmfile flags
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/release-phases/exercise.py \
-          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
+          --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml" --context kind-jaeger-demo-phases-fixture
     # The reset rehearsal installs the pinned OpenSearch chart, so it gets a cluster of its own.
     - name: Replace the fixture for the trace reset rehearsal
       working-directory: ${{ runner.temp }}
       run: |
-        ./kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml"
+        ./kind delete cluster --name jaeger-demo-phases-fixture --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml"
         ./kind create cluster --name jaeger-demo-reset-fixture --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" \
           --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
     - name: Rehearse the OpenSearch trace reset under the committed manual role
