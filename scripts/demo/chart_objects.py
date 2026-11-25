@@ -2,15 +2,23 @@
 # Copyright (c) 2026 The Jaeger Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Keep ops/rbac/chart-objects.json equal to what the six pinned releases render.
+"""Keep ops/rbac/chart-objects.json equal to what the script and Helmfile paths render.
 
 scripts/demo/deployer_access.py derives the deployer's Kubernetes access from the
 object inventory in ops/rbac/chart-objects.json. A chart bump that renders a new
 object would otherwise fail at deployment with a Forbidden error, after the
-change had merged. `--check` renders the six releases the way the deployment
-scripts install them, without cluster access, and exits non-zero when an
-object has no record or a record's Helm hook events differ. `--write` adds the
-missing records and corrects the hook events.
+change had merged. `--check` renders, without cluster access, the six releases
+the way the deployment scripts install them and the ten Helmfile releases (the
+six applications from the lock-verified .helmfile-locked.yaml and the four
+demo-resources companions). Both paths must render the same object identities
+and hook events; the companions render the supplemental objects the scripts
+apply. The companions are rendered once more as the plain `helm install` of
+their first release, and an object only that render has needs a record too.
+Each Helmfile release must have Helm history records, the Secrets Helm
+keeps its revisions in. `--check` exits non-zero when an object or a release
+has no record, a record's Helm hook events differ, or the inventory's chart
+archive list differs from scripts/demo/chart-archives.lock.json. `--write` adds
+the missing records, corrects the hook events and copies the archive list.
 
 Only object identities are printed: kind, API group, namespace and name. A
 client-side render has no live discovery and no Helm lookup results, so this
@@ -26,10 +34,13 @@ ops/rbac/deployer.yaml, which scripts/demo/live_drift.py reads them with.
 
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 
+import chart_archives
 import deployer_access
 import pr_render_diff as render_diff
 
@@ -37,6 +48,8 @@ import pr_render_diff as render_diff
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = ROOT / "ops/rbac/chart-objects.json"
 TOOLS = Path(__file__).with_name("helmfile-tools.lock.json")
+# Where make validate (equivalence.py) also pulls the lock-verified archives.
+ARCHIVES = ".tools/chart-archives"
 PROCEDURE = "docs/deployer-access.md#changing-the-role"
 FIELDS = ("component", "release", "scope", "apiGroup", "resource", "name")
 # The release each Helm release name and namespace belongs to in the inventory.
@@ -46,6 +59,14 @@ COMPONENTS = {
     ("jaeger", "jaeger"): "otel-jaeger", ("otel-demo", "otel-demo"): "otel-demo",
 }
 SUPPLEMENT = "supplement"
+# The Helm release of the supplemental objects in each namespace.
+COMPANION = "demo-resources"
+# Helm keeps each revision of a release as the Secret sh.helm.release.v1.<release>.v<N> in its
+# namespace. Records of one release share one identity: the access is for the kind, whatever N.
+HISTORY = "history"
+RELEASE_RECORD = "sh.helm.release.v1."
+HISTORY_VERBS = ["get", "create", "update", "delete"]
+CHECKPOINT = "shared"
 CLUSTER = {"Namespace", "ClusterRole", "ClusterRoleBinding", "ValidatingWebhookConfiguration",
            "MutatingWebhookConfiguration", "CustomResourceDefinition"}
 # The kinds that grant or carry privilege. A person decides each one.
@@ -105,11 +126,26 @@ def collector(found, reviewed):
     return index
 
 
+def history_key(namespace, release):
+    """The identity of one Helm release's records: Secrets in its namespace, whatever the revision."""
+    return (HISTORY, release, namespace, "", "secrets", "")
+
+
 def reviewed_rows(records):
-    """Records for chart and supplemental objects. Helm history and the checkpoint are not rendered."""
+    """Records for chart, supplemental and Helm history objects. The checkpoint is not rendered.
+
+    The history records of one release, one per example revision, map to its history_key.
+    """
     rows = {}
     for row in records:
-        if row["component"] in ("history", "shared"):
+        if row["component"] == CHECKPOINT:
+            continue
+        if row["component"] == HISTORY:
+            prefix = RELEASE_RECORD + row["release"] + ".v"
+            if (row["apiGroup"], row["resource"]) != ("", "secrets") or not row["name"].startswith(prefix) \
+                    or not row["name"][len(prefix):].isdigit():
+                raise ValueError(f"History record {row['scope']}/{row['name']} is not a Helm release record of {row['release']}")
+            rows.setdefault(history_key(row["scope"], row["release"]), row)
             continue
         key = tuple(row[field] for field in FIELDS)
         if row["release"] == SUPPLEMENT:
@@ -130,6 +166,8 @@ def compare(found, records):
 
 def describe(key):
     component, release, scope, group, resource, name = key
+    if component == HISTORY:
+        return f"history: Helm release records of {scope}/{release} ({RELEASE_RECORD}{release}.v<N>)"
     owner = "supplement" if release == SUPPLEMENT else f"{component} / {release}"
     return f"{owner}: {group or 'core'}/{resource} {scope}/{name}"
 
@@ -141,6 +179,11 @@ def verbs_for(key, hook):
 def proposal(key, info, supplement_component=""):
     """A record in the inventory's field order. A person reviews it before granting."""
     row = dict(zip(FIELDS, key))
+    if key[0] == HISTORY:
+        # The first revision as the example. deployer_access.py asks for the kind, whatever N.
+        row.update(name=f"{RELEASE_RECORD}{key[1]}.v1", verbs=list(HISTORY_VERBS),
+                   source="first install example; every revision needs the same access, and history pruning deletes older ones")
+        return row
     if key[1] == SUPPLEMENT:
         row["component"] = supplement_component
     row["verbs"] = verbs_for(key, info["hook"])
@@ -162,18 +205,83 @@ def supplement_component(key, records):
     return {"default": "oci-jaeger", "jaeger": "otel-jaeger"}.get(scope, "otel-jaeger")
 
 
-def gather(root, records, version):
-    """Render the six releases the way the scripts install them. Returns {identity: {kind, hook}}."""
-    found = {}
+def locked_state(root):
+    """Write .helmfile-locked.yaml from the lock-verified archives and return its path relative to root."""
+    archives = Path(root) / ARCHIVES
+    archives.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="chart-objects-helm-") as home:
+        # Pull with an empty Helm configuration, as the renders do, so a local repository list cannot interfere.
+        env = dict(os.environ, KUBECONFIG=os.devnull, HELM_CONFIG_HOME=os.path.join(home, "config"),
+                   HELM_CACHE_HOME=os.path.join(home, "cache"), HELM_DATA_HOME=os.path.join(home, "data"))
+        chart_archives.locked_state(root, archives, run=lambda args, **kwargs: subprocess.run(args, env=env, **kwargs))
+    return chart_archives.LOCKED_STATE
+
+
+def path_differences(scripts, helmfile):
+    """Where the script and Helmfile renders disagree on an identity or its hook events, as text lines."""
+    lines = [f"only the script path renders {describe(key)}" for key in sorted(scripts.keys() - helmfile.keys())]
+    lines += [f"only the Helmfile path renders {describe(key)}" for key in sorted(helmfile.keys() - scripts.keys())]
+    lines += [f"hook events differ for {describe(key)}: script '{scripts[key]['hook']}', "
+              f"Helmfile '{helmfile[key]['hook']}'" for key in sorted(scripts.keys() & helmfile.keys())
+              if events(scripts[key]["hook"]) != events(helmfile[key]["hook"])]
+    return lines
+
+
+def gather(root, records, version, state):
+    """Render the script path and the Helmfile path. Returns {identity: {kind, hook}}.
+
+    Both must render the same identities and hook events: the six application releases, and
+    the supplemental objects that the scripts apply and the four demo-resources companions own.
+    Each Helmfile release adds the identity of its Helm records (history_key). `state` is the
+    lock-verified application Helmfile from locked_state(), rendered with the companions.
+
+    A companion's first release is a plain helm install (release_phases.install_args), so the
+    companions are also rendered as an install. An object only that render has joins the result
+    and needs its own record; an object whose hook events differ between install and upgrade is
+    refused, because one record holds one set of hook events.
+    """
     reviewed = reviewed_rows(records)
+    scripts, helmfile, install, releases, installed = {}, {}, {}, set(), set()
+    helmfile_index, install_index = collector(helmfile, reviewed), collector(install, reviewed)
+
+    def index(records_, namespace, release, docs):
+        releases.add((namespace, release))
+        helmfile_index(records_, namespace, release, docs)
+
+    def first_install(records_, namespace, release, docs):
+        if release != COMPANION:
+            raise ValueError(f"The companion install render produced {namespace}/{release}")
+        installed.add((namespace, release))
+        install_index(records_, namespace, release, docs)
+
     with tempfile.TemporaryDirectory(prefix="chart-objects-") as scratch:
-        # An upgrade render without CRDs: Helm neither upgrades nor deletes crds/ objects.
-        render_diff.render(root, Path(scratch) / "render", True,
-                           target=["--kube-version", version, "--is-upgrade"], index=collector(found, reviewed))
-    return found
+        # Upgrade renders without CRDs: Helm neither upgrades nor deletes crds/ objects.
+        render_diff.render(root, Path(scratch) / "scripts", True,
+                           target=["--kube-version", version, "--is-upgrade"], index=collector(scripts, reviewed))
+        # helmfile template has no --is-upgrade flag of its own; it passes this one to helm template.
+        render_diff.render(root, Path(scratch) / "helmfile", False, state=state,
+                           target=["--kube-version", version, "--template-args=--is-upgrade"], index=index)
+        # The companions alone, as helm install renders them: .Release.IsInstall.
+        render_diff.render(root, Path(scratch) / "install", False, state=None,
+                           target=["--kube-version", version], index=first_install)
+    differences = path_differences(scripts, helmfile)
+    companions = {item for item in releases if item[1] == COMPANION}
+    if not companions or installed != companions:
+        differences.append(f"the companion install render has {sorted(installed)}, the upgrade render {sorted(companions)}")
+    differences += [f"hook events differ for {describe(key)} between the companion install and upgrade: "
+                    f"install '{install[key]['hook']}', upgrade '{helmfile[key]['hook']}'"
+                    for key in sorted(install.keys() & helmfile.keys())
+                    if events(install[key]["hook"]) != events(helmfile[key]["hook"])]
+    if differences:
+        raise ValueError("The script and Helmfile renders differ:\n  - " + "\n  - ".join(differences))
+    for key in sorted(install.keys() - helmfile.keys()):
+        helmfile[key] = install[key]
+    for namespace, release in sorted(releases):
+        helmfile[history_key(namespace, release)] = {"kind": "Secret", "hook": ""}
+    return helmfile
 
 
-def rendered_crds(root, version):
+def rendered_crds(root, version, state):
     """The CRD names the Helmfile releases render with --include-crds, which the drift report compares."""
     names = set()
 
@@ -181,9 +289,14 @@ def rendered_crds(root, version):
         names.update(obj["metadata"]["name"] for obj in docs if obj and obj["kind"] == "CustomResourceDefinition")
 
     with tempfile.TemporaryDirectory(prefix="chart-crds-") as scratch:
-        render_diff.render(root, Path(scratch) / "render", False,
+        render_diff.render(root, Path(scratch) / "render", False, state=state,
                            target=["--kube-version", version, "--include-crds"], index=index)
     return names
+
+
+def locked_archives(root):
+    """The chart archive digests the inventory header must repeat: the chart lock's, never typed by hand."""
+    return dict(sorted(chart_archives.load_lock(root)["charts"].items()))
 
 
 def granted_crds(roles_path):
@@ -207,7 +320,8 @@ def report_crds(rendered, granted, out):
 
 def report(found, records, out):
     missing, hooks, unused = compare(found, records)
-    print(f"Compared {len(found)} rendered objects with {len(reviewed_rows(records))} reviewed records.", file=out)
+    print(f"Compared {len(found)} rendered identities (objects and Helm release records) with "
+          f"{len(reviewed_rows(records))} reviewed ones.", file=out)
     if unused:
         print(f"\n{len(unused)} reviewed record(s) match no rendered object. Keep them until every release has been\n"
               "upgraded past the chart that rendered them and no rollback target needs them:", file=out)
@@ -238,8 +352,13 @@ def rewrite(document, found):
             row["hookEvents"] = found[key]["hook"]
     for key in missing:
         row = proposal(key, found[key], supplement_component(key, records))
+        if row["component"] == HISTORY:
+            # Helm history stays last.
+            history = [i for i, old in enumerate(records) if old["component"] == HISTORY]
+            records.insert(history[-1] + 1 if history else len(records), row)
+            continue
         same = [i for i, old in enumerate(records) if old["component"] == row["component"] and old["release"] == row["release"]]
-        tail = [i for i, old in enumerate(records) if old["component"] in ("history", "shared")]
+        tail = [i for i, old in enumerate(records) if old["component"] in (HISTORY, CHECKPOINT)]
         records.insert(same[-1] + 1 if same else tail[0] if tail else len(records), row)
     return len(missing) + len(hooks)
 
@@ -254,23 +373,31 @@ def main(argv=None, out=sys.stdout, root=ROOT):
     document = json.loads(path.read_text())
     try:
         version = kube_version(root / TOOLS.relative_to(ROOT))
-        found = gather(root, document["records"], version)
-        crds = rendered_crds(root, version)
+        archives = locked_archives(root)
+        state = locked_state(root)
+        found = gather(root, document["records"], version, state)
+        crds = rendered_crds(root, version, state)
         granted = granted_crds(root / deployer_access.ROLES.relative_to(ROOT))
     except (KeyError, TypeError, ValueError, OSError) as error:
         print("error: " + str(error), file=sys.stderr)
         return 2
     missing, hooks = report(found, document["records"], out)
+    stale = document.get("chartArchiveSHA256") != archives
+    if stale:
+        print(f"\nThe inventory's chartArchiveSHA256 differs from the charts of {chart_archives.LOCK}.", file=out)
     crd_drift = report_crds(crds, granted, out)
     if crd_drift:
         # --write cannot fix this: the grant is an access change a person reviews.
         print("\nThe rendered CRDs and the named CRD get grant in ops/rbac/deployer.yaml differ. Change the grant\n"
               "and MONITORING_CRDS in scripts/demo/deployer_access.py together: " + PROCEDURE, file=sys.stderr)
-    if not (missing or hooks):
-        print("\nEvery rendered object has a reviewed record.", file=out)
+    if not (missing or hooks or stale):
+        print("\nEvery rendered object and Helmfile release has a reviewed record.", file=out)
         return int(crd_drift)
     if args.write:
         count = rewrite(document, found)
+        if stale:
+            document["chartArchiveSHA256"] = archives
+            count += 1
         path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
         print(f"\nWrote {count} change(s) to {path.relative_to(root)}. Review each record and the PROTECTED kinds, then run\n"
               "scripts/demo/deployer_access_test.py: it fails when ops/rbac/deployer.yaml does not cover the new\n"
