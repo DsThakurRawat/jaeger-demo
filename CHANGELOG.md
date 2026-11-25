@@ -58,6 +58,10 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   cluster is rebuilt.
   ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
   fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+- `docs/MIGRATION.md` records the node pool initialization script being set and
+  verified on a new node.
+  ([#150](https://github.com/jaegertracing/jaeger-demo/pull/150),
+  fixes [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
 
 - The release phase gate reads releases with one `helm list -n <namespace>` per
   release namespace instead of a cluster-wide listing, which the deployer role
