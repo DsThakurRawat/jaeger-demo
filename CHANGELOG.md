@@ -164,6 +164,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
   refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
 
+- `docs/MIGRATION.md` records the OTel demo upgrade that applied the drift fixes
+  and the second live drift report, which found every rendered object explained
+  as the administrator and as the deployer identity
+  ([#157](https://github.com/jaegertracing/jaeger-demo/pull/157),
+  fixes [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
+
 ### Fixed
 
 - The live drift report instructions install PyYAML into a virtual environment.
