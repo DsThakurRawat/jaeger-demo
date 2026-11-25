@@ -91,21 +91,87 @@ jobs:
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/companion-adoption/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
+    # The release phase rehearsal creates the release namespaces itself and installs its own
+    # companion, so it needs a cluster without what the adoption rehearsal left behind.
+    - name: Replace the fixture for the release phase rehearsal
+      working-directory: ${{ runner.temp }}
+      run: |
+        ./kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml"
+        ./kind create cluster --name jaeger-demo-phases-fixture --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
     - name: Verify failed-release retry, pending states, the OCI gate and direct Helmfile flags
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/release-phases/exercise.py \
-          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-adoption-fixture
+          --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml" --context kind-jaeger-demo-phases-fixture
     # The reset rehearsal installs the pinned OpenSearch chart, so it gets a cluster of its own.
     - name: Replace the fixture for the trace reset rehearsal
       working-directory: ${{ runner.temp }}
       run: |
-        ./kind delete cluster --name jaeger-demo-adoption-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml"
+        ./kind delete cluster --name jaeger-demo-phases-fixture --kubeconfig "$RUNNER_TEMP/phases-fixture.yaml"
         ./kind create cluster --name jaeger-demo-reset-fixture --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" \
           --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
     - name: Rehearse the OpenSearch trace reset under the committed manual role
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/opensearch-reset/exercise.py \
           --kubeconfig "$RUNNER_TEMP/reset-fixture.yaml" --context kind-jaeger-demo-reset-fixture
+
+  # The committed deployer role on a real API server: its check against live answers,
+  # and the scheduled monitoring upgrade as an identity that holds only the role.
+  deployer-access:
+    name: Deployer role against a real API server
+    runs-on: ubuntu-latest
+    # The step limits add up to less than this.
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      timeout-minutes: 1
+      with:
+        persist-credentials: false
+    # The administrator seeds the monitoring release from the base, as production holds it.
+    - name: Check out the pull request base
+      if: github.event_name == 'pull_request'
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      timeout-minutes: 1
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: baseline
+        persist-credentials: false
+    - name: Install the constrained YAML dependency
+      timeout-minutes: 2
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
+    # The digest is written here, so the download origin cannot vouch for itself.
+    - name: Install the pinned kubectl
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 2
+      run: |
+        mkdir -p bin
+        curl --fail --location --silent --show-error --output bin/kubectl https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl
+        echo '6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f  bin/kubectl' | sha256sum --check
+        chmod u+x bin/kubectl
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+    - name: Install the pinned kind
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 2
+      run: |
+        curl --fail --location --silent --show-error --output kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+        echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind' | sha256sum --check
+        chmod u+x kind
+    # From the repository root: kind resolves the audit policy's relative path against it.
+    - name: Create the disposable Kubernetes fixture with an API audit log
+      timeout-minutes: 5
+      run: |
+        "$RUNNER_TEMP/kind" create cluster --name jaeger-demo-deployer-fixture --kubeconfig "$RUNNER_TEMP/fixture.yaml" \
+          --config scripts/demo/rehearsals/deployer-access/kind.yaml \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Check the role and run the scheduled monitoring upgrade as its holder
+      timeout-minutes: 26
+      run: |
+        base=()
+        if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+          base=(--base "$GITHUB_WORKSPACE/baseline")
+        fi
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/deployer-access/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-deployer-fixture "${base[@]}"
 
   render-diff:
     name: Rendered resource changes

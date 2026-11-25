@@ -155,9 +155,12 @@ class CommandTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_main(self, mode, found):
+    def run_main(self, mode, found, crds=None):
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(c, "gather", return_value=found), patch("sys.stderr", err):
+        granted = c.granted_crds(c.deployer_access.ROLES)
+        with patch.object(c, "gather", return_value=found), \
+                patch.object(c, "rendered_crds", return_value=granted if crds is None else crds), \
+                patch.object(c, "granted_crds", return_value=granted), patch("sys.stderr", err):
             status = c.main([mode], out=out, root=self.root)
         return status, out.getvalue(), err.getvalue()
 
@@ -238,6 +241,38 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(2, c.main(["--check"], out=io.StringIO(), root=self.root))
         self.assertIn("Public fixture preparation or rendering failed", err.getvalue())
         self.assertEqual(before, self.path.read_text())
+
+    def test_the_rendered_crds_must_equal_the_named_crd_grant(self):
+        granted = c.granted_crds(c.deployer_access.ROLES)
+        self.assertEqual(granted, set(c.deployer_access.MONITORING_CRDS))
+        records = json.loads(self.path.read_text())["records"]
+        found = render_records(records)
+        status, out, _ = self.run_main("--check", found)
+        self.assertEqual(0, status)
+        self.assertIn(f"The {len(granted)} rendered CRDs match", out)
+        changed = (granted - {"probes.monitoring.coreos.com"}) | {"widgets.monitoring.coreos.com"}
+        for mode in ("--check", "--write"):
+            with self.subTest(mode=mode):
+                status, out, err = self.run_main(mode, found, crds=changed)
+                self.assertEqual(1, status)
+                self.assertIn("CRD rendered but not granted: widgets.monitoring.coreos.com", out)
+                self.assertIn("CRD granted but not rendered: probes.monitoring.coreos.com", out)
+                self.assertIn("named CRD get grant", err)
+
+    def test_the_crd_render_includes_crds_with_the_toolchain_kubernetes_version(self):
+        seen = {}
+
+        def render(root, temp, legacy, target, index):
+            seen.update(legacy=legacy, target=target)
+            index(None, "default", "prometheus", [
+                {"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+                 "metadata": {"name": "probes.monitoring.coreos.com"}},
+                {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "other"}}, None])
+
+        with patch.object(c.render_diff, "render", render):
+            self.assertEqual({"probes.monitoring.coreos.com"}, c.rendered_crds(c.ROOT, c.kube_version()))
+        self.assertFalse(seen["legacy"], "the drift report reads what the Helmfile render owns")
+        self.assertEqual(["--kube-version", c.kube_version(), "--include-crds"], seen["target"])
 
     def test_a_mode_is_required(self):
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):

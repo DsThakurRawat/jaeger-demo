@@ -28,6 +28,8 @@ LITERALS = (
     ("scripts/demo/oci_test.py", rf'"--kube-version", "({VER})"', "kube", 1),
     ("scripts/demo/rehearsals/helmfile-applications/equivalence.py", rf'"--kube-version", "({VER})"', "kube", 1),
     (".github/workflows/ci.yml", rf"kindest/node:({VER})@", "kube", 1),
+    # The deployer-access job's kubectl. Its SHA-256 in ci.yml changes with the version.
+    (".github/workflows/ci.yml", rf"dl\.k8s\.io/release/({VER})/bin/linux/amd64/kubectl", "kube", 1),
     ("examples/oci/monitoring-values.yaml", r'depName=registry\.k8s\.io/kubectl\s+tag: "(v\d+\.\d+\.\d+)@sha256', "kube", 1),
 )
 WORKFLOWS = (".github/workflows/ci.yml", ".github/workflows/ci-deploy-demo.yml")

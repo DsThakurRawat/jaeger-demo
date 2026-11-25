@@ -38,6 +38,10 @@ COLLECTION = {"create", "list", "watch"}
 # Where a binding references a role that does not share its name. Read from the
 # pinned chart renders; a default of the binding's own name covers the rest.
 OPENSEARCH_POD = "opensearch-cluster-single-0"
+# The CRDs the monitoring chart renders, which live_drift.py compares by name.
+MONITORING_CRDS = tuple(plural + ".monitoring.coreos.com" for plural in (
+    "alertmanagerconfigs", "alertmanagers", "podmonitors", "probes", "prometheusagents",
+    "prometheuses", "prometheusrules", "scrapeconfigs", "servicemonitors", "thanosrulers"))
 ROLE_REFS = {
     ("", "prometheus-grafana-clusterrolebinding"): "prometheus-grafana-clusterrole",
     ("opensearch", "opensearch-dashboards-dashboards-rolebinding"): "opensearch-dashboards-dashboards",
@@ -126,6 +130,9 @@ def script_requests(identity):
     # verify_trace.py. opensearch_reset.py uses the same two and the Jaeger Deployment patch of the chart.
     requests += each("opensearch", "", "pods/exec", ["get", "create"], OPENSEARCH_POD)
     requests += each("jaeger", "", "pods/portforward", ["get", "create"])
+    # live_drift.py reads each monitoring CRD by name; it never lists the collection.
+    for name in MONITORING_CRDS:
+        requests += each("", "apiextensions.k8s.io", "customresourcedefinitions", ["get"], name)
     if RECOVERY in IDENTITIES[identity]:
         # opensearch-expand-volume.sh. The script reads the claim's name from the Pod.
         requests += each("", "", "persistentvolumes", ["get"])
@@ -194,6 +201,9 @@ def denied(identity):
     requests += each("", "", "persistentvolumes", ["patch", "delete"])
     requests += each("", "cert-manager.io", "clusterissuers", ["get", "patch"])
     requests += each("", "apiextensions.k8s.io", "customresourcedefinitions", ["create", "patch", "delete"])
+    # The drift report reads the ten monitoring CRDs by name: no other CRD, and no list of them.
+    requests += each("", "apiextensions.k8s.io", "customresourcedefinitions", ["get"], "certificates.cert-manager.io")
+    requests += each("", "apiextensions.k8s.io", "customresourcedefinitions", ["list", "watch"])
     requests += each("", "admissionregistration.k8s.io", "validatingadmissionpolicies", ["create", "delete"])
     requests += each("", "admissionregistration.k8s.io", "validatingadmissionpolicybindings", ["create", "delete"])
     requests += each("", RBAC, "clusterroles", ["patch", "delete", "bind", "escalate"], "cluster-admin")
