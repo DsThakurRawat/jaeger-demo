@@ -51,7 +51,7 @@ def index_objects(records, ns, release, docs):
         records[key] = hashlib.sha256(canonical).digest()
 
 
-def summary(base, head, before, after, legacy):
+def summary(base, head, before, after, legacy, base_verified=False, head_verified=True):
     for commit in (before, after):
         if not re.fullmatch(r"[a-f0-9]{40}", commit):
             raise ValueError("Invalid revision identity")
@@ -64,6 +64,8 @@ def summary(base, head, before, after, legacy):
         counts[state] += 1
         changed.append((state, key))
     output = ["## Rendered Kubernetes changes", "", f"Base `{before}` and head `{after}`.", ""]
+    output += [f"Head charts: {'verified against' if head_verified else 'NOT verified against'} the chart archive lock. "
+               f"Base charts: {'verified against the lock' if base_verified else 'NOT verified, rendered from the chart publishers'}.", ""]
     if legacy:
         output += ["The base uses the script-era chart arguments and supplemental manifests. The head uses Helmfile.", ""]
     output += [f"{counts['Added']} added, {counts['Modified']} modified, {counts['Removed']} removed. "
@@ -95,6 +97,59 @@ def revision(root):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
+def tool_env(temp, home):
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "KUBECONFIG": os.devnull,
+           "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+           "HELM_CACHE_HOME": str(temp / "cache"), "HELM_CONFIG_HOME": str(temp / "config"),
+           "HELM_DATA_HOME": str(temp / "data")}
+    if "HELM_PLUGINS" in os.environ:
+        env["HELM_PLUGINS"] = os.environ["HELM_PLUGINS"]
+    return env
+
+
+class VerificationError(ValueError):
+    """A chart archive did not verify against its lock."""
+
+
+def has_state_command(root):
+    """Whether this checkout's chart_archives.py offers `state`.
+
+    Run without arguments the script prints its usage and exits 2. A checkout from before
+    `state` existed lists no such command, or has no script at all. A script that defines
+    `locked_state` but does not list the command is ambiguous and is an error, so a changed
+    usage text cannot quietly downgrade a capable base to the publisher render.
+    """
+    script = root / "scripts/demo/chart_archives.py"
+    if not script.is_file():
+        return False
+    proc = subprocess.run([sys.executable, str(script)], cwd=root, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.PIPE, text=True, timeout=60, check=False)
+    if proc.returncode == 2 and "chart_archives.py state" in proc.stderr:
+        return True
+    if "def locked_state" in script.read_text():
+        raise VerificationError("Could not tell whether the base verifies chart archives")
+    return False
+
+
+def locked_state(root, temp, name):
+    """Write root's lock-verified Helmfile state and return its path relative to root.
+
+    Any refusal, including a digest mismatch or a failed pull, is an error. Nothing falls back
+    to the publishers' charts.
+    """
+    home = temp / "home"
+    home.mkdir(mode=0o700, parents=True)
+    child_env = tool_env(temp, home)
+    archives = temp / name
+    archives.mkdir(mode=0o700)
+    try:
+        child(root, child_env, sys.executable, "scripts/demo/chart_archives.py", "state", str(archives))
+    except ValueError as error:
+        raise VerificationError("Chart archives did not verify") from error
+    return ".helmfile-locked.yaml"
+
+
 def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES, stable=True, state="helmfile.yaml"):
     """Render the six releases. `target`, `index`, `images`, `stable` and `state` let another check reuse this render.
 
@@ -110,13 +165,7 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
     temp.mkdir(mode=0o700)
     home = temp / "home"
     home.mkdir(mode=0o700)
-    env = {"PATH": os.environ["PATH"], "HOME": str(home), "KUBECONFIG": os.devnull,
-           "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-           "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
-           "HELM_CACHE_HOME": str(temp / "cache"), "HELM_CONFIG_HOME": str(temp / "config"),
-           "HELM_DATA_HOME": str(temp / "data")}
-    if "HELM_PLUGINS" in os.environ:
-        env["HELM_PLUGINS"] = os.environ["HELM_PLUGINS"]
+    env = tool_env(temp, home)
     tools = root / ".tools"
     tools.mkdir(exist_ok=True)
     child(root, env, "bash", "-eu", "-o", "pipefail", "-c",
@@ -175,11 +224,17 @@ def main():
         legacy = not (base / "helmfile.yaml").is_file()
         with tempfile.TemporaryDirectory(prefix="demo-pr-renders-") as staging:
             root = Path(staging)
-            baseline = render(base, root / "base", legacy)
-            candidate = render(head, root / "head", False)
+            # The head must verify. A base that has no `state` command yet keeps the publisher render.
+            head_state = locked_state(head, root / "head-archives", "archives")
+            base_verified = not legacy and has_state_command(base)
+            base_state = locked_state(base, root / "base-archives", "archives") if base_verified else "helmfile.yaml"
+            baseline = render(base, root / "base", legacy, state=base_state)
+            candidate = render(head, root / "head", False, state=head_state)
             if (before, after) != (revision(base), revision(head)):
                 raise ValueError("Checkout changed while rendering")
-            print(summary(baseline, candidate, before, after, legacy), end="")
+            print(summary(baseline, candidate, before, after, legacy, base_verified), end="")
+    except VerificationError:
+        parser.exit(1, "Could not verify the pinned chart archives against the lock.\n")
     except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError, yaml.YAMLError):
         # Child tools, YAML parser excerpts and exception values can include an
         # entire Secret. The public job gets only this fixed failure message.
