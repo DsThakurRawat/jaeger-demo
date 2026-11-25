@@ -403,8 +403,12 @@ OpenSearch downgrade as a generic rollback. The old scripts can be a fallback on
 after de-adoption has completed.
 
 The commands for the ownership patches and for the companion rollback follow. The
-deploy workflow does not run Helmfile yet, so the companion installs and the
-adoption apply have no production commands here.
+deploy workflow's [Helmfile engine](releases.md#helmfile-engine) runs the companion
+installs (`helmfile_operation=install-companion`, one namespace per dispatch) and
+the adoption apply. The adoption procedure that uses them, with its order, checks
+and rollback points, is
+[#74](https://github.com/jaegertracing/jaeger-demo/issues/74) and is not written
+here yet.
 
 ### Apply the ownership patches
 

@@ -1,0 +1,13 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+# Where the Helmfile engine takes the Jaeger and HotROD images from
+# (docs/releases.md#helmfile-engine).
+#
+# live:   reuse each live image reference exactly, as a tag. Ownership adoption
+#         must not change the pod templates, so it never switches to digest syntax.
+#         A scheduled run refuses this mode.
+# digest: resolve the upstream snapshots, pin them as tag@sha256 and validate them
+#         against both Jaeger renders before any credential-holding step. Change to
+#         this mode in a separate reviewed pull request after adoption.
+mode: live

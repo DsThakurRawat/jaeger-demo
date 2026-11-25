@@ -24,6 +24,30 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Added
 
+- A Helmfile engine for **Deploy Jaeger Demo to OKE**, off by default. A scheduled
+  run uses it only when the `DEMO_DEPLOY_ENGINE` repository variable is `helmfile`,
+  and a manual run only with the new `engine=helmfile` input and
+  `expected_config_sha`; otherwise the job runs the scripts exactly as before. It
+  reconciles all ten releases from lock-verified charts, OCI before OTel, retries
+  failed releases with sync, refuses pending ones before any write, verifies both
+  stacks even when nothing changed, and installs a first companion only on a
+  one-namespace `helmfile_operation=install-companion` dispatch, and only when every
+  allowlisted object there already carries the reviewed ownership. Images come from
+  the live references (`helmfile/images.yaml` `mode: live`) or, in `digest` mode,
+  are resolved for the run's upstream commit and validated before any step holds
+  the OCI API key. Adoption runs (`live` mode and companion installs) restart no
+  trace generator and are refused before any write if they would change anything
+  but ownership: a live-mode apply when a read-only diff shows a change, a companion
+  install when the live drift classification finds a difference. After an apply,
+  each Jaeger and HotROD workload must run the expected image. The OTel Certificates
+  must be present and Ready, which the scripts only log. Each run uploads
+  `deploy-record.json` for 90 days, also when the image gate rejects a candidate. A new
+  `operations` CI job rehearses it on kind as the deployer. Setting
+  `DEMO_DEPLOY_ENGINE` needs `mode: digest` first, and returning to the scripts
+  needs de-adoption first.
+  ([#153](https://github.com/jaegertracing/jaeger-demo/pull/153),
+  refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
+
 - `scripts/demo/live_drift.py`, a read-only drift report that compares every
   object the Helmfile render would own, rendered with the live Jaeger and HotROD
   images, with the live object, and classifies each as identical, explained by a

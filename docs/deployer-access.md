@@ -225,8 +225,9 @@ for the job:
 | `ci-opensearch-volume-expand.yml` | Configure kubectl with OKE, Verify the deployment identity's access, Expand and verify the OpenSearch volume |
 
 The checkout, the revision check, the OCI CLI installation
-and version check, the Helm setup action and the Slack notification run without
-them. The only action that receives them is the kubectl configuration,
+and version check, the three Helmfile preparation steps (toolchain, charts and
+images), the Helm setup action, the deployment record upload and the Slack
+notification run without them. The only action that receives them is the kubectl configuration,
 `oracle-actions/configure-kubectl-oke`, pinned by commit.
 `scripts/demo/workflow_test.py` fails if a secret appears at workflow or job
 level, in an action input or a script, under another name, as part of the set, or
@@ -439,7 +440,15 @@ only by the access reviews of `check`. This job does not run `helmfile apply` or
 rehearsals in the `Helmfile render and adoption rehearsal` job run them as a user
 bound to the committed roles, on fixture releases, and fail on a refusal that
 Helm or Helmfile reports; they read no audit log, so a refusal that a tool
-ignores is not caught there. The job also does not prove the
+ignores is not caught there. The `operations` job runs the Helmfile
+engine, `helmfile_deploy.py`, on its own kind cluster as a user bound to this role:
+`helm list` per namespace, `helm history`, the per-release Helmfile apply and sync,
+the companion object reads, drift gate and first install, the live-mode diff gate,
+the generator restarts, the running image check, the
+fingerprint patches, the live image reads through `kubectl proxy`, and the
+rollout, OpenSearch claim and Certificate checks, on synthetic application charts,
+fixture workloads and the real `demo-resources` chart. Only the registry lookup,
+the public health checks and the trace write are stubbed there. Neither job proves the
 production cluster: it shows nothing about the bindings an administrator
 applied, OCI IAM policies, or group grants outside Kubernetes. The production
 check above still applies.

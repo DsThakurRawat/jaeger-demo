@@ -40,6 +40,33 @@ on:
           - opensearch
           - monitoring
           - all
+      engine:
+        description: 'Deployment engine. helmfile runs scripts/demo/helmfile_deploy.py and requires expected_config_sha.'
+        required: false
+        default: scripts
+        type: choice
+        options:
+          - scripts
+          - helmfile
+      helmfile_operation:
+        description: 'Helmfile engine only. apply reconciles all ten releases; install-companion installs one absent demo-resources release.'
+        required: false
+        default: apply
+        type: choice
+        options:
+          - apply
+          - install-companion
+      companion_namespace:
+        description: 'Helmfile install-companion only. The namespace whose demo-resources release to install.'
+        required: false
+        default: none
+        type: choice
+        options:
+          - none
+          - default
+          - jaeger
+          - opensearch
+          - otel-demo
 
 permissions:
   contents: read
@@ -69,7 +96,8 @@ jobs:
     # restarts, and about 50m of smoke-check and trace-check retries.
     # Rollout checks that directly follow a Helm --wait return at once.
     # The reconcile step is limited to 300m, which leaves 30m for setup and the
-    # notification.
+    # notification. The three Helmfile preparation steps allow 30m together but
+    # take a few minutes; their limits stop a hung download, not a slow run.
     timeout-minutes: 330
     env:
       EXPECTED_CONFIG_SHA: ${{ inputs.expected_config_sha }}
@@ -86,11 +114,25 @@ jobs:
       JAEGER_OTEL_DEMO_DEPLOY_SCOPE: ${{ github.event.inputs.otel_deploy_scope || 'jaeger' }}
       RUN_PUBLIC_SMOKE_TESTS: "true"
       GITHUB_EVENT_NAME: ${{ github.event_name }}
+      # The scripts deploy unless a run selects Helmfile: a scheduled run only through the
+      # DEMO_DEPLOY_ENGINE repository variable, a manual run only through its engine input.
+      DEPLOY_ENGINE: ${{ github.event_name == 'schedule' && (vars.DEMO_DEPLOY_ENGINE == 'helmfile' && 'helmfile' || 'scripts') || inputs.engine || 'scripts' }}
+      HELMFILE_OPERATION: ${{ inputs.helmfile_operation || 'apply' }}
+      COMPANION_NAMESPACE: ${{ inputs.companion_namespace || 'none' }}
 
     steps:
     - name: Verify the reviewed configuration revision
       shell: bash
       run: |
+        case "${DEPLOY_ENGINE:-scripts}" in
+          scripts|helmfile) ;;
+          *) echo "Unknown deployment engine" >&2; exit 1 ;;
+        esac
+        # A manual Helmfile run deploys only the commit its reviewer approved.
+        if [[ "$DEPLOY_ENGINE" == helmfile && "$GITHUB_EVENT_NAME" == workflow_dispatch && -z "$EXPECTED_CONFIG_SHA" ]]; then
+          echo "A manual Helmfile run requires expected_config_sha" >&2
+          exit 1
+        fi
         if [[ -n "$EXPECTED_CONFIG_SHA" ]]; then
           if [[ ! "$EXPECTED_CONFIG_SHA" =~ ^[0-9a-f]{40}$ || "$EXPECTED_CONFIG_SHA" != "$GITHUB_SHA" ]]; then
             echo "The workflow revision does not match the reviewed configuration commit" >&2
@@ -133,6 +175,26 @@ jobs:
         PIP_CONSTRAINT: ${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt
       run: |
         python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML -r scripts/demo/oci-cli-hashes.txt
+
+    # Helmfile engine only. These steps hold no secret and reach no cluster. They run
+    # after the hash-verified install, which provides PyYAML, and before any step holds
+    # the OCI API key: the pinned tools, the lock-verified charts and, in digest image
+    # mode, the image selection and its Jaeger configuration gate.
+    - name: Prepare the pinned Helmfile toolchain
+      if: env.DEPLOY_ENGINE == 'helmfile'
+      timeout-minutes: 5
+      run: python3 scripts/demo/helmfile_tools.py check
+
+    - name: Prepare the pinned charts
+      if: env.DEPLOY_ENGINE == 'helmfile'
+      timeout-minutes: 10
+      run: python3 scripts/demo/helmfile_deploy.py prepare
+
+    # A companion install renders no application release, so it resolves and validates no image.
+    - name: Resolve and validate images
+      if: env.DEPLOY_ENGINE == 'helmfile' && env.HELMFILE_OPERATION != 'install-companion'
+      timeout-minutes: 15
+      run: python3 scripts/demo/helmfile_deploy.py images
 
     # The OCI API key is set only on the steps that reach OCI or the cluster. The
     # kubeconfig runs the OCI CLI for a token, so every kubectl and helm call needs it.
@@ -191,7 +253,23 @@ jobs:
         OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
         OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
         OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      run: python3 scripts/demo/deploy.py
+      run: |
+        if [[ "$DEPLOY_ENGINE" == helmfile ]]; then
+          python3 scripts/demo/helmfile_deploy.py reconcile
+        else
+          python3 scripts/demo/deploy.py
+        fi
+
+    # The Helmfile engine writes the run's record, also when it fails or refuses.
+    # It holds no Secret value, no Helm value and no diff (docs/releases.md#deployment-record).
+    - name: Upload the deployment record
+      if: always() && hashFiles('deploy-record.json') != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: deploy-record-${{ github.run_id }}-${{ github.run_attempt }}
+        path: deploy-record.json
+        if-no-files-found: error
+        retention-days: 90
 
     # A cancelled or timed-out job is not a failure() and would otherwise end silently.
     - name: Send detailed Slack notification on failure

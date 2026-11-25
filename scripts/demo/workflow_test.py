@@ -41,6 +41,12 @@ PIP_CONSTRAINT = '${{ github.workspace }}/scripts/demo/oci-cli-constraints.txt'
 WHOLE_SECRETS = re.compile(r'tojson\(\s*secrets\s*\)|secrets\s*:\s*inherit', re.IGNORECASE)
 HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --no-binary PyYAML '
                   '-r scripts/demo/oci-cli-hashes.txt')
+HELMFILE_PREPARATION = ['Prepare the pinned Helmfile toolchain', 'Prepare the pinned charts',
+                        'Resolve and validate images']
+# Each preparation step runs only for the Helmfile engine; a companion install selects no image.
+HELMFILE_IF = dict.fromkeys(HELMFILE_PREPARATION, "env.DEPLOY_ENGINE == 'helmfile'")
+HELMFILE_IF['Resolve and validate images'] = (
+    "env.DEPLOY_ENGINE == 'helmfile' && env.HELMFILE_OPERATION != 'install-companion'")
 
 
 def secret_references(node, path=()):
@@ -401,7 +407,14 @@ class WorkflowTests(unittest.TestCase):
                                   'run': HASHED_INSTALL + '\n'}, install)
                 self.assertEqual(1, source.count('pip install'))
                 configure = names.index('Configure kubectl with OKE')
-                self.assertEqual(names.index('Install the hash-verified OCI CLI') + 1, configure)
+                # Only the Helmfile preparation, which needs the PyYAML this install provides, runs in
+                # between. It holds no secret, runs no action and is skipped unless Helmfile deploys.
+                between = steps[names.index('Install the hash-verified OCI CLI') + 1:configure]
+                self.assertEqual(HELMFILE_PREPARATION if filename == 'ci-deploy-demo.yml' else [],
+                                 [step['name'] for step in between])
+                for step in between:
+                    self.assertEqual({'name', 'if', 'timeout-minutes', 'run'}, set(step))
+                    self.assertEqual(HELMFILE_IF[step['name']], step['if'])
                 self.assertEqual(configure, min(index for index, step in enumerate(steps)
                                                 if 'OCI_CLI_KEY_CONTENT' in (step.get('env') or {})))
                 self.assertLess(names.index('Checkout demo configuration'), configure - 1)
@@ -510,7 +523,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse((ROOT / path).exists(), path)
         inputs = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())[True]['workflow_dispatch']['inputs']
         self.assertEqual({'expected_config_sha', 'image_tag', 'jaeger_image_tag', 'hotrod_image_tag', 'demo_stack',
-                          'otel_deploy_scope'}, set(inputs))
+                          'otel_deploy_scope', 'engine', 'helmfile_operation', 'companion_namespace'}, set(inputs))
         # Tests are left out, and so is deployer_access.py: its denied list names the snapshot kinds
         # so that `check` can show neither identity holds them.
         sources = sorted(WORKFLOWS.glob('*.yml'))
@@ -730,12 +743,12 @@ class WorkflowTests(unittest.TestCase):
         versions = re.findall(r'kind/releases/download/(v\d+\.\d+\.\d+)/kind-linux-amd64', source)
         digests = re.findall(r"echo '([0-9a-f]{64})  kind' \| sha256sum --check", source)
         images = re.findall(r'kindest/node:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}', source)
-        # The adoption and deployer-access jobs each download kind; both change together.
-        self.assertEqual(2, len(versions))
+        # The adoption, deployer-access and operations jobs each download kind; all change together.
+        self.assertEqual(3, len(versions))
         self.assertEqual(len(versions), len(digests))
         self.assertEqual(1, len(set(zip(versions, digests))))
         self.assertEqual(1, len(set(images)))
-        for name in ('adoption', 'deployer-access'):
+        for name in ('adoption', 'deployer-access', 'operations'):
             with self.subTest(job=name):
                 self.assertIn('kind-linux-amd64', runs[name])
                 self.assertIn(images[0], runs[name])
@@ -784,6 +797,167 @@ class WorkflowTests(unittest.TestCase):
         base, = [step for step in job['steps'] if step.get('with', {}).get('path') == 'baseline']
         self.assertEqual("github.event_name == 'pull_request'", base['if'])
         self.assertEqual('${{ github.event.pull_request.base.sha }}', base['with']['ref'])
+
+    def deploy_steps(self):
+        return yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())['jobs']['deploy']['steps']
+
+    def test_helmfile_preparation_holds_no_secret_and_runs_before_cluster_access(self):
+        steps = self.deploy_steps()
+        names = [step['name'] for step in steps]
+        configure = names.index('Configure kubectl with OKE')
+        commands = ['python3 scripts/demo/helmfile_tools.py check', 'python3 scripts/demo/helmfile_deploy.py prepare',
+                    'python3 scripts/demo/helmfile_deploy.py images']
+        for name, command in zip(HELMFILE_PREPARATION, commands):
+            with self.subTest(step=name):
+                step = steps[names.index(name)]
+                self.assertLess(names.index(name), configure)
+                self.assertEqual(command, step['run'])
+                self.assertEqual(HELMFILE_IF[name], step['if'])
+                self.assertNotIn('env', step)
+                self.assertNotIn('uses', step)
+                self.assertEqual([], list(secret_references(step)))
+                # The secret-holder rule matches a step's own script text only, so these scripts must not
+                # name kubectl or helm. It cannot see the Helm the Python runs: helmfile_deploy_test.py
+                # checks that prepare and images run Helm with KUBECONFIG=/dev/null.
+                self.assertIsNone(re.search(r'\b(kubectl|helm)\b', step['run']))
+                self.assertIsInstance(step['timeout-minutes'], int)
+        self.assertEqual(HELMFILE_PREPARATION, names[configure - 3:configure])
+
+    def engine(self, event, variable, engine):
+        env = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())['jobs']['deploy']['env']
+        expression = re.fullmatch(r'\$\{\{ (.+) \}\}', env['DEPLOY_ENGINE'])[1]
+        for name, value in (('github.event_name', event), ('vars.DEMO_DEPLOY_ENGINE', variable), ('inputs.engine', engine)):
+            expression = expression.replace(name, repr(value))
+        return eval(expression.replace('&&', 'and').replace('||', 'or'), {'__builtins__': {}}, {})
+
+    def test_the_schedule_selects_helmfile_only_through_the_variable_and_dispatch_defaults_to_scripts(self):
+        for variable in ('', 'scripts', 'yes', 'true', 'helmfile '):
+            for engine in ('', 'helmfile', 'scripts'):
+                with self.subTest(variable=variable, engine=engine):
+                    # A scheduled run has no inputs; even a stray one cannot select the engine.
+                    self.assertEqual('scripts', self.engine('schedule', variable, engine))
+        self.assertEqual('helmfile', self.engine('schedule', 'helmfile', ''))
+        for variable in ('', 'helmfile'):
+            with self.subTest(variable=variable):
+                self.assertEqual('scripts', self.engine('workflow_dispatch', variable, ''))
+                self.assertEqual('scripts', self.engine('workflow_dispatch', variable, 'scripts'))
+                self.assertEqual('helmfile', self.engine('workflow_dispatch', variable, 'helmfile'))
+        workflow = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())
+        inputs = workflow[True]['workflow_dispatch']['inputs']
+        self.assertEqual(('choice', 'scripts', ['scripts', 'helmfile']),
+                         (inputs['engine']['type'], inputs['engine']['default'], inputs['engine']['options']))
+        self.assertEqual(('apply', ['apply', 'install-companion']),
+                         (inputs['helmfile_operation']['default'], inputs['helmfile_operation']['options']))
+        self.assertEqual(('none', ['none', 'default', 'jaeger', 'opensearch', 'otel-demo']),
+                         (inputs['companion_namespace']['default'], inputs['companion_namespace']['options']))
+        env = workflow['jobs']['deploy']['env']
+        self.assertEqual("${{ inputs.helmfile_operation || 'apply' }}", env['HELMFILE_OPERATION'])
+        self.assertEqual("${{ inputs.companion_namespace || 'none' }}", env['COMPANION_NAMESPACE'])
+
+    def run_step(self, name, **env):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / 'python3.log'
+            stub = Path(temp) / 'python3'
+            stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$STUB_LOG"\n')
+            stub.chmod(0o755)
+            result = subprocess.run(['bash', '-eo', 'pipefail', '-c', step_script(name)], text=True, capture_output=True,
+                                    env=dict(os.environ, PATH=temp + os.pathsep + os.environ['PATH'], STUB_LOG=str(log),
+                                             GITHUB_SHA=CONFIG_SHA, GITHUB_RUN_ATTEMPT='1', **env))
+            return result, log.read_text() if log.exists() else ''
+
+    def test_with_the_switch_off_the_job_runs_todays_path(self):
+        # Reconcile runs deploy.py unless the engine is helmfile.
+        for engine, expected in (('scripts', 'scripts/demo/deploy.py\n'), ('', 'scripts/demo/deploy.py\n'),
+                                 ('helmfile', 'scripts/demo/helmfile_deploy.py reconcile\n')):
+            with self.subTest(engine=engine):
+                result, invoked = self.run_step('Reconcile demo components', DEPLOY_ENGINE=engine)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(expected, invoked)
+        # Each step today's path lacks is skipped unless Helmfile deploys, or uploads the
+        # record that only the Helmfile engine writes.
+        steps = self.deploy_steps()
+        added = [step for step in steps if step['name'] in HELMFILE_PREPARATION + ['Upload the deployment record']]
+        self.assertEqual(4, len(added))
+        for step in added[:3]:
+            self.assertEqual(HELMFILE_IF[step['name']], step['if'])
+        import helmfile_deploy
+        self.assertEqual('deploy-record.json', helmfile_deploy.RECORD)
+        self.assertNotIn('deploy-record', (ROOT / 'scripts/demo/deploy.py').read_text())
+
+    def test_the_revision_guard_requires_a_reviewed_sha_for_a_manual_helmfile_run(self):
+        cases = ((('helmfile', 'workflow_dispatch', ''), 1), (('helmfile', 'workflow_dispatch', CONFIG_SHA), 0),
+                 (('helmfile', 'schedule', ''), 0), (('scripts', 'workflow_dispatch', ''), 0),
+                 (('', 'workflow_dispatch', ''), 0), (('other', 'schedule', ''), 1))
+        for (engine, event, expected), status in cases:
+            with self.subTest(engine=engine, event=event, expected=expected):
+                result, _ = self.run_step('Verify the reviewed configuration revision', DEPLOY_ENGINE=engine,
+                                          GITHUB_EVENT_NAME=event, EXPECTED_CONFIG_SHA=expected)
+                self.assertEqual(status, result.returncode, result.stderr)
+
+    def test_reconcile_keeps_its_name_secrets_and_limit(self):
+        reconcile, = [step for step in self.deploy_steps() if step.get('id') == 'reconcile']
+        self.assertEqual('Reconcile demo components', reconcile['name'])
+        self.assertEqual(OCI_ENV, reconcile['env'])
+        self.assertEqual(300, reconcile['timeout-minutes'])
+        self.assertNotIn('if', reconcile)
+
+    def test_the_record_upload_follows_reconcile_holds_no_secret_and_precedes_the_notification(self):
+        steps = self.deploy_steps()
+        names = [step['name'] for step in steps]
+        index = names.index('Upload the deployment record')
+        upload = steps[index]
+        self.assertEqual(names.index('Reconcile demo components') + 1, index)
+        self.assertEqual(['Send detailed Slack notification on failure'], names[index + 1:])
+        self.assertEqual("always() && hashFiles('deploy-record.json') != ''", upload['if'])
+        self.assertRegex(upload['uses'], r'^actions/upload-artifact@[0-9a-f]{40}$')
+        self.assertEqual({'name': 'deploy-record-${{ github.run_id }}-${{ github.run_attempt }}',
+                          'path': 'deploy-record.json', 'if-no-files-found': 'error', 'retention-days': 90}, upload['with'])
+        self.assertNotIn('env', upload)
+        self.assertEqual([], list(secret_references(upload)))
+
+    def test_operations_job_runs_the_deploy_rehearsal_on_its_own_cluster_within_its_limit(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        names = list(jobs)
+        self.assertEqual(names.index('deployer-access') + 1, names.index('operations'))
+        job = jobs['operations']
+        for step in job['steps']:
+            with self.subTest(step=step.get('name', step.get('uses'))):
+                self.assertFalse(str(step.get('uses', '')).startswith('azure/setup-helm'))
+                if 'uses' in step:
+                    self.assertIs(False, step['with']['persist-credentials'])
+                self.assertIsInstance(step.get('timeout-minutes'), int)
+                self.assertEqual([], list(secret_references(step)))
+        self.assertLessEqual(sum(step['timeout-minutes'] for step in job['steps']), job['timeout-minutes'])
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        create, = [run for run in runs if 'kind create cluster' in run]
+        self.assertIn('--name jaeger-demo-operations-fixture', create)
+        rehearsal, = [run for run in runs if 'rehearsals/helmfile-deploy/exercise.py' in run]
+        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
+        self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 '
+                      'scripts/demo/rehearsals/helmfile-deploy/exercise.py', rehearsal)
+        context = re.search(r'--context (\S+)', rehearsal)[1]
+        source = (ROOT / 'scripts/demo/rehearsals/helmfile-deploy/exercise.py').read_text()
+        self.assertIn(f'CONTEXT = "{context}"', source)
+        self.assertIn('choices=(CONTEXT,)', source)
+        # The rehearsal drives the deploy workflow's own driver, not a copy of it.
+        self.assertIn('helmfile_deploy.reconcile(', source)
+        self.assertIn('helmfile_deploy.images(', source)
+
+    def test_a_companion_install_skips_the_image_gate_step(self):
+        steps = self.deploy_steps()
+        step, = [s for s in steps if s['name'] == 'Resolve and validate images']
+        condition = step['if']
+        for engine in ('scripts', 'helmfile'):
+            for operation in ('apply', 'install-companion'):
+                with self.subTest(engine=engine, operation=operation):
+                    expression = condition.replace('env.DEPLOY_ENGINE', repr(engine))
+                    expression = expression.replace('env.HELMFILE_OPERATION', repr(operation))
+                    expression = expression.replace('&&', 'and')
+                    self.assertEqual(engine == 'helmfile' and operation == 'apply',
+                                     eval(expression, {'__builtins__': {}}, {}))
+        # The job sets the operation for every event, and a schedule always applies.
+        env = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())['jobs']['deploy']['env']
+        self.assertEqual("${{ inputs.helmfile_operation || 'apply' }}", env['HELMFILE_OPERATION'])
 
 
 if __name__ == '__main__':

@@ -173,6 +173,37 @@ jobs:
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/deployer-access/exercise.py \
           --kubeconfig "$RUNNER_TEMP/fixture.yaml" --context kind-jaeger-demo-deployer-fixture "${base[@]}"
 
+  # The Helmfile deploy driver of the deploy workflow on a real API server, as a user that holds
+  # only the committed deployer role: no-op, failed-release retry, pending refusal, the OCI gate
+  # and an incompatible image (#73).
+  operations:
+    name: Helmfile deploy driver rehearsal
+    runs-on: ubuntu-latest
+    # The step limits add up to less than this.
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      timeout-minutes: 1
+      with:
+        persist-credentials: false
+    - name: Install the constrained YAML dependency
+      timeout-minutes: 3
+      run: python3 -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
+    - name: Create the disposable Kubernetes fixture
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 8
+      run: |
+        curl --fail --location --silent --show-error --output kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+        echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  kind' | sha256sum --check
+        chmod u+x kind
+        ./kind create cluster --name jaeger-demo-operations-fixture --kubeconfig "$RUNNER_TEMP/operations-fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Run the Helmfile deploy driver as the deployer
+      timeout-minutes: 30
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/helmfile-deploy/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/operations-fixture.yaml" --context kind-jaeger-demo-operations-fixture
+
   render-diff:
     name: Rendered resource changes
     if: github.event_name == 'pull_request'
