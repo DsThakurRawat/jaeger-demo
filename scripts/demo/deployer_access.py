@@ -55,23 +55,28 @@ ROLE_REFS = {
 # objects themselves come from the inventory, which chart_objects.py keeps equal to both
 # renders, with the verbs of APPLY_METHODS. Upgrades pass no --server-side flag; only the
 # first companion install does.
-# Both identities run every row: the scheduled one once DEMO_DEPLOY_ENGINE=helmfile.
-# (command, code, Secret verbs, why)
+# Both identities run every row but the first companion install: the scheduled one once
+# DEMO_DEPLOY_ENGINE=helmfile. The deploy driver (#73) refuses a companion install on a
+# schedule, so that row is the manual identity's only.
+HelmfileCommand = namedtuple("HelmfileCommand", "command code verbs identities why")
+BOTH = ("scheduled", "manual")
 HELMFILE_COMMANDS = (
-    ("helm list -n <namespace> --max 0 -o json", "release_phases.list_args", ("list",),
-     "lists the namespace's release records; one namespace at a time, never every namespace at once"),
-    ("helm history <release> -n <namespace> --max 1 -o json", "release_phases.selected_statuses read_status",
-     ("list",), "reads one release's records by label when the listing omits it"),
-    ("helm diff upgrade --allow-unreleased=false --suppress-secrets", "helmfile apply, helm-diff 3.15.15",
-     ("list", "get"), "helm get manifest and helm get hooks list the records; under Helm 4 the render is "
-     "helm template --dry-run=server --is-upgrade, whose lookup calls read a Secret by name in the release "
-     "namespace (the Grafana admin password)"),
-    ("helmfile apply|sync --install=false --reset-values", "release_phases.run reconcile",
-     ("list", "get", "create", "update", "delete"), "writes the new revision, marks the previous one superseded, "
-     "reads a revision by name to roll back on failure and deletes revisions beyond historyMax"),
-    ("helm install demo-resources --server-side=true --wait=legacy --create-namespace=false",
-     "release_phases.install_args", ("list", "create", "update"),
-     "checks that the name is unused, writes revision 1 and records its status"),
+    HelmfileCommand("helm list -n <namespace> --max 0 -o json", "release_phases.list_args", ("list",), BOTH,
+                    "lists the namespace's release records; one namespace at a time, never every namespace at once"),
+    HelmfileCommand("helm history <release> -n <namespace> --max 1 -o json",
+                    "release_phases.selected_statuses read_status", ("list",), BOTH,
+                    "reads one release's records by label when the listing omits it"),
+    HelmfileCommand("helm diff upgrade --allow-unreleased=false --suppress-secrets", "helmfile apply, helm-diff 3.15.15",
+                    ("list", "get"), BOTH, "helm get manifest and helm get hooks list the records; under Helm 4 the "
+                    "render is helm template --dry-run=server --is-upgrade, whose lookup calls read a Secret by name "
+                    "in the release namespace (the Grafana admin password)"),
+    HelmfileCommand("helmfile apply|sync --install=false --reset-values", "release_phases.run reconcile",
+                    ("list", "get", "create", "update", "delete"), BOTH, "writes the new revision, marks the previous "
+                    "one superseded, reads a revision by name to roll back on failure and deletes revisions beyond "
+                    "historyMax"),
+    HelmfileCommand("helm install demo-resources --server-side=true --wait=legacy --create-namespace=false",
+                    "release_phases.install_args", ("list", "create", "update"), ("manual",),
+                    "checks that the name is unused, writes revision 1 and records its status"),
 )
 # Helm 4.3.2 upgrades default to --server-side=auto: a release keeps the apply method its last
 # revision was stored with. The script path's releases were stored either way (Helm 3 and
@@ -182,10 +187,11 @@ def script_requests(identity):
     return requests
 
 
-def helmfile_requests():
-    """What each Helmfile path command needs beyond the objects: {command: [Request]}. Both identities run them."""
-    return {command: [Request(namespace, "", "secrets", verb, "") for namespace in RELEASE_NAMESPACES for verb in verbs]
-            for command, _, verbs, _ in HELMFILE_COMMANDS}
+def helmfile_requests(identity):
+    """What each Helmfile path command that `identity` runs needs beyond the objects: {command: [Request]}."""
+    return {row.command: [Request(namespace, "", "secrets", verb, "") for namespace in RELEASE_NAMESPACES
+                          for verb in row.verbs]
+            for row in HELMFILE_COMMANDS if identity in row.identities}
 
 
 def retired_requests():
@@ -208,7 +214,7 @@ def retired_requests():
 
 def required(identity, inventory=INVENTORY):
     records = json.loads(Path(inventory).read_text())["records"]
-    helmfile = {request for requests in helmfile_requests().values() for request in requests}
+    helmfile = {request for requests in helmfile_requests(identity).values() for request in requests}
     return sorted(set(chart_requests(records)) | set(script_requests(identity)) | helmfile)
 
 

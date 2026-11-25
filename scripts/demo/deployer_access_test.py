@@ -116,10 +116,10 @@ class DeployerAccessTests(unittest.TestCase):
         self.assertEqual(d.unexplained("scheduled", added, d.required("scheduled")),
                          [(d.DEPLOYER, "otel-demo", "", "secrets", "patch", None)])
 
-    def test_helmfile_commands_are_required_of_both_identities_and_granted(self):
-        rows = d.helmfile_requests()
-        self.assertEqual([row[0] for row in d.HELMFILE_COMMANDS], list(rows))
+    def test_helmfile_commands_are_required_of_the_identities_that_run_them_and_granted(self):
         for identity in d.IDENTITIES:
+            rows = d.helmfile_requests(identity)
+            self.assertEqual([row.command for row in d.HELMFILE_COMMANDS if identity in row.identities], list(rows))
             required = set(d.required(identity))
             for command, requests in rows.items():
                 with self.subTest(identity=identity, command=command):
@@ -135,23 +135,42 @@ class DeployerAccessTests(unittest.TestCase):
             path = Path(temp) / "inventory.json"
             path.write_text(json.dumps(document))
             for identity in d.IDENTITIES:
+                rows = d.helmfile_requests(identity)
                 self.assertLessEqual({r for requests in rows.values() for r in requests}, set(d.required(identity, path)))
+
+    def test_only_the_manual_identity_runs_the_first_companion_install(self):
+        install = [row for row in d.HELMFILE_COMMANDS if row.command.startswith("helm install demo-resources")]
+        self.assertEqual(len(install), 1)
+        self.assertEqual(install[0].identities, ("manual",))
+        self.assertEqual(install[0].code, "release_phases.install_args")
+        self.assertIn(install[0].command, d.helmfile_requests("manual"))
+        self.assertNotIn(install[0].command, d.helmfile_requests("scheduled"))
+        # Every other row is run by both identities.
+        for row in d.HELMFILE_COMMANDS:
+            self.assertLessEqual(set(row.identities), set(d.IDENTITIES))
+            if row is not install[0]:
+                self.assertEqual(set(row.identities), set(d.IDENTITIES), row.command)
+        # The scheduled identity's other rows already ask for the install's Secret verbs, so attributing
+        # the install to the manual identity alone changes no rule, and no grant is left unexplained.
+        others = {r for requests in d.helmfile_requests("scheduled").values() for r in requests}
+        self.assertLessEqual(set(d.helmfile_requests("manual")[install[0].command]), others)
+        self.assertEqual(d.unexplained("scheduled", ROLES, d.required("scheduled")), [])
 
     def test_helmfile_rows_name_the_code_that_runs_them(self):
         """A row whose command has gone, or changed what it asks of Helm, is stale."""
         import release_phases
-        for command, code, verbs, why in d.HELMFILE_COMMANDS:
-            with self.subTest(command=command):
-                self.assertTrue(verbs and why)
-                if code.startswith("release_phases."):
-                    self.assertTrue(callable(getattr(release_phases, code.split()[0].split(".", 1)[1])))
+        for row in d.HELMFILE_COMMANDS:
+            with self.subTest(command=row.command):
+                self.assertTrue(row.verbs and row.why and row.identities)
+                if row.code.startswith("release_phases."):
+                    self.assertTrue(callable(getattr(release_phases, row.code.split()[0].split(".", 1)[1])))
         listing = release_phases.list_args("otel-demo")
         self.assertEqual(listing, ["list", "-n", "otel-demo", "--max", "0", "-o", "json"])
         install = release_phases.install_args("otel-demo", "chart.tgz", "values.json")
         self.assertEqual(install[:2], ["install", "demo-resources"])
         for flag in ("--server-side=true", "--wait=legacy", "--create-namespace=false"):
             self.assertIn(flag, install)
-            self.assertIn(flag, d.HELMFILE_COMMANDS[4][0])
+            self.assertIn(flag, d.HELMFILE_COMMANDS[4].command)
         # The rehearsal that runs the status read and native Helmfile as the bound deployer.
         phases = (d.ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
         for text in ['"history", rel, "--max", "1", "-o", "json"', "release_phases.selected_statuses(",
@@ -160,7 +179,7 @@ class DeployerAccessTests(unittest.TestCase):
             self.assertIn(text, phases)
         # helm-diff's requests were read from this release; another one must be read again.
         lock = json.loads((d.ROOT / "scripts/demo/helmfile-tools.lock.json").read_text())["tools"]
-        self.assertIn("helm-diff " + lock["helm-diff"]["version"].lstrip("v"), d.HELMFILE_COMMANDS[2][1])
+        self.assertIn("helm-diff " + lock["helm-diff"]["version"].lstrip("v"), d.HELMFILE_COMMANDS[2].code)
         # helm-diff renders with --dry-run=server only under Helm 4; Helm 4 upgrades default to --server-side=auto.
         self.assertTrue(lock["helm"]["version"].startswith("v4."), "review the rows for another Helm major")
         # Helm deletes revisions beyond historyMax, which is why an upgrade deletes Secrets.
@@ -176,8 +195,8 @@ class DeployerAccessTests(unittest.TestCase):
         phases = (d.ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
         sync = phases[phases.index("sync = ["):phases.index("command = [", phases.index("sync = ["))]
         self.assertNotIn("--server-side", sync)
-        flagged = [row[0] for row in d.HELMFILE_COMMANDS if "--server-side" in row[0]]
-        self.assertEqual(flagged, [d.HELMFILE_COMMANDS[4][0]])
+        flagged = [row.command for row in d.HELMFILE_COMMANDS if "--server-side" in row.command]
+        self.assertEqual(flagged, [d.HELMFILE_COMMANDS[4].command])
         self.assertIn("--server-side=true", flagged[0])
         self.assertEqual(set(d.APPLY_METHODS), {"client-side", "server-side"})
         # Every object a release holds can be upgraded with either stored method: it is read and
@@ -218,8 +237,8 @@ class DeployerAccessTests(unittest.TestCase):
         def line(prefix, request):
             return prefix + json.dumps(request._asdict(), sort_keys=True)
 
-        rows = d.helmfile_requests()
         for identity in d.IDENTITIES:
+            rows = d.helmfile_requests(identity)
             self.assertEqual((0, [f"{identity}: 0 difference(s) from ops/rbac/deployer.yaml"]), check_lines(identity, ROLES))
             # Without the otel-demo Secret rule, every Helmfile command there is missing.
             dropped = copy.deepcopy(ROLES)

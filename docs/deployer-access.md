@@ -62,17 +62,20 @@ fails the check. Helm keeps every
 revision of a release as the Secret `sh.helm.release.v1.<release>.v<N>` in the
 release's namespace, so the inventory holds history records for all ten releases.
 `HELMFILE_COMMANDS` in `scripts/demo/deployer_access.py` lists what each command of
-the path asks of those records. Each row applies in all four release namespaces and
-to both identities, because the scheduled identity runs the Helmfile engine once
-`DEMO_DEPLOY_ENGINE=helmfile`.
+the path asks of those records. Each row applies in all four release namespaces.
+The scheduled identity runs the Helmfile engine once `DEMO_DEPLOY_ENGINE=helmfile`,
+so both identities need every row except the first companion install, which is a
+manual dispatch only: the deploy driver of [#73](https://github.com/jaegertracing/jaeger-demo/issues/73) refuses it on a schedule, so `check`
+requires it of the manual identity alone. The scheduled identity's other rows
+already need the same Secret verbs, so this changes no rule.
 
-| Command | Code that builds or runs it | Secret verbs | Why |
-| --- | --- | --- | --- |
-| `helm list -n <namespace> --max 0 -o json` | `release_phases.list_args` | list | Helm lists a namespace's release records by label, one namespace at a time |
-| `helm history <release> -n <namespace> --max 1 -o json` | the `read_status` callback of `release_phases.selected_statuses` | list | Reads one release's records when the listing omits it |
-| `helm diff upgrade --allow-unreleased=false --suppress-secrets` | `helmfile apply`, helm-diff 3.15.15 | list, get | Reads the stored manifest and hooks; its render runs the charts' `lookup` of a Secret |
-| `helmfile apply` or `sync` with `--install=false --reset-values` (Helm's default `--server-side=auto`) | the `reconcile` callback of `release_phases.run` | list, get, create, update, delete | Writes the new revision, marks the previous one superseded, reads a revision by name to roll back on failure, and deletes revisions beyond `historyMax` (10) |
-| `helm install demo-resources` with `--server-side=true --wait=legacy --create-namespace=false` | `release_phases.install_args` | list, create, update | Checks that the name is unused, writes revision 1 and records its status |
+| Command | Code that builds or runs it | Identities | Secret verbs | Why |
+| --- | --- | --- | --- | --- |
+| `helm list -n <namespace> --max 0 -o json` | `release_phases.list_args` | both | list | Helm lists a namespace's release records by label, one namespace at a time |
+| `helm history <release> -n <namespace> --max 1 -o json` | the `read_status` callback of `release_phases.selected_statuses` | both | list | Reads one release's records when the listing omits it |
+| `helm diff upgrade --allow-unreleased=false --suppress-secrets` | `helmfile apply`, helm-diff 3.15.15 | both | list, get | Reads the stored manifest and hooks; its render runs the charts' `lookup` of a Secret |
+| `helmfile apply` or `sync` with `--install=false --reset-values` (Helm's default `--server-side=auto`) | the `reconcile` callback of `release_phases.run` | both | list, get, create, update, delete | Writes the new revision, marks the previous one superseded, reads a revision by name to roll back on failure, and deletes revisions beyond `historyMax` (10) |
+| `helm install demo-resources` with `--server-side=true --wait=legacy --create-namespace=false` | `release_phases.install_args` | manual | list, create, update | Checks that the name is unused, writes revision 1 and records its status |
 
 What the rows rest on, from Helm 4.3.2 and helm-diff 3.15.15:
 
