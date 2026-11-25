@@ -1,0 +1,513 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rendered objects by Helm release, as live_drift.render_objects collects them.
+# clusterScoped lists the apiVersion:Kind values that discovery reports without a namespace.
+clusterScoped:
+- admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration
+- apiextensions.k8s.io/v1:CustomResourceDefinition
+releases:
+  default/demo-resources:
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      annotations:
+        cert-manager.io/issuer: letsencrypt
+        helm.sh/resource-policy: keep
+      name: jaeger-demo-ingress
+      namespace: default
+    spec:
+      ingressClassName: nginx
+      rules:
+      - host: demo.example.test
+        http:
+          paths:
+          - backend:
+              service:
+                name: jaeger-query
+                port:
+                  number: 16686
+            path: /
+            pathType: Prefix
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+      labels:
+        app: trace-generator
+      name: trace-generator
+      namespace: default
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: trace-generator
+      template:
+        metadata:
+          labels:
+            app: trace-generator
+        spec:
+          containers:
+          - image: python:3.12-slim
+            imagePullPolicy: IfNotPresent
+            name: trace-generator
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+  default/jaeger:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/name: jaeger
+      name: jaeger
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: jaeger
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: jaeger
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+          serviceAccountName: jaeger
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: jaeger-collector
+    spec:
+      clusterIP: None
+      ports:
+      - name: grpc
+        port: 4317
+        targetPort: 0
+      selector:
+        app.kubernetes.io/name: jaeger
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: jaeger-query
+    spec:
+      clusterIP: None
+      ports:
+      - name: query
+        port: 16686
+      selector:
+        app.kubernetes.io/name: jaeger
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: jaeger-hotrod
+    spec:
+      ports:
+      - name: frontend
+        port: 80
+        targetPort: 8080
+      selector:
+        app.kubernetes.io/name: jaeger
+  default/prometheus:
+  - apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        operator.prometheus.io/version: 0.95.2
+      name: servicemonitors.monitoring.coreos.com
+    spec:
+      group: monitoring.coreos.com
+      names:
+        kind: ServiceMonitor
+        listKind: ServiceMonitorList
+        plural: servicemonitors
+        singular: servicemonitor
+      scope: Namespaced
+      versions:
+      - name: v1
+        schema:
+          openAPIV3Schema:
+            properties:
+              spec:
+                properties:
+                  endpoints:
+                    items:
+                      properties:
+                        port:
+                          type: string
+                        relabelings:
+                          items:
+                            properties:
+                              action:
+                                default: replace
+                                type: string
+                              targetLabel:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    type: array
+                type: object
+            type: object
+        served: true
+        storage: true
+  - apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        operator.prometheus.io/version: 0.95.2
+      name: probes.monitoring.coreos.com
+    spec:
+      conversion:
+        strategy: None
+      group: monitoring.coreos.com
+      names:
+        kind: Probe
+        listKind: ProbeList
+        plural: probes
+        singular: probe
+      scope: Namespaced
+      versions:
+      - name: v1
+        schema:
+          openAPIV3Schema:
+            properties:
+              spec:
+                properties:
+                  endpoints:
+                    items:
+                      properties:
+                        port:
+                          type: string
+                        relabelings:
+                          items:
+                            properties:
+                              action:
+                                default: replace
+                                type: string
+                              targetLabel:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    type: array
+                type: object
+            type: object
+        served: true
+        storage: true
+  - apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: prometheus-grafana
+      namespace: default
+    spec:
+      endpoints:
+      - port: http-web
+        relabelings:
+        - targetLabel: cluster
+  - apiVersion: admissionregistration.k8s.io/v1
+    kind: ValidatingWebhookConfiguration
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: prometheus-kube-prometheus-admission
+    webhooks:
+    - admissionReviewVersions:
+      - v1
+      clientConfig:
+        service:
+          name: prometheus-kube-prometheus-operator
+          namespace: default
+          path: /admission-prometheusrules/validate
+      failurePolicy: Ignore
+      name: prometheusrulevalidate.monitoring.coreos.com
+      rules:
+      - apiGroups:
+        - monitoring.coreos.com
+        apiVersions:
+        - '*'
+        operations:
+        - CREATE
+        - UPDATE
+        resources:
+        - prometheusrules
+      sideEffects: None
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      annotations:
+        helm.sh/hook: pre-install,pre-upgrade
+        helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+      name: prometheus-kube-prometheus-admission-create
+      namespace: default
+    spec:
+      template:
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+          restartPolicy: OnFailure
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      annotations:
+        helm.sh/hook: pre-install,pre-upgrade
+        helm.sh/hook-delete-policy: before-hook-creation
+      name: prometheus-crds-upgrade
+      namespace: default
+    spec:
+      template:
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+          restartPolicy: OnFailure
+  - apiVersion: v1
+    data:
+      admin-password: c3ludGhldGljLWZpeHR1cmUtcGFzc3dvcmQ=
+      admin-user: Zml4dHVyZS1zZWNyZXQtYWRtaW4tdXNlcg==
+      ldap-toml: ''
+    kind: Secret
+    metadata:
+      name: prometheus-grafana
+      namespace: default
+    type: Opaque
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+      name: prometheus-grafana
+      namespace: default
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+      template:
+        metadata:
+          annotations:
+            checksum/secret: af2b7c7b337c22083610d179919b169b86cc2d58b9b862b0eff5c470af5f3577
+          labels:
+            app.kubernetes.io/name: grafana
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+  - apiVersion: v1
+    data:
+      alertmanager.yaml: Zml4dHVyZS1zZWNyZXQtcmVuZGVyLWNvbmZpZw==
+    kind: Secret
+    metadata:
+      name: alertmanager-prometheus-kube-prometheus-alertmanager
+      namespace: default
+  - apiVersion: v1
+    data:
+      grafana.ini: fixture-configmap-render
+    kind: ConfigMap
+    metadata:
+      name: prometheus-grafana
+      namespace: default
+  jaeger/demo-resources:
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+      labels:
+        app: jaeger
+      name: jaeger-query-clusterip
+    spec:
+      ports:
+      - name: query
+        port: 16686
+      selector:
+        app.kubernetes.io/name: jaeger
+  opensearch/demo-resources:
+  - apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+      name: opensearch-demo-ingress
+      namespace: opensearch
+    spec:
+      ingressClassName: nginx
+  otel-demo/otel-demo:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: otel-demo
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+      name: frontend
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: frontend
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: frontend
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/name: cart
+      name: cart
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: cart
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cart
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: checkout
+    spec:
+      ports:
+      - name: grpc
+        port: 8080
+      selector:
+        app.kubernetes.io/name: jaeger
+  - apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      name: otel-collector-agent
+      namespace: otel-demo
+    spec:
+      selector:
+        matchLabels:
+          app: agent
+      template:
+        metadata:
+          labels:
+            app: agent
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+            readinessProbe:
+              httpGet:
+                path: /
+                port: 14269
+            resources:
+              limits:
+                cpu: 1000m
+                memory: 512Mi
+      updateStrategy:
+        type: RollingUpdate

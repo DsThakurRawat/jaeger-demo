@@ -183,8 +183,8 @@ schemas in those streams. It checks exact API group, version and kind, applies
 strict field and type checks, and fails on missing schemas. Native optional fields
 accept Kubernetes' null-as-omitted representation. Server-side defaulting, CEL and
 webhook behavior are tested against Kubernetes during adoption rehearsals.
-The credential-free rehearsal rendered 222 application objects plus 12 supplemental
-objects and validated all 234, including ten CRDs, with zero skips.
+The credential-free rehearsal renders 220 application objects plus 12 supplemental
+objects at the current pins and validates all 232, including ten CRDs, with zero skips.
 
 Renovate discovers all four tool releases and opens reviewable updates. For a version
 change, refresh that tool's checksums from its official release and review the lock diff:

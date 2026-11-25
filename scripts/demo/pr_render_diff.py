@@ -95,8 +95,11 @@ def revision(root):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def render(root, temp, legacy, target=TARGET, index=index_objects):
-    """Render the six releases. `target` and `index` let another check reuse this render."""
+def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES):
+    """Render the six releases. `target`, `index` and `images` let another check reuse this render.
+
+    `images` applies to the Helmfile render only; the script-era projection uses the fixture images.
+    """
     temp.mkdir(mode=0o700)
     home = temp / "home"
     home.mkdir(mode=0o700)
@@ -133,7 +136,7 @@ def render(root, temp, legacy, target=TARGET, index=index_objects):
                 continue
             fixture = temp / (state + ".json")
             if state == "helmfile.yaml":
-                fixture.write_text(json.dumps({"images": IMAGES}))
+                fixture.write_text(json.dumps({"images": images}))
             else:
                 # Use this revision's loader and its own supplemental source mapping.
                 fixture.write_bytes(child(root, env, sys.executable, "scripts/demo/companion_values.py"))

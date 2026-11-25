@@ -1,0 +1,144 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# The class, reason codes and unexplained fields the report gives each identity.
+objects:
+  admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration:-:prometheus-kube-prometheus-admission:
+    class: explained
+    reasons:
+    - helm-ownership
+    - server-default
+    - webhook-ca-bundle
+  apiextensions.k8s.io/v1:CustomResourceDefinition:-:probes.monitoring.coreos.com:
+    class: identical
+    reasons: []
+  apiextensions.k8s.io/v1:CustomResourceDefinition:-:servicemonitors.monitoring.coreos.com:
+    class: explained
+    reasons:
+    - server-default
+  apps/v1:DaemonSet:otel-demo:otel-collector-agent:
+    class: explained
+    reasons:
+    - daemonset-generation
+    - helm-ownership
+    - server-default
+    - server-quantity
+  apps/v1:Deployment:default:jaeger:
+    class: explained
+    reasons:
+    - deployment-revision
+    - helm-ownership
+    - server-default
+    - server-quantity
+  apps/v1:Deployment:default:prometheus-grafana:
+    class: explained
+    reasons:
+    - deployment-revision
+    - grafana-admin-password
+    - helm-ownership
+    - server-default
+    - server-quantity
+  apps/v1:Deployment:default:trace-generator:
+    class: explained
+    reasons:
+    - companion-unadopted
+    - deployment-revision
+    - kubectl-last-applied
+    - rollout-restart
+    - server-default
+    - server-quantity
+  apps/v1:Deployment:otel-demo:cart:
+    class: unexplained
+    reasons:
+    - deployment-revision
+    - helm-ownership
+    - server-default
+    - server-quantity
+    unexplainedFields:
+    - spec.selector.matchLabels.extra
+  apps/v1:Deployment:otel-demo:frontend:
+    class: unexplained
+    reasons:
+    - deployment-revision
+    - server-default
+    - server-quantity
+    unexplainedFields:
+    - metadata.(helm ownership)
+    - spec.template.metadata.annotations.kubectl.kubernetes.io/restartedAt
+  batch/v1:Job:default:prometheus-crds-upgrade:
+    class: missing
+    reasons: []
+  batch/v1:Job:default:prometheus-kube-prometheus-admission-create:
+    class: explained
+    reasons:
+    - hook-deleted
+  monitoring.coreos.com/v1:ServiceMonitor:default:prometheus-grafana:
+    class: explained
+    reasons:
+    - crd-schema-default
+    - helm-ownership
+  networking.k8s.io/v1:Ingress:default:jaeger-demo-ingress:
+    class: explained
+    reasons:
+    - companion-unadopted
+    - kubectl-last-applied
+  networking.k8s.io/v1:Ingress:opensearch:opensearch-demo-ingress:
+    class: unexplained
+    reasons: []
+    unexplainedFields:
+    - metadata.(helm ownership)
+    - metadata.labels.app.kubernetes.io/managed-by
+  v1:ConfigMap:default:prometheus-grafana:
+    class: unexplained
+    reasons:
+    - helm-ownership
+    unexplainedFields:
+    - data.grafana.ini
+  v1:Secret:default:alertmanager-prometheus-kube-prometheus-alertmanager:
+    class: unexplained
+    reasons:
+    - helm-ownership
+    - server-default
+    unexplainedFields:
+    - data
+  v1:Secret:default:prometheus-grafana:
+    class: explained
+    reasons:
+    - grafana-admin-password
+    - helm-ownership
+  v1:Service:default:jaeger-collector:
+    class: explained
+    reasons:
+    - helm-ownership
+    - server-default
+    - service-allocation
+  v1:Service:default:jaeger-hotrod:
+    class: explained
+    reasons:
+    - helm-ownership
+    - server-default
+    - service-allocation
+  v1:Service:default:jaeger-query:
+    class: unexplained
+    reasons:
+    - helm-ownership
+    - server-default
+    - service-allocation
+    unexplainedFields:
+    - spec.clusterIP
+  v1:Service:jaeger:jaeger-query-clusterip:
+    class: explained
+    reasons:
+    - helm-ownership
+    - server-default
+    - service-allocation
+  v1:Service:otel-demo:checkout:
+    class: missing
+    reasons: []
+  v1:ServiceAccount:otel-demo:otel-demo:
+    class: unexplained
+    reasons: []
+    unexplainedFields:
+    - metadata.(helm ownership)
+    - metadata.annotations.meta.helm.sh/release-name
+    - metadata.annotations.meta.helm.sh/release-namespace
