@@ -64,7 +64,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `deployer-access` CI job also runs the read-only Helmfile path commands, a
   `helmfile diff` of the monitoring release from `.helmfile-locked.yaml` included,
   as the scheduled fixture user with no refused request in the audit log.
-  (fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
+  ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
+  fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
 ### Changed
 
@@ -112,7 +113,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   OpenSearch 3.7.0 archives. `chart_objects.py --write` now copies it from
   `scripts/demo/chart-archives.lock.json`, and `--check` fails while it differs, so
   a chart bump updates it with the rest of the inventory.
-  (refs [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
+  ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
+  refs [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
 ## 2026-11-24
 
