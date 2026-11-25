@@ -70,8 +70,13 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 IMAGE_INPUTS = ("JAEGER_DEMO_IMAGE_TAG", "JAEGER_DEMO_JAEGER_IMAGE_TAG", "JAEGER_DEMO_HOTROD_IMAGE_TAG")
 # Environment that would point Helm or Helmfile at another storage driver, context, namespace,
 # environment or binary than the ones the driver passes explicitly.
-HELM_OVERRIDES = ("HELM_KUBECONTEXT", "HELM_NAMESPACE", "HELMFILE_KUBE_CONTEXT", "HELMFILE_NAMESPACE",
-                  "HELMFILE_ENVIRONMENT", "HELMFILE_HELM_BINARY")
+# Every variable Helm 4.3.2 reads into its Kubernetes connection (pkg/cli/environment.go) or its
+# release history, and Helmfile's own context overrides. Any of them could point a write at another
+# server, identity or namespace than the kubeconfig the workflow configured.
+HELM_OVERRIDES = ("HELM_KUBECONTEXT", "HELM_NAMESPACE", "HELM_KUBETOKEN", "HELM_KUBEASUSER", "HELM_KUBEASGROUPS",
+                  "HELM_KUBEAPISERVER", "HELM_KUBECAFILE", "HELM_KUBETLS_SERVER_NAME",
+                  "HELM_KUBEINSECURE_SKIP_TLS_VERIFY", "HELM_MAX_HISTORY", "HELMFILE_KUBE_CONTEXT",
+                  "HELMFILE_NAMESPACE", "HELMFILE_ENVIRONMENT", "HELMFILE_HELM_BINARY")
 # Every release runs alone, upgrades in place and never installs or creates a namespace. Values
 # come only from the state, so --reset-values drops anything an earlier writer set by hand. There
 # is no global --rollback-on-failure: each release's own atomic setting applies.

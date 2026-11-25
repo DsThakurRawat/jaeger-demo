@@ -632,12 +632,20 @@ class DriverTest(unittest.TestCase):
     def test_helm_context_overrides_are_refused(self):
         for name, value in (("HELM_DRIVER", "configmap"), ("HELM_KUBECONTEXT", "prod"), ("HELM_NAMESPACE", "jaeger"),
                             ("HELMFILE_KUBE_CONTEXT", "prod"), ("HELMFILE_NAMESPACE", "jaeger"),
-                            ("HELMFILE_ENVIRONMENT", "other"), ("HELMFILE_HELM_BINARY", "/tmp/helm")):
+                            ("HELMFILE_ENVIRONMENT", "other"), ("HELMFILE_HELM_BINARY", "/tmp/helm"),
+                            ("HELM_KUBEAPISERVER", "https://203.0.113.7:6443"), ("HELM_KUBETOKEN", "t0ken"),
+                            ("HELM_KUBEASUSER", "admin"), ("HELM_KUBEASGROUPS", "system:masters"),
+                            ("HELM_KUBECAFILE", "/tmp/ca.crt"), ("HELM_KUBETLS_SERVER_NAME", "other.test"),
+                            ("HELM_KUBEINSECURE_SKIP_TLS_VERIFY", "true"), ("HELM_MAX_HISTORY", "0")):
             with self.subTest(name=name):
                 self.assert_refused(name if name != "HELM_DRIVER" else "unset HELM_DRIVER", **{name: value})
                 with self.assertRaisesRegex(ValueError, "HELM"):
                     hd.diff(dict(self.env, **{name: value}), root=self.root, run=Cluster())
         hd.check_helm_context({"HELM_DRIVER": "secret"})
+        # Every connection setting Helm reads from the environment is refused.
+        self.assertTrue({"HELM_KUBEAPISERVER", "HELM_KUBETOKEN", "HELM_KUBEASUSER", "HELM_KUBEASGROUPS",
+                         "HELM_KUBECAFILE", "HELM_KUBETLS_SERVER_NAME",
+                         "HELM_KUBEINSECURE_SKIP_TLS_VERIFY"} <= set(hd.HELM_OVERRIDES))
 
     def test_each_verified_stack_is_recorded_as_its_checks_pass(self):
         cluster = Cluster()

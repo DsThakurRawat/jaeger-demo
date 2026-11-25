@@ -608,10 +608,13 @@ the pinned tools for every Helm and Helmfile call:
 
 1. Refuses a run that is not a schedule or a dispatch on `main`, whose checkout is
    not the workflow revision, or whose operation, namespace or image inputs do not
-   fit the rules above. It also refuses `HELM_DRIVER` other than Secrets and any
-   `HELM_KUBECONTEXT`, `HELM_NAMESPACE`, `HELMFILE_KUBE_CONTEXT`,
-   `HELMFILE_NAMESPACE`, `HELMFILE_ENVIRONMENT` or `HELMFILE_HELM_BINARY`, as `diff`
-   does. It checks again that `.helmfile-locked.yaml` is current, that each archive
+   fit the rules above. It also refuses `HELM_DRIVER` other than Secrets, every
+   Kubernetes connection variable Helm reads (`HELM_KUBECONTEXT`, `HELM_NAMESPACE`,
+   `HELM_KUBEAPISERVER`, `HELM_KUBETOKEN`, `HELM_KUBEASUSER`, `HELM_KUBEASGROUPS`,
+   `HELM_KUBECAFILE`, `HELM_KUBETLS_SERVER_NAME`,
+   `HELM_KUBEINSECURE_SKIP_TLS_VERIFY`), `HELM_MAX_HISTORY`, and any
+   `HELMFILE_KUBE_CONTEXT`, `HELMFILE_NAMESPACE`, `HELMFILE_ENVIRONMENT` or
+   `HELMFILE_HELM_BINARY`, as `diff` does. It checks again that `.helmfile-locked.yaml` is current, that each archive
    it names still matches the lock and that the Jaeger chart is at its pinned commit.
 2. Reads, without writing: on an apply the image values and
    `default/jaeger-demo-deployment-revisions`, which it requires; one `helm list`
