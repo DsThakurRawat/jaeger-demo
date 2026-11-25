@@ -95,11 +95,15 @@ def revision(root):
                                    text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES):
-    """Render the six releases. `target`, `index` and `images` let another check reuse this render.
+def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES, stable=True):
+    """Render the six releases. `target`, `index`, `images` and `stable` let another check reuse this render.
 
     `images` applies to the Helmfile render only; the script-era projection uses the fixture images.
+    `stable` adds the public fixture Grafana password; without it the checkout's own values apply.
     """
+    def fixture_values(name):
+        return stable_values(name) if stable else []
+
     temp.mkdir(mode=0o700)
     home = temp / "home"
     home.mkdir(mode=0o700)
@@ -120,7 +124,7 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
                           ("open-telemetry", "https://open-telemetry.github.io/opentelemetry-helm-charts")):
             child(root, env, "helm", "repo", "add", name, url)
         for ns, name, chart, flags in legacy_inputs(root):
-            raw = child(root, env, "helm", "template", name, chart, "--namespace", ns, *target, *flags, *stable_values(name))
+            raw = child(root, env, "helm", "template", name, chart, "--namespace", ns, *target, *flags, *fixture_values(name))
             index(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
         for ns, companions in source_values(root)["companions"].items():
             for obj in companions["objects"]:
@@ -147,7 +151,7 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
                 if not item["enabled"] or not item["installed"]:
                     continue
                 raw = child(root, env, *args, "--skip-deps", "-l", f"namespace={ns},name={name}",
-                            "template", "--skip-needs", *target, *stable_values(name))
+                            "template", "--skip-needs", *target, *fixture_values(name))
                 index(records, ns, name, yaml.load_all(raw, Loader=ManifestLoader))
     return records
 

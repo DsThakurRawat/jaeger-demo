@@ -407,23 +407,37 @@ class ReadTests(unittest.TestCase):
 
     def test_the_helmfile_render_receives_the_live_images(self):
         images = {"oci": {"jaeger": {"repository": "r", "tag": "t", "pullPolicy": "Always"}}}
-        seen = {}
+        seen, templates = {}, {}
+        fixture_password = "grafana.adminPassword=synthetic-fixture-password"
 
         def child(root, env, *args):
             self.assertEqual(env["KUBECONFIG"], "/dev/null")  # the render never reaches a cluster
             if "list" in args:
                 seen[args[2]] = json.loads(Path(args[args.index("--state-values-file") + 1]).read_text())
-                return json.dumps([{"namespace": "default", "name": "jaeger", "enabled": True, "installed": True}]
-                                  if args[2] == "helmfile.yaml" else []).encode()
+                return json.dumps([{"namespace": "default", "name": name, "enabled": True, "installed": True}
+                                   for name in ("jaeger", "prometheus")] if args[2] == "helmfile.yaml" else []).encode()
             if "template" in args:
                 self.assertIn("--include-crds", args)
-                return b"apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n---\n"
+                name = args[args.index("-l") + 1].split("name=")[1]
+                templates[name] = args
+                return f"apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: {name}}}\n---\n".encode()
             return b'{"companions": {}}' if "scripts/demo/companion_values.py" in args else b""
 
+        for lookup in (True, False):
+            with self.subTest(grafana_lookup=lookup), tempfile.TemporaryDirectory() as tmp, \
+                    patch.object(d.pr_render_diff, "child", side_effect=child):
+                templates.clear()
+                rendered = d.render_objects(d.ROOT, Path(tmp) / "render", images, lookup)
+                self.assertEqual(seen["helmfile.yaml"], {"images": images})
+                self.assertEqual([release for release, _ in rendered], ["default/jaeger", "default/prometheus"])
+                # The fixture password stands in for the chart's lookup only; otherwise the checkout's values apply.
+                self.assertEqual(fixture_password in templates["prometheus"], lookup)
+                self.assertNotIn(fixture_password, templates["jaeger"])
+        # The pull request render summary keeps the fixture password.
         with tempfile.TemporaryDirectory() as tmp, patch.object(d.pr_render_diff, "child", side_effect=child):
-            rendered = d.render_objects(d.ROOT, Path(tmp) / "render", images)
-        self.assertEqual(seen["helmfile.yaml"], {"images": images})
-        self.assertEqual(rendered, [("default/jaeger", {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c"}})])
+            templates.clear()
+            d.pr_render_diff.render(d.ROOT, Path(tmp) / "render", False)
+        self.assertIn(fixture_password, templates["prometheus"])
 
     def test_report_reads_named_objects_only_and_renders_with_the_live_images(self):
         rendered, namespaced, live = fixture()
@@ -462,6 +476,7 @@ class ReadTests(unittest.TestCase):
             result = d.report("/dev/null", "ctx", resolve_image="resolver", open_reader=open_reader)
         read_images.assert_called_once()
         self.assertIs(render.call_args.args[2], images)
+        self.assertIs(render.call_args.args[3], True)  # this checkout leaves the password to the lookup
         self.assertEqual(result["renderInputs"]["revision"], "a" * 40)
         self.assertEqual(result["renderInputs"]["imagesSHA256"], hashlib.sha256(d.canonical(images)).hexdigest())
         self.assertEqual(result["summary"]["total"], len(live))
@@ -473,6 +488,13 @@ class ReadTests(unittest.TestCase):
         self.assertTrue(crd_reads)
         for url in crd_reads:
             self.assertRegex(url, r"^/apis/apiextensions\.k8s\.io/v1/customresourcedefinitions/[a-z.]+$")
+        # A checkout that sets its own Grafana password renders without the fixture password.
+        with patch.object(d, "live_images", return_value=images), \
+                patch.object(d, "render_objects", return_value=rendered) as render, \
+                patch.object(d, "grafana_uses_lookup", return_value=False), patch.object(d, "check_scope"), \
+                patch.object(d.pr_render_diff, "revision", return_value="a" * 40):
+            d.report("/dev/null", "ctx", resolve_image="resolver", open_reader=open_reader)
+        self.assertIs(render.call_args.args[3], False)
 
     def test_main_exit_status_and_failure_output(self):
         def run(result=None, error=None):
@@ -722,6 +744,28 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(entry["unexplainedFields"], ["spec.<live-only>", "spec.externalLabels.<live-only>",
                                                       "spec.replicas"])
         self.assertNotIn("s3cr3t", json.dumps(entry))
+
+    def test_live_only_keys_in_a_crd_schema_are_never_printed(self):
+        schema = {"type": "object", "properties": {"spec": {"type": "object", "properties": {
+            "mode": {"type": "string", "default": "fast"},
+            "limits": {"type": "object", "default": {"rendered": 1}}}}}}
+        render = {"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+                  "metadata": {"name": "widgets.example.test"},
+                  "spec": {"group": "example.test", "scope": "Namespaced", "conversion": {"strategy": "None"},
+                           "names": {"kind": "Widget", "plural": "widgets"},
+                           "versions": [{"name": "v1", "served": True, "storage": True,
+                                         "schema": {"openAPIV3Schema": schema}}]}}
+        live = as_live(render, "default/prometheus")
+        del live["metadata"]["namespace"]
+        node = live["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+        node["tokenS3cr3t"] = {"type": "string"}  # a live-only nested property
+        node["limits"]["default"]["passwordS3cr3t"] = 2  # a live-only key in an object default
+        node["mode"]["default"] = "slow"
+        entry = one("default/prometheus", render, live, cluster=True)
+        base = "spec.versions[0].schema.openAPIV3Schema.properties.spec.properties"
+        self.assertEqual(entry["unexplainedFields"], [base + ".<live-only>", base + ".limits.default.<live-only>",
+                                                      base + ".mode.default"])
+        self.assertNotIn("S3cr3t", json.dumps(entry))
 
     def test_a_missing_crd_makes_its_objects_missing_without_reading_them(self):
         rendered, _, live = fixture()

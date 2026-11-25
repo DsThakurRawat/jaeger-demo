@@ -571,6 +571,9 @@ def _map_key(ctx, prefix, key):
     """Whether `key` under `prefix` is a map key (named by data), not a fixed field name."""
     if prefix and prefix[-1] in MAP_FIELDS:
         return True
+    if (ctx["kind"] == "apiextensions.k8s.io/v1:CustomResourceDefinition" and len(prefix) >= 4
+            and prefix[:2] == ("spec", "versions") and prefix[3] == "schema"):
+        return True  # a schema names properties and holds default values: data, not fixed field names
     if ctx["builtin"] or prefix[:1] == ("metadata",):
         return False
     node = _schema_node(ctx["schemas"].get((ctx["api"], ctx["kind_name"])), prefix)
@@ -663,13 +666,15 @@ def live_images(get, resolve_image=registry_image):
     return images
 
 
-def render_objects(root, temp, images):
+def render_objects(root, temp, images, grafana_lookup):
+    """The Helmfile render. The fixture Grafana password stands in for the chart's lookup only when
+    the checkout leaves the password to that lookup; otherwise the checkout's own values apply."""
     rendered = []
 
     def collect(_, ns, release, docs):
         rendered.extend((f"{ns}/{release}", obj) for obj in docs if obj is not None)
 
-    pr_render_diff.render(root, temp, False, target=TARGET, index=collect, images=images)
+    pr_render_diff.render(root, temp, False, target=TARGET, index=collect, images=images, stable=grafana_lookup)
     return rendered
 
 
@@ -702,7 +707,7 @@ def report(kubeconfig, context, root=ROOT, resolve_image=registry_image, open_re
     with open_reader(kubeconfig, context) as get:
         images = live_images(get, resolve_image)
     with tempfile.TemporaryDirectory(prefix="demo-live-drift-") as staging:
-        rendered = render_objects(root, Path(staging) / "render", images)
+        rendered = render_objects(root, Path(staging) / "render", images, lookup)
     with open_reader(kubeconfig, context) as get:
         items, live = read_live(get, rendered)
     check_scope(items)
