@@ -572,7 +572,7 @@ and restarts nothing, so no pod template changes. A scheduled run never installs
 
 [helmfile/images.yaml](../helmfile/images.yaml) sets the image mode.
 
-- **`live`**, the committed mode. Reconcile reads the Jaeger and HotROD references
+- **`live`**, the mode of ownership adoption. Reconcile reads the Jaeger and HotROD references
   of both stacks from the running Deployments with `live_observation.py` and
   renders each one exactly, as a tag. A reference that is not
   `docker.io/<repository>:<tag>` is refused, because any other form would change
@@ -583,7 +583,9 @@ and restarts nothing, so no pod template changes. A scheduled run never installs
   --detailed-exitcode` of every release with the apply's own values and flags, and
   refuses the run if any release would change (or is not `deployed`, which Helmfile
   reports as a change). The diff output stays out of the log.
-- **`digest`**, set by a later reviewed pull request after adoption. **Resolve and
+- **`digest`**, the committed mode since ownership adoption was verified. Its first
+  apply changes the Jaeger and HotROD pod templates of both stacks from tag to
+  `tag@sha256` references, so those four Deployments roll once. **Resolve and
   validate images** selects the images for the upstream `main` commit that **Resolve
   upstream Jaeger main** already exported as `MAIN_SHA`, with the image tag inputs,
   so the summary and the selection name one commit. It renders both Jaeger releases

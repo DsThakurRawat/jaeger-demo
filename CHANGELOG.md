@@ -178,6 +178,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#161](https://github.com/jaegertracing/jaeger-demo/pull/161),
   refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
 
+- `helmfile/images.yaml` selects `mode: digest`: the Helmfile engine resolves the
+  upstream Jaeger and HotROD snapshots, pins them as `tag@sha256` and validates them
+  before any step holds the OCI API key. A scheduled run refuses `live` mode, so this
+  comes before the engine switch. The first apply in this mode rolls the Jaeger and
+  HotROD Deployments of both stacks once
+  ([#162](https://github.com/jaegertracing/jaeger-demo/pull/162),
+  refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+
 ### Fixed
 
 - `scripts/demo/deployer_kubeconfig.py` accepts the `kind: ""` that
