@@ -190,8 +190,9 @@ jobs:
       timeout-minutes: 10
       run: python3 scripts/demo/helmfile_deploy.py prepare
 
+    # A companion install renders no application release, so it resolves and validates no image.
     - name: Resolve and validate images
-      if: env.DEPLOY_ENGINE == 'helmfile'
+      if: env.DEPLOY_ENGINE == 'helmfile' && env.HELMFILE_OPERATION != 'install-companion'
       timeout-minutes: 15
       run: python3 scripts/demo/helmfile_deploy.py images
 

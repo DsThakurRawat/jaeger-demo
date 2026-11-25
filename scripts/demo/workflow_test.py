@@ -43,6 +43,10 @@ HASHED_INSTALL = ('python -m pip install --require-hashes --only-binary :all: --
                   '-r scripts/demo/oci-cli-hashes.txt')
 HELMFILE_PREPARATION = ['Prepare the pinned Helmfile toolchain', 'Prepare the pinned charts',
                         'Resolve and validate images']
+# Each preparation step runs only for the Helmfile engine; a companion install selects no image.
+HELMFILE_IF = dict.fromkeys(HELMFILE_PREPARATION, "env.DEPLOY_ENGINE == 'helmfile'")
+HELMFILE_IF['Resolve and validate images'] = (
+    "env.DEPLOY_ENGINE == 'helmfile' && env.HELMFILE_OPERATION != 'install-companion'")
 
 
 def secret_references(node, path=()):
@@ -410,7 +414,7 @@ class WorkflowTests(unittest.TestCase):
                                  [step['name'] for step in between])
                 for step in between:
                     self.assertEqual({'name', 'if', 'timeout-minutes', 'run'}, set(step))
-                    self.assertEqual("env.DEPLOY_ENGINE == 'helmfile'", step['if'])
+                    self.assertEqual(HELMFILE_IF[step['name']], step['if'])
                 self.assertEqual(configure, min(index for index, step in enumerate(steps)
                                                 if 'OCI_CLI_KEY_CONTENT' in (step.get('env') or {})))
                 self.assertLess(names.index('Checkout demo configuration'), configure - 1)
@@ -808,7 +812,7 @@ class WorkflowTests(unittest.TestCase):
                 step = steps[names.index(name)]
                 self.assertLess(names.index(name), configure)
                 self.assertEqual(command, step['run'])
-                self.assertEqual("env.DEPLOY_ENGINE == 'helmfile'", step['if'])
+                self.assertEqual(HELMFILE_IF[name], step['if'])
                 self.assertNotIn('env', step)
                 self.assertNotIn('uses', step)
                 self.assertEqual([], list(secret_references(step)))
@@ -875,7 +879,7 @@ class WorkflowTests(unittest.TestCase):
         added = [step for step in steps if step['name'] in HELMFILE_PREPARATION + ['Upload the deployment record']]
         self.assertEqual(4, len(added))
         for step in added[:3]:
-            self.assertEqual("env.DEPLOY_ENGINE == 'helmfile'", step['if'])
+            self.assertEqual(HELMFILE_IF[step['name']], step['if'])
         import helmfile_deploy
         self.assertEqual('deploy-record.json', helmfile_deploy.RECORD)
         self.assertNotIn('deploy-record', (ROOT / 'scripts/demo/deploy.py').read_text())
@@ -938,6 +942,22 @@ class WorkflowTests(unittest.TestCase):
         # The rehearsal drives the deploy workflow's own driver, not a copy of it.
         self.assertIn('helmfile_deploy.reconcile(', source)
         self.assertIn('helmfile_deploy.images(', source)
+
+    def test_a_companion_install_skips_the_image_gate_step(self):
+        steps = self.deploy_steps()
+        step, = [s for s in steps if s['name'] == 'Resolve and validate images']
+        condition = step['if']
+        for engine in ('scripts', 'helmfile'):
+            for operation in ('apply', 'install-companion'):
+                with self.subTest(engine=engine, operation=operation):
+                    expression = condition.replace('env.DEPLOY_ENGINE', repr(engine))
+                    expression = expression.replace('env.HELMFILE_OPERATION', repr(operation))
+                    expression = expression.replace('&&', 'and')
+                    self.assertEqual(engine == 'helmfile' and operation == 'apply',
+                                     eval(expression, {'__builtins__': {}}, {}))
+        # The job sets the operation for every event, and a schedule always applies.
+        env = yaml.safe_load((WORKFLOWS / 'ci-deploy-demo.yml').read_text())['jobs']['deploy']['env']
+        self.assertEqual("${{ inputs.helmfile_operation || 'apply' }}", env['HELMFILE_OPERATION'])
 
 
 if __name__ == '__main__':
