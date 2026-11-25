@@ -91,6 +91,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
   fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
+- A `prometheus-operator-validated` reason code for the live drift report. The
+  monitoring chart's PrometheusRule mutating webhook adds that annotation, set to
+  `"true"`, to every rule it admits, so without the code every PrometheusRule is
+  reported as unexplained. Any other value, or the annotation on another kind,
+  stays unexplained
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
+
 ### Changed
 
 - The owner decided to keep the community ingress-nginx controller in place, with no
@@ -131,7 +139,22 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   behind. ([#151](https://github.com/jaegertracing/jaeger-demo/pull/151),
   fixes [#149](https://github.com/jaegertracing/jaeger-demo/issues/149))
 
+- The OTel demo's busybox init containers set `imagePullPolicy: IfNotPresent`, and
+  `checkout` requests its 64Mi memory limit, so the render states both instead of
+  leaving them to the API server default and to a manual change. An OTel demo
+  upgrade restarts each of these Deployments whose init container ran with
+  another pull policy
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
+
 ### Fixed
+
+- The live drift report instructions install PyYAML into a virtual environment.
+  The render's helper scripts do not inherit `PYTHONPATH`, so in Cloud Shell the
+  report failed with only `ValueError`. They also no longer say that the render
+  waits for [#146](https://github.com/jaegertracing/jaeger-demo/pull/146)
+  ([#155](https://github.com/jaegertracing/jaeger-demo/pull/155),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
 
 - The chart archive list in `ops/rbac/chart-objects.json` still named the
   OpenSearch 3.7.0 archives. `chart_objects.py --write` now copies it from

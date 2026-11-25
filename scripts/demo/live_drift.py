@@ -52,6 +52,8 @@ REASONS = {
     "webhook-ca-bundle": "caBundle that the admission patch hook writes into the two monitoring webhook configurations",
     "deployment-revision": "deployment.kubernetes.io/revision annotation that the Deployment controller writes",
     "daemonset-generation": "deprecated.daemonset.template.generation annotation that the DaemonSet controller writes",
+    "prometheus-operator-validated": "prometheus-operator-validated: \"true\" annotation that the monitoring chart's "
+                                     "PrometheusRule mutating admission webhook adds",
     "rollout-restart": "kubectl rollout restart annotation in the pod template of a Deployment the scripts restart",
     "grafana-admin-password": "Grafana admin password that the chart keeps from the live Secret by lookup, "
                               "and the pod template checksum computed from it",
@@ -207,6 +209,9 @@ RULES = tuple(_server_defaults()) + (
     Rule("deployment-revision", {"apps/v1:Deployment"}, ("metadata", "annotations", "deployment.kubernetes.io/revision"), ANY),
     Rule("daemonset-generation", {"apps/v1:DaemonSet"},
          ("metadata", "annotations", "deprecated.daemonset.template.generation"), ANY),
+    # The monitoring chart's prometheusrulemutate webhook adds this exact value to every PrometheusRule it admits.
+    Rule("prometheus-operator-validated", {"monitoring.coreos.com/v1:PrometheusRule"},
+         ("metadata", "annotations", "prometheus-operator-validated"), "true"),
     Rule("rollout-restart", {"apps/v1:Deployment"},
          ("spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"), ANY,
          lambda ctx: ctx["identity"] in RESTARTED),

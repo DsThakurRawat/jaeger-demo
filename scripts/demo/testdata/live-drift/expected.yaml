@@ -72,6 +72,11 @@ objects:
     class: explained
     reasons:
     - hook-deleted
+  monitoring.coreos.com/v1:PrometheusRule:default:prometheus-kube-prometheus-general.rules:
+    class: explained
+    reasons:
+    - helm-ownership
+    - prometheus-operator-validated
   monitoring.coreos.com/v1:ServiceMonitor:default:prometheus-grafana:
     class: explained
     reasons:
