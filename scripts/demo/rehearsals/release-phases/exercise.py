@@ -51,8 +51,9 @@ def direct_transactions(cfg, deployer, context, root, force_status):
     Helm storage index and the rendered objects, so that a check does not depend on the role.
     """
     ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
-    # A release namespace, because the deployer role covers only those. The caller created it.
-    ns = "jaeger"
+    # A release namespace, because the deployer role covers only those. It is default because only
+    # that role grants Secret patch, which Helm's server-side apply needs for this chart's Secret.
+    ns = "default"
     name = "jaeger-direct-fixture"
     helm = ["helm", "--kubeconfig", str(deployer), "--kube-context", context, "-n", ns]
     history = 3
@@ -99,6 +100,8 @@ def direct_transactions(cfg, deployer, context, root, force_status):
     def refuse(method):
         result = helmfile(method)
         assert result.returncode, f"Helmfile {method} installed a missing release"
+        # A refusal for a missing permission would prove nothing about the missing release.
+        assert "forbidden" not in result.stderr.lower(), f"Helmfile {method} was forbidden: {result.stderr[-2000:]}"
 
     def status():
         out = json.loads(subprocess.check_output(helm + ["status", name, "-o", "json"]))
@@ -302,11 +305,12 @@ def exercise(cfg, context):
         absent = statuses(rows + [companion])
         assert absent[companion["id"]] == release_phases.ABSENT
         # An absent companion is refused unless its first install is requested alone.
-        for selected, install in ((rows + [companion], {companion["id"]}), ([companion], frozenset())):
+        for selected, install, message in ((rows + [companion], {companion["id"]}, "only selected release"),
+                                           ([companion], frozenset(), "operator review")):
             try:
                 release_phases.run(selected, statuses(selected), reconcile, healthy, install=install)
             except ValueError as exc:
-                assert "operator review" in str(exc) or "only selected release" in str(exc), str(exc)
+                assert message in str(exc), str(exc)
             else:
                 raise AssertionError("Absent companion accepted")
         assert not ran and revisions() == [2, 1]
@@ -346,7 +350,7 @@ def exercise(cfg, context):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kubeconfig", type=Path, required=True)
-    parser.add_argument("--context", choices=("fixture", "kind-jaeger-demo-adoption-fixture"), required=True)
+    parser.add_argument("--context", choices=("fixture", "kind-jaeger-demo-phases-fixture"), required=True)
     args = parser.parse_args()
     if not __debug__:
         parser.error("Enable fixture assertions")

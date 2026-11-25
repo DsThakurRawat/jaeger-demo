@@ -77,7 +77,7 @@ def install_args(namespace, chart, values):
     if namespace not in NAMESPACES:
         raise ValueError(f"{namespace} is not a release namespace")
     return ["install", COMPANION, str(chart), "--namespace", namespace, "--values", str(values),
-            "--wait=legacy", "--timeout", "300s", "--rollback-on-failure=false", "--create-namespace=false"]
+            "--server-side=true", "--wait=legacy", "--timeout", "300s", "--rollback-on-failure=false", "--create-namespace=false"]
 
 
 def run(rows, statuses, reconcile, verify_stack, install=frozenset()):
@@ -101,6 +101,8 @@ def run(rows, statuses, reconcile, verify_stack, install=frozenset()):
     if install:
         if any(key.rsplit("/", 1)[-1] != COMPANION for key in install):
             raise ValueError(f"Only a {COMPANION} companion release can be installed")
+        if any(key.split("/", 1)[0] not in NAMESPACES for key in install):
+            raise ValueError("A first install must name a release namespace")
         if len(ids) != 1 or set(ids) != set(install):
             raise ValueError("A first install must be the only selected release")
     methods = {}
@@ -116,7 +118,8 @@ def run(rows, statuses, reconcile, verify_stack, install=frozenset()):
         elif statuses[key] in METHODS:
             methods[key] = METHODS[statuses[key]]
         else:
-            hint = " (absent; a companion needs an explicit first install)" if statuses[key] == ABSENT else ""
+            absent = statuses[key] == ABSENT and key.rsplit("/", 1)[-1] == COMPANION
+            hint = " (absent; a companion needs an explicit first install)" if absent else ""
             raise ValueError(f"{key} requires operator review before reconciliation{hint}")
     phases = {"oci": [], "otel": []}
     for row in rows:

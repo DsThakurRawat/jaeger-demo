@@ -692,6 +692,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('kind delete cluster --name jaeger-demo-phases-fixture', runs[reset - 1])
         self.assertEqual(len(runs) - 1, reset)
 
+    def test_every_rehearsal_context_in_ci_is_one_its_script_accepts(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        checked = 0
+        for run in (step['run'] for step in job['steps'] if 'run' in step):
+            script = re.search(r'(scripts/demo/rehearsals/[\w-]+/exercise\.py)', run)
+            if not script:
+                continue
+            context = re.search(r'--context (\S+)', run)[1]
+            source = (ROOT / script[1]).read_text()
+            choices = re.search(r'"--context",[^\n]*?choices=\(([^)]*)\)', source)[1]
+            self.assertIn(context, re.findall(r'"([^"]+)"', choices), script[1])
+            checked += 1
+        self.assertEqual(3, checked)
+
 
 if __name__ == '__main__':
     unittest.main()

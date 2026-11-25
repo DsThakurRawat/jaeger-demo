@@ -78,7 +78,7 @@ class PhaseTests(unittest.TestCase):
                 phases.run(rows, self.statuses, self.apply, self.verify)
         self.assertEqual(self.calls, [])
 
-    def test_confirmed_absent_companion_is_installed_with_apply(self):
+    def test_absent_companion_without_install_is_refused(self):
         self.rows.insert(1, {"id": "otel-demo/demo-resources"})
         self.statuses["otel-demo/demo-resources"] = phases.ABSENT
         with self.assertRaisesRegex(ValueError, "operator review"):

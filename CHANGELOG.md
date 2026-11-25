@@ -20,6 +20,22 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-25
+
+### Changed
+
+- The release phase gate reads releases with one `helm list -n <namespace>` per
+  release namespace instead of a cluster-wide listing, which the deployer role
+  cannot do. An absent companion release is no longer installed with
+  `helmfile apply`: `release_phases.run` installs it, as a plain `helm install`
+  from the shared `install_args()`, only when asked and only as the single
+  selected release, and refuses every other absent release. The release phase
+  and companion adoption rehearsals run their Helm and Helmfile commands as a
+  user bound to the committed deployer roles, and the `adoption` CI job gives the
+  release phase rehearsal a fresh kind cluster. Nothing calls the new install
+  path yet.
+  (fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
+
 ## 2026-11-24
 
 ### Added
@@ -46,17 +62,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   refs [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
 
 ### Changed
-
-- The release phase gate reads releases with one `helm list -n <namespace>` per
-  release namespace instead of a cluster-wide listing, which the deployer role
-  cannot do. An absent companion release is no longer installed with
-  `helmfile apply`: `release_phases.run` installs it, as a plain `helm install`
-  from the shared `install_args()`, only when asked and only as the single
-  selected release, and refuses every other absent release. The release phase
-  and companion adoption rehearsals run their Helm and Helmfile commands as a
-  user bound to the committed deployer roles. Nothing calls the new install
-  path yet.
-  (fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
 
 - `docs/MIGRATION.md` and the ingress-controller inventory name the controller's
   owner and record that it is the retired community ingress-nginx, installed from

@@ -218,10 +218,14 @@ def exercise(cfg, context):
     def succeeded(result, step):
         assert result.returncode == 0, f"{step} failed: {result.stderr[-2000:]}"
 
-    def refused(ns, step, action, expected):
+    def refused(ns, step, action, expected, causes=()):
         snapshot = full_states()
         result = action(ns)
         assert result.returncode, f"{step} in {ns} was not refused"
+        # A refusal for a missing permission proves nothing, and a named cause must appear.
+        assert "forbidden" not in result.stderr.lower(), f"{step} in {ns} was forbidden: {result.stderr[-2000:]}"
+        assert not causes or any(cause in result.stderr for cause in causes), \
+            f"{step} in {ns} was refused for another reason: {result.stderr[-2000:]}"
         assert stored(ns) == expected, f"{step} changed the stored release in {ns}"
         unchanged(snapshot, f"{step} in {ns}")
         return 1
@@ -235,14 +239,15 @@ def exercise(cfg, context):
         # Without --take-ownership, Helm never adopts an object that lacks this release's ownership metadata.
         first = ["-n", ns, "annotate", objects[0]["kind"] + "/" + objects[0]["metadata"]["name"]]
         kube(first + ["meta.helm.sh/release-name-"])
-        count += refused(ns, "Install over an object without release metadata", install, [])
+        count += refused(ns, "Install over an object without release metadata", install, [],
+                            ("invalid ownership metadata",))
         kube(first + ["meta.helm.sh/release-name=" + name])
         snapshot = full_states()
         succeeded(install(ns), f"First install in {ns}")
         assert stored(ns) == [(1, "deployed")], f"First install did not store one deployed revision in {ns}"
         unchanged(snapshot, f"First install in {ns}")
         # A stored release cannot be installed again. Helmfile apply is then a no-op.
-        count += refused(ns, "Second install", install, [(1, "deployed")])
+        count += refused(ns, "Second install", install, [(1, "deployed")], ("cannot re-use a name",))
         succeeded(apply(ns), f"Apply after the first install in {ns}")
         assert stored(ns) == [(1, "deployed")], f"No-op apply added a revision in {ns}"
         unchanged(snapshot, f"No-op apply in {ns}")
@@ -304,7 +309,8 @@ def exercise(cfg, context):
     record["data"]["release"] = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(payload).encode()))).decode()
     record["metadata"]["labels"]["status"] = "failed"
     kube(["-n", ns, "replace", "-f", "-"], json.dumps(record))
-    refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")])
+    refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")],
+                         ("cannot re-use a name",))
     snapshot = full_states()
     selector = "owner=helm,name=" + name
     kube(["-n", ns, "delete", "secret", "-l", selector])
