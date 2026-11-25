@@ -739,12 +739,12 @@ class WorkflowTests(unittest.TestCase):
         versions = re.findall(r'kind/releases/download/(v\d+\.\d+\.\d+)/kind-linux-amd64', source)
         digests = re.findall(r"echo '([0-9a-f]{64})  kind' \| sha256sum --check", source)
         images = re.findall(r'kindest/node:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}', source)
-        # The adoption and deployer-access jobs each download kind; both change together.
-        self.assertEqual(2, len(versions))
+        # The adoption, deployer-access and operations jobs each download kind; all change together.
+        self.assertEqual(3, len(versions))
         self.assertEqual(len(versions), len(digests))
         self.assertEqual(1, len(set(zip(versions, digests))))
         self.assertEqual(1, len(set(images)))
-        for name in ('adoption', 'deployer-access'):
+        for name in ('adoption', 'deployer-access', 'operations'):
             with self.subTest(job=name):
                 self.assertIn('kind-linux-amd64', runs[name])
                 self.assertIn(images[0], runs[name])
@@ -908,6 +908,34 @@ class WorkflowTests(unittest.TestCase):
                           'path': 'deploy-record.json', 'if-no-files-found': 'error', 'retention-days': 90}, upload['with'])
         self.assertNotIn('env', upload)
         self.assertEqual([], list(secret_references(upload)))
+
+    def test_operations_job_runs_the_deploy_rehearsal_on_its_own_cluster_within_its_limit(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        names = list(jobs)
+        self.assertEqual(names.index('deployer-access') + 1, names.index('operations'))
+        job = jobs['operations']
+        for step in job['steps']:
+            with self.subTest(step=step.get('name', step.get('uses'))):
+                self.assertFalse(str(step.get('uses', '')).startswith('azure/setup-helm'))
+                if 'uses' in step:
+                    self.assertIs(False, step['with']['persist-credentials'])
+                self.assertIsInstance(step.get('timeout-minutes'), int)
+                self.assertEqual([], list(secret_references(step)))
+        self.assertLessEqual(sum(step['timeout-minutes'] for step in job['steps']), job['timeout-minutes'])
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        create, = [run for run in runs if 'kind create cluster' in run]
+        self.assertIn('--name jaeger-demo-operations-fixture', create)
+        rehearsal, = [run for run in runs if 'rehearsals/helmfile-deploy/exercise.py' in run]
+        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
+        self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 '
+                      'scripts/demo/rehearsals/helmfile-deploy/exercise.py', rehearsal)
+        context = re.search(r'--context (\S+)', rehearsal)[1]
+        source = (ROOT / 'scripts/demo/rehearsals/helmfile-deploy/exercise.py').read_text()
+        self.assertIn(f'CONTEXT = "{context}"', source)
+        self.assertIn('choices=(CONTEXT,)', source)
+        # The rehearsal drives the deploy workflow's own driver, not a copy of it.
+        self.assertIn('helmfile_deploy.reconcile(', source)
+        self.assertIn('helmfile_deploy.images(', source)
 
 
 if __name__ == '__main__':
