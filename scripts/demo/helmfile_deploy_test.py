@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -10,10 +11,12 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs
 
 import yaml
 
 import companion_ownership
+import companion_values
 import deploy
 import helmfile_deploy as hd
 import release_phases
@@ -97,6 +100,10 @@ class Cluster:
             selector = dict(part.split("=") for part in args[args.index("-l") + 1].split(","))
             key = selector["namespace"] + "/" + selector["name"]
             method = args[args.index("--skip-deps") + 1]
+            if method == "diff":
+                # Helmfile reports a release that is not deployed as changed.
+                rel = self.releases.get(key)
+                return done(args, returncode=2 if key in self.changes or not rel or rel["status"] != "deployed" else 0)
             self.written.add(key)
             if key in self.failing:
                 raise subprocess.CalledProcessError(1, args, stderr="password=SECRET-TOKEN at https://10.0.0.1")
@@ -112,7 +119,7 @@ class Cluster:
         return done(args)
 
     def writes(self):
-        return [c for c in self.calls if c[0] == "helmfile" or c[:2] == ["helm", "install"]
+        return [c for c in self.calls if (c[0] == "helmfile" and "diff" not in c) or c[:2] == ["helm", "install"]
                 or (c[0] == "kubectl" and ("patch" in c or "restart" in c))]
 
     def cluster_calls(self):
@@ -121,10 +128,11 @@ class Cluster:
 
 class Checks:
     def __init__(self, fail=(), log=None):
-        self.fail, self.calls, self.log = set(fail), [], log
+        self.fail, self.calls, self.log, self.images = set(fail), [], log, None
 
-    def prepare(self, stacks):
+    def prepare(self, stacks, images=None):
         self.calls.append(("prepare", tuple(sorted(stacks))))
+        self.images = images
 
     def verify(self, stack):
         self.calls.append(("verify", stack))
@@ -133,6 +141,62 @@ class Checks:
         if stack in self.fail:
             raise RuntimeError(f"{stack} health failed")
         return {"health": {"stack": stack}}
+
+
+API_RESOURCES = {"v1": [("ConfigMap", "configmaps"), ("Service", "services"), ("Pod", "pods")],
+                 "apps/v1": [("Deployment", "deployments"), ("ReplicaSet", "replicasets")],
+                 "networking.k8s.io/v1": [("Ingress", "ingresses")]}
+
+
+@contextlib.contextmanager
+def fake_api(workloads=None, objects=None):
+    """A GET-only API like live_observation.reader's. objects serves named objects of the jaeger namespace by
+    (kind, name); workloads serves ready Deployments by (namespace, name): (image reference, running digest)."""
+    kinds = {plural: kind for group in API_RESOURCES.values() for kind, plural in group}
+
+    def deployment(ns, name, reference):
+        return {"apiVersion": "apps/v1", "kind": "Deployment",
+                "metadata": {"name": name, "namespace": ns, "uid": "dep-" + name, "generation": 1},
+                "spec": {"replicas": 1, "selector": {"matchLabels": {"app": name}}, "template": {"spec": {
+                    "containers": [{"name": name, "image": reference, "imagePullPolicy": "Always"}]}}},
+                "status": {"observedGeneration": 1, "replicas": 1, "readyReplicas": 1, "updatedReplicas": 1,
+                           "availableReplicas": 1}}
+
+    def get(url, accept="application/json"):
+        path, _, query = url.partition("?")
+        if path == "/api":
+            return {"kind": "APIVersions", "versions": ["v1"]}
+        if path == "/apis":
+            return {"kind": "APIGroupList", "groups": [{"versions": [{"groupVersion": g}]} for g in API_RESOURCES if g != "v1"]}
+        if path == "/version":
+            return {"gitVersion": "v1.37.0"}
+        for group, entries in API_RESOURCES.items():
+            if path == ("/api/" if group == "v1" else "/apis/") + group:
+                return {"kind": "APIResourceList", "groupVersion": group, "resources": [
+                    {"kind": kind, "name": plural, "namespaced": True, "verbs": ["get", "list"]} for kind, plural in entries]}
+        parts = path.split("/")
+        at = parts.index("namespaces")
+        ns, plural, name = parts[at + 1], parts[at + 2], (parts[at + 3:] or [None])[0]
+        if objects is not None:
+            return objects.get((kinds[plural], name))
+        if plural == "deployments":
+            return deployment(ns, name, workloads[(ns, name)][0])
+        if plural == "replicasets":
+            owner = name.removesuffix("-rs")
+            return {"apiVersion": "apps/v1", "kind": "ReplicaSet", "metadata": {
+                "name": name, "namespace": ns, "uid": "rs-" + owner, "ownerReferences": [
+                    {"controller": True, "kind": "Deployment", "apiVersion": "apps/v1", "name": owner, "uid": "dep-" + owner}]}}
+        owner = parse_qs(query)["labelSelector"][0].split("=")[1]
+        reference, running = workloads[(ns, owner)]
+        pod = {"metadata": {"namespace": ns, "name": owner + "-pod", "uid": "pod-" + owner, "labels": {"app": owner},
+                            "ownerReferences": [{"controller": True, "kind": "ReplicaSet", "apiVersion": "apps/v1",
+                                                 "name": owner + "-rs", "uid": "rs-" + owner}]},
+               "spec": {"containers": [{"name": owner, "image": reference}]},
+               "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
+                          "containerStatuses": [{"name": owner, "ready": True, "imageID": "docker.io/x@" + running}]}}
+        return {"apiVersion": "v1", "kind": "PodList", "metadata": {"resourceVersion": "1"}, "items": [pod]}
+
+    yield get
 
 
 def live_observed():
@@ -164,10 +228,17 @@ class DriverTest(unittest.TestCase):
     def mode(self, mode):
         (self.root / "helmfile/images.yaml").write_text(f"mode: {mode}\n")
 
-    def reconcile(self, cluster, checks=None, **env):
+    def reconcile(self, cluster, checks=None, companion_gate=None, **env):
         self.checks = checks or Checks()
+        self.gates = []
+
+        def gate(run, root, namespace, open_reader):
+            self.gates.append(namespace)
+            return companion_gate(run, root, namespace, open_reader) if companion_gate else None
+
         return hd.reconcile(dict(self.env, **env), root=self.root, run=cluster, checks=self.checks,
-                            live_images=lambda run: live_observed(), verify_charts=lambda root: {"charts": {}})
+                            live_images=lambda run: live_observed(), verify_charts=lambda root: {"charts": {}},
+                            open_reader=lambda: self.fail("the test reads no live object"), companion_gate=gate)
 
     def record(self):
         return json.loads((self.root / hd.RECORD).read_text())
@@ -272,8 +343,11 @@ class DriverTest(unittest.TestCase):
         def incompatible(*args):
             raise ValueError("Jaeger rejected the oci configuration")
 
-        selection = {"sources": {}, "configCommit": HEAD, "coreMain": CORE}
-        with self.assertRaisesRegex(ValueError, "rejected"):
+        reference = f"docker.io/jaegertracing/jaeger-snapshot:{'1' * 40}@{DIGEST}"
+        selection = {"configCommit": HEAD, "coreMain": CORE, "sources": {
+            "jaeger": {"reference": reference, "digest": DIGEST, "sourceCommit": "1" * 40}}}
+        output = io.StringIO()
+        with self.assertRaisesRegex(ValueError, "rejected"), contextlib.redirect_stdout(output):
             hd.images(dict(self.env), root=self.root, run=template,
                       resolve=lambda event, overrides, core_main=None: selection, validate=incompatible)
         self.assertEqual(2, len(renders))
@@ -282,8 +356,28 @@ class DriverTest(unittest.TestCase):
             self.assertIn("template", args)
             self.assertEqual("helmfile", args[0])
         self.assertFalse((self.root / hd.WORK / hd.RECEIPT).exists())
-        cluster = self.assert_refused("No validated image selection")
+        # The candidate is named before the gate runs, and its rejection is kept, without rendered values.
+        log = output.getvalue()
+        self.assertLess(log.index("Validating jaeger " + reference), log.index("rejected the candidate for stack oci"))
+        gate = {"operation": "validate", "rejectedStack": "oci", "coreMain": CORE, "type": "ValueError",
+                "images": {"jaeger": {"reference": reference, "digest": DIGEST, "sourceCommit": "1" * 40}}}
+        self.assertEqual(gate, json.loads((self.root / hd.WORK / hd.GATE).read_text()))
+        early = self.record()
+        self.assertEqual(("refused", gate, "images"), (early["outcome"], early["imageGate"], early["error"]["operation"]))
+        self.assertNotIn("kind: Deployment", (self.root / hd.RECORD).read_text())
+        self.assertIn("Image gate rejected stack oci (ValueError): jaeger " + reference, self.summary.read_text())
+        # Reconcile, should it run, refuses before any cluster call and folds the gate into its record.
+        cluster = self.assert_refused("gate rejected the candidate images")
         self.assertEqual([["git", "-C", str(self.root), "rev-parse", "HEAD"]], cluster.calls)
+        self.assertEqual(gate, self.record()["imageGate"])
+
+    def test_a_companion_install_selects_and_validates_no_image(self):
+        self.mode("digest")
+        never = lambda *args, **kwargs: self.fail("a companion install resolved or rendered an image")  # noqa: E731
+        env = dict(self.env, HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE="default")
+        self.assertIsNone(hd.images(env, root=self.root, run=never, resolve=never, validate=never))
+        with self.assertRaisesRegex(ValueError, "Only a manual dispatch installs"):
+            hd.images(dict(env, GITHUB_EVENT_NAME="schedule"), root=self.root, run=never, resolve=never, validate=never)
 
     def test_images_passes_overrides_and_renders_both_jaeger_releases_offline(self):
         self.mode("digest")
@@ -337,15 +431,20 @@ class DriverTest(unittest.TestCase):
 
     def test_live_mode_reuses_tag_references_without_digest_syntax(self):
         observed, policies = live_observed()
-        values, record = hd.live_image_values(observed, policies)
+        values, record, expected = hd.live_image_values(observed, policies)
         for stack in ("oci", "otel"):
             for name in ("jaeger", "hotrod"):
                 image = values["images"][stack][name]
                 self.assertNotIn("@", image["tag"])
                 self.assertEqual(observed[stack][name]["reference"], f"docker.io/{image['repository']}:{image['tag']}")
                 self.assertEqual(DIGEST, record[stack][name]["digest"])
+                # Afterwards each workload must still run exactly the live reference.
+                self.assertEqual((observed[stack][name]["reference"], "1" * 40, DIGEST),
+                                 (expected[stack][name]["reference"], expected[stack][name]["tag"],
+                                  expected[stack][name]["digest"]))
         cluster = Cluster()
         self.reconcile(cluster)
+        self.assertEqual(expected, self.checks.images)
         written = (self.root / hd.WORK / hd.LIVE_VALUES).read_text()
         self.assertNotIn("sha256", written)
         self.assertEqual(hd.NOT_REVALIDATED, self.record()["compatibility"])
@@ -367,7 +466,13 @@ class DriverTest(unittest.TestCase):
                             for r in record["releases"]))
         self.assertEqual("succeeded", self.record()["outcome"])
 
+    def digest(self):
+        """A routine deployment after adoption: digest mode with a validated selection."""
+        self.mode("digest")
+        self.digest_inputs()
+
     def test_a_failed_release_with_an_empty_diff_is_synced(self):
+        self.digest()
         cluster = Cluster({"default/prometheus": "failed"})
         record = self.reconcile(cluster)
         prometheus, = [c for c in cluster.calls if c[0] == "helmfile" and "namespace=default,name=prometheus" in c]
@@ -388,12 +493,15 @@ class DriverTest(unittest.TestCase):
                 self.assertEqual("refused", self.record()["outcome"])
 
     def test_failed_oci_verification_stops_before_any_otel_call(self):
+        self.digest()
         cluster = Cluster(changes={"default/jaeger", "jaeger/jaeger"})
         with self.assertRaisesRegex(RuntimeError, "oci health failed"):
             self.reconcile(cluster, Checks(fail={"oci"}))
         otel = [c for c in cluster.calls if c[0] == "helmfile" and not c[c.index("-l") + 1].startswith("namespace=default,")]
         self.assertEqual([], otel)
-        self.assertEqual([], [c for c in cluster.writes() if c[0] == "kubectl"])
+        # Only the OCI generator restart that precedes the OCI checks: no OTel restart, no fingerprint.
+        self.assertEqual([["kubectl", "-n", "default", "rollout", "restart", "deployment/trace-generator"]],
+                         [c for c in cluster.writes() if c[0] == "kubectl"])
         self.assertEqual([("prepare", ("oci", "otel")), ("verify", "oci")], self.checks.calls)
         record = self.record()
         self.assertEqual("failed", record["outcome"])
@@ -443,8 +551,15 @@ class DriverTest(unittest.TestCase):
             raise AssertionError("A companion install read the live images")
 
         self.checks = Checks()
+        gates = []
         record = hd.reconcile(dict(self.env, **env), root=self.root, run=cluster, checks=self.checks,
-                              live_images=no_image_read, verify_charts=lambda root: {"charts": {}})
+                              live_images=no_image_read, verify_charts=lambda root: {"charts": {}},
+                              companion_gate=lambda run, root, ns, reader: gates.append(ns))
+        # The drift gate ran for that namespace before the install, and no image is checked afterwards.
+        self.assertEqual((["jaeger"], None), (gates, self.checks.images))
+        install_index = [i for i, c in enumerate(cluster.calls) if c[:2] == ["helm", "install"]][0]
+        self.assertIn(["helm", "history", "demo-resources", "-n", "jaeger", "--max", "1", "-o", "json"],
+                      cluster.calls[:install_index])
         # Adoption changes no pod template: a companion install never restarts a generator.
         self.assertEqual([], [c for c in cluster.calls if "restart" in c])
         self.assertEqual((None, hd.NOT_USED), (record["images"], record["compatibility"]))
@@ -503,6 +618,7 @@ class DriverTest(unittest.TestCase):
         self.assertEqual([], cluster.writes())
 
     def test_a_release_that_is_not_deployed_after_its_write_fails_the_run(self):
+        self.digest()
         cluster = Cluster({"default/prometheus": "failed"})
         cluster.stuck.add("default/prometheus")
         with self.assertRaisesRegex(RuntimeError, "default/prometheus is failed after sync, not deployed"):
@@ -715,6 +831,142 @@ class DriverTest(unittest.TestCase):
         self.assertEqual({"stack": "oci"}, oci.verify("oci")["health"])
         self.assertEqual([["kubectl", "-n", "default", "rollout", "status", f"deployment/{name}", "--timeout=5m"]
                           for name in ("jaeger", "jaeger-hotrod", "trace-generator", "prometheus-grafana")], calls)
+
+    # ------------------------------------------------------------ second review
+
+    def test_running_images_must_match_the_expected_references_and_digests(self):
+        reference = f"docker.io/jaegertracing/jaeger-snapshot:{'1' * 40}@{DIGEST}"
+        hotrod = f"docker.io/jaegertracing/example-hotrod-snapshot:{'1' * 40}@{DIGEST}"
+        expected = {stack: {"jaeger": hd.expected_image(reference, "1" * 40, {"sourceCommit": "1" * 40, "digest": DIGEST,
+                                                                             "platformManifest": PLATFORM}),
+                            "hotrod": hd.expected_image(hotrod, "1" * 40, {"sourceCommit": "1" * 40, "digest": DIGEST,
+                                                                           "platformManifest": PLATFORM})}
+                    for stack in ("oci", "otel")}
+        running = {("default", "jaeger"): (reference, PLATFORM), ("default", "jaeger-hotrod"): (hotrod, DIGEST)}
+
+        def check(workloads):
+            checks = hd.ProductionChecks(ROOT, lambda *a, **k: done(a), open_reader=lambda: fake_api(workloads))
+            checks.prepare({"oci"}, images=expected)
+            return checks.running_images("oci")
+
+        self.assertEqual({"jaeger": reference, "hotrod": hotrod}, check(running))
+        other = "sha256:" + "0" * 64
+        for case, changed in (("pod digest", {("default", "jaeger"): (reference, other)}),
+                              ("reference", {("default", "jaeger-hotrod"): (hotrod.replace("1" * 40, "2" * 40), DIGEST)})):
+            with self.subTest(case=case), self.assertRaisesRegex(RuntimeError, "image differs from the expected one"):
+                check({**running, **changed})
+        # A companion install expects no image, and reads none.
+        checks = hd.ProductionChecks(ROOT, None, open_reader=lambda: self.fail("read images"))
+        checks.prepare({"oci"})
+        self.assertIsNone(checks.running_images("oci"))
+
+    def test_a_live_mode_apply_that_would_change_a_release_is_refused_before_any_write(self):
+        cluster = Cluster(changes={"otel-demo/otel-demo"})
+        with self.assertRaisesRegex(ValueError, "Adoption would change otel-demo/otel-demo .*live-diff"):
+            self.reconcile(cluster)
+        self.assertEqual([], cluster.writes())
+        record = self.record()
+        self.assertEqual(("refused", {"gate": "live-diff", "release": "otel-demo/otel-demo", "result": "changes"}),
+                         (record["outcome"], record["adoptionGate"]))
+        self.assertIn("Adoption gate live-diff refused otel-demo/otel-demo: changes", self.summary.read_text())
+        diffs = [c for c in cluster.calls if c[0] == "helmfile"]
+        self.assertTrue(diffs and all("diff" in c and "--detailed-exitcode" in c and "--reset-values" in c for c in diffs))
+        self.assertEqual(str(self.root / hd.WORK / hd.LIVE_VALUES), diffs[0][4])
+        # A digest-mode apply is a routine deployment, not adoption: changes are its purpose.
+        self.digest()
+        cluster = Cluster(changes={"otel-demo/otel-demo"})
+        self.reconcile(cluster)
+        self.assertEqual([], [c for c in cluster.calls if c[0] == "helmfile" and "diff" in c])
+
+    def test_the_companion_drift_gate_refuses_anything_but_ownership(self):
+        sources = companion_values.source_values(ROOT)["companions"]["jaeger"]["objects"]
+        rendered = [dict(obj, metadata=dict(obj["metadata"], namespace="jaeger", annotations=dict(
+            obj["metadata"].get("annotations") or {}, **{"helm.sh/resource-policy": "keep"}))) for obj in sources]
+
+        def live(obj, owned=True):
+            obj = json.loads(json.dumps(obj))
+            meta = obj["metadata"]
+            meta.update(uid="uid-" + meta["name"], resourceVersion="3")
+            if owned:
+                meta["labels"] = dict(meta.get("labels") or {}, **{"app.kubernetes.io/managed-by": "Helm"})
+                meta["annotations"].update({"meta.helm.sh/release-name": "demo-resources",
+                                            "meta.helm.sh/release-namespace": "jaeger"})
+            else:
+                meta["annotations"].pop("helm.sh/resource-policy")
+                if not meta["annotations"]:
+                    del meta["annotations"]  # the API server stores no empty map
+            return obj
+
+        def gate(objects):
+            def run(args, **kwargs):
+                self.assertEqual((["helm", "template", "demo-resources"], hd.os.devnull),
+                                 ([str(a) for a in args[:3]], kwargs["env"]["KUBECONFIG"]))
+                return done(args, yaml.safe_dump_all(rendered))
+            hd.workdir(self.root)
+            return hd.companion_drift_gate(run, self.root, "jaeger", lambda: fake_api(objects=objects))
+
+        adopted = {(o["kind"], o["metadata"]["name"]): live(o) for o in rendered}
+        self.assertIsNone(gate(adopted))
+        generator = ("Deployment", "trace-generator")
+        changed = copy.deepcopy(adopted)
+        changed[generator]["spec"]["template"]["spec"]["containers"][0]["env"] = [{"name": "FIXTURE", "value": "1"}]
+        unadopted = {**adopted, generator: live(rendered[[o["kind"] for o in rendered].index("Deployment")], owned=False)}
+        missing = {k: v for k, v in adopted.items() if k != generator}
+        for case, objects, kind in (("pod template", changed, "unexplained"), ("unadopted", unadopted, "explained"),
+                                    ("missing", missing, "missing")):
+            with self.subTest(case=case):
+                result = gate(objects)
+                self.assertEqual(("companion-drift", "jaeger/demo-resources"), (result["gate"], result["release"]))
+                self.assertEqual([{"identity": "apps/v1:Deployment:jaeger:trace-generator", "class": kind}],
+                                 result["objects"])
+
+    def test_a_refusing_companion_gate_stops_the_install_and_is_recorded(self):
+        cluster = Cluster({"jaeger/demo-resources": None})
+        refusal = {"gate": "companion-drift", "release": "jaeger/demo-resources",
+                   "objects": [{"identity": "apps/v1:Deployment:jaeger:trace-generator", "class": "unexplained"}]}
+        with self.assertRaisesRegex(ValueError, "Adoption would change jaeger/demo-resources"):
+            self.reconcile(cluster, companion_gate=lambda *args: refusal, HELMFILE_OPERATION="install-companion",
+                           COMPANION_NAMESPACE="jaeger")
+        self.assertEqual([], cluster.writes())
+        self.assertEqual(refusal, self.record()["adoptionGate"])
+        self.assertIn("apps/v1:Deployment:jaeger:trace-generator (unexplained)", self.summary.read_text())
+
+    def test_a_companion_install_refuses_an_unlisted_release_that_is_not_deployed(self):
+        env = {"HELMFILE_OPERATION": "install-companion", "COMPANION_NAMESPACE": "jaeger"}
+        # Helm's listing omits an unknown release; the named read finds it.
+        cluster = Cluster({"jaeger/demo-resources": None, "default/prometheus": "unknown"})
+        with self.assertRaisesRegex(ValueError, "every present release is deployed: default/prometheus is unknown"):
+            self.reconcile(cluster, **env)
+        self.assertEqual([], cluster.writes())
+        # Other companions that are not installed yet are absent, not a reason to refuse.
+        cluster = Cluster({"jaeger/demo-resources": None, "otel-demo/demo-resources": None,
+                           "opensearch/demo-resources": None})
+        self.assertEqual("succeeded", self.reconcile(cluster, **env)["outcome"])
+
+    def test_diff_checks_the_locked_charts_first(self):
+        cluster = Cluster()
+
+        def stale(root):
+            raise hd.Refused(".helmfile-locked.yaml is stale: helmfile.yaml changed after prepare")
+
+        with self.assertRaisesRegex(ValueError, "is stale"):
+            hd.diff(dict(self.env), root=self.root, run=cluster, verify_charts=stale)
+        self.assertEqual([], cluster.calls)
+        verified = []
+        hd.diff(dict(self.env), root=self.root, run=cluster, live_images=lambda run: live_observed(),
+                verify_charts=lambda root: verified.append(root))
+        self.assertEqual([self.root], verified)
+
+    def test_an_unreadable_history_after_a_write_records_unknown_not_changed(self):
+        cluster = Cluster()
+        cluster.broken_history.add("default/prometheus")
+        with self.assertRaisesRegex(RuntimeError, "default/prometheus is unreadable after apply"):
+            self.reconcile(cluster)
+        entry = self.record()["releases"][0]
+        self.assertEqual(("default/prometheus", None, None, None),
+                         (entry["id"], entry["revisionAfter"], entry["statusAfter"], entry["changed"]))
+        self.assertIn("| default/prometheus | deployed | 4 | apply | unknown | unknown |", self.summary.read_text())
+        self.assertIn("| default/jaeger | deployed | 4 | not run | - | no |", self.summary.read_text())
 
     def test_health_is_retried_until_it_passes_or_the_attempts_run_out(self):
         attempts = []

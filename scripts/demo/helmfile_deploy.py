@@ -57,6 +57,9 @@ SELECTION = "image-selection.json"
 RECEIPT = "image-compatibility.json"
 LIVE_VALUES = "live-images.json"
 COMPANION_VALUES = "companions.json"
+GATE = "image-gate.json"
+# A live_drift reason that still leaves a write besides ownership: the companion was never adopted.
+UNADOPTED = "companion-unadopted"
 
 MODES = ("live", "digest")
 OPERATIONS = ("apply", "install-companion")
@@ -94,6 +97,7 @@ REEXEC = "JAEGER_DEMO_HELMFILE_DEPLOY_PINNED"
 # command lines, endpoints, object names or command output.
 FAILURES = {"guards": "Reading the configuration failed", "charts": "Verifying the locked charts failed",
             "images": "Reading the image values failed", "read": "Reading the release state failed",
+            "adoption": "The adoption no-op check could not be completed",
             "reconcile": "The Helm or Helmfile command for this release failed",
             "restart": "Restarting the trace generator failed", "verify": "The stack checks failed",
             "fingerprints": "Recording the component fingerprints failed"}
@@ -273,9 +277,14 @@ def images(env, root=ROOT, run=run_command, resolve=None, validate=None):
     """digest mode: resolve, render offline and validate before any credential-holding step."""
     root = Path(root)
     work = workdir(root)
-    for name in (SELECTION, RECEIPT):
+    for name in (SELECTION, RECEIPT, GATE):
         (work / name).unlink(missing_ok=True)
     mode = image_mode(root)
+    if (env.get("HELMFILE_OPERATION") or "apply") == "install-companion":
+        # A companion install renders no application release, so it selects and validates no image.
+        require(env.get("GITHUB_EVENT_NAME") != "schedule", "Only a manual dispatch installs a companion release")
+        print("install-companion uses no image values: nothing to resolve or validate")
+        return None
     if mode == "live":
         refuse_live_inputs(env)
         print(f"Image mode live: reconcile reads the live references; compatibility is recorded as '{NOT_REVALIDATED}'")
@@ -297,16 +306,48 @@ def images(env, root=ROOT, run=run_command, resolve=None, validate=None):
                               "--skip-deps", "-l", f"stack={stack},component=jaeger", "template", "--skip-needs",
                               "--kube-version", kube_version()],
                              capture=True, env=offline_env(), cwd=root).stdout.encode()
-    receipt = (validate or promotion_images.validate)(data, sha256(data), renders, "docker")
+    candidate = {name: {k: image.get(k) for k in ("reference", "digest", "sourceCommit")}
+                 for name, image in selection["sources"].items()}
+    # Name the candidate before the gate, so a rejection identifies it. Public references only.
+    for name, image in candidate.items():
+        print(f"Validating {name} {image['reference']} ({image['digest']}, source {image['sourceCommit']}) "
+              f"against the {' and '.join(promotion_images.STACKS)} renders", flush=True)
+    try:
+        receipt = (validate or promotion_images.validate)(data, sha256(data), renders, "docker")
+    except Exception as error:
+        rejected = re.search(r"the (oci|otel) configuration", str(error))
+        gate = {"operation": "validate", "rejectedStack": rejected[1] if rejected else None,
+                "images": candidate, "coreMain": selection.get("coreMain"), "type": type(error).__name__}
+        print(f"The Jaeger configuration gate rejected the candidate for stack {gate['rejectedStack'] or 'unknown'}",
+              flush=True)
+        record_gate_failure(env, root, gate)
+        raise
     (work / RECEIPT).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     for name, image in selection["sources"].items():
         print(f"{name}: {image['reference']} from {image['sourceCommit']} validated against both renders")
     return receipt
 
 
+def record_gate_failure(env, root, gate):
+    """Keep a sanitized gate failure for reconcile, and a record and summary for this run already,
+    because the workflow stops at the images step and reconcile does not run."""
+    (workdir(root) / GATE).write_text(json.dumps(gate, indent=2, sort_keys=True) + "\n")
+    record = {"engine": "helmfile", "event": env.get("GITHUB_EVENT_NAME"), "run": env.get("GITHUB_RUN_ID"),
+              "outcome": "refused", "imageMode": "digest", "coreMain": gate.get("coreMain"), "imageGate": gate,
+              "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": [], "generatorRestarts": [],
+              "error": {"operation": "images", "release": None, "stack": gate.get("rejectedStack"), "type": gate["type"],
+                        "message": "The Jaeger configuration gate rejected the candidate images"}}
+    (Path(root) / RECORD).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    if env.get("GITHUB_STEP_SUMMARY"):
+        with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+            output.write(summary(record))
+
+
 def digest_images(root, head):
     """The selection and receipt the images step wrote, checked against each other and this commit."""
     work = Path(root) / WORK
+    if not (work / RECEIPT).is_file() and (work / GATE).is_file():
+        raise Refused("The Jaeger configuration gate rejected the candidate images; nothing to apply")
     require((work / SELECTION).is_file() and (work / RECEIPT).is_file(),
             "No validated image selection; the images step must pass before reconcile")
     data = (work / SELECTION).read_bytes()
@@ -321,14 +362,22 @@ def digest_images(root, head):
     sources = selection["sources"]
     record = {stack: {name: {k: sources[name][k] for k in ("reference", "sourceCommit", "digest")}
                       for name in promotion_images.REPOS} for stack in promotion_images.STACKS}
-    return work / SELECTION, record, receipt, selection.get("coreMain")
+    expected = {stack: {name: expected_image(sources[name]["reference"], sources[name]["tag"], sources[name])
+                        for name in promotion_images.REPOS} for stack in promotion_images.STACKS}
+    return work / SELECTION, record, receipt, selection.get("coreMain"), expected
+
+
+def expected_image(reference, tag, source):
+    """What a running workload must show: its reference, and a Pod image ID of one of the two digests."""
+    return {"reference": reference, "tag": tag, "sourceCommit": source["sourceCommit"], "digest": source["digest"],
+            "platformManifest": source.get("platformManifest") or source["digest"]}
 
 
 def live_image_values(observed, policies):
-    """State values that render each live reference exactly, as a tag."""
-    values, record = {}, {}
+    """State values that render each live reference exactly, as a tag, the record and the expected images."""
+    values, record, expected = {}, {}, {}
     for stack in promotion_images.STACKS:
-        values[stack], record[stack] = {}, {}
+        values[stack], record[stack], expected[stack] = {}, {}, {}
         for name, repo in promotion_images.REPOS.items():
             image = observed[stack][name]
             match = re.fullmatch(r"docker\.io/" + re.escape(repo) + r":([\w][\w.-]{0,127})", image["reference"], re.ASCII)
@@ -338,16 +387,29 @@ def live_image_values(observed, policies):
             require(policy in ("Always", "IfNotPresent", "Never"), f"Unexpected live {stack} {name} pull policy")
             values[stack][name] = {"repository": repo, "tag": match[1], "pullPolicy": policy}
             record[stack][name] = {k: image[k] for k in ("reference", "sourceCommit", "digest")}
-    return {"images": values}, record
+            expected[stack][name] = expected_image(image["reference"], match[1], image)
+    return {"images": values}, record, expected
 
 
-def read_live_images(run, resolve_image=promotion_images.registry_image):
-    """Read the live Jaeger and HotROD references of both stacks with GET requests only."""
+def cluster_reader(run):
+    """A GET-only reader of the current kubeconfig context (live_observation.reader)."""
     kubeconfig = os.environ.get("KUBECONFIG") or str(Path.home() / ".kube/config")
     require(os.pathsep not in kubeconfig, "Use a single kubeconfig file")
     context = run(["kubectl", "config", "current-context"], capture=True).stdout.strip()
-    with live_observation.reader(kubeconfig, context) as get:
-        observed = live_observation.snapshot(get, [], list(promotion_images.STACKS), resolve_image=resolve_image)["images"]
+    return live_observation.reader(kubeconfig, context)
+
+
+def read_live_images(run, resolve_image=promotion_images.registry_image, open_reader=None):
+    """Read the live Jaeger and HotROD references of both stacks with GET requests only."""
+    resolved = {}
+
+    def remember(repo, tag, **kwargs):
+        # Keep the platform manifest too: a running Pod can report either digest.
+        resolved[repo, tag] = source = resolve_image(repo, tag, **kwargs)
+        return source
+
+    with (open_reader or (lambda: cluster_reader(run)))() as get:
+        observed = live_observation.snapshot(get, [], list(promotion_images.STACKS), resolve_image=remember)["images"]
         policies = {}
         for stack, ns in promotion_images.STACKS.items():
             policies[stack] = {}
@@ -355,20 +417,26 @@ def read_live_images(run, resolve_image=promotion_images.registry_image):
                 spec = get(f"/apis/apps/v1/namespaces/{ns}/deployments/{workload}")["spec"]["template"]["spec"]
                 container, = [c for c in spec["containers"] if c["name"] == workload]
                 policies[stack][name] = container.get("imagePullPolicy")
+    for stack in observed.values():
+        for name, image in stack.items():
+            repo = promotion_images.REPOS[name]
+            sources = [s for (r, _), s in resolved.items() if r == repo and s.get("digest") == image["digest"]]
+            image["platformManifest"] = sources[0].get("platformManifest") if sources else None
     return observed, policies
 
 
 def resolve_values(mode, root, head, run, live_images, env):
-    """Return the application state values file, the image record, the compatibility entry and core main."""
+    """Return the application state values file, the image record, the compatibility entry, core main
+    and the images each stack's workloads must run afterwards."""
     work = workdir(root)
     if mode == "digest":
         return digest_images(root, head)
     observed, policies = (live_images or read_live_images)(run)
-    values, record = live_image_values(observed, policies)
+    values, record, expected = live_image_values(observed, policies)
     path = work / LIVE_VALUES
     path.write_text(json.dumps(values, indent=2, sort_keys=True) + "\n")
     core = env.get("MAIN_SHA") if COMMIT.fullmatch(env.get("MAIN_SHA", "")) else None
-    return path, record, NOT_REVALIDATED, core
+    return path, record, NOT_REVALIDATED, core, expected
 
 
 # ---------------------------------------------------------------- Helm state
@@ -438,6 +506,52 @@ def companion_preflight(run, namespace):
                     "apply the ownership patches first (docs/cutover.md)")
 
 
+def unlisted_releases(rows, found, run):
+    """Helm 4's default listing omits a release in the unknown state. Read every other release by name:
+    {key: history entry} for the present ones, None for the absent ones."""
+    listed = listed_releases(found)
+    return {row["id"]: history(run, row["id"]) for row in rows if row["id"] not in listed}
+
+
+def live_diff_gate(run, root, rows, values, companions):
+    """Adoption changes ownership only. Refuse a live-mode apply that would change any release.
+
+    The diff takes the apply's own selection and values. Its output, which can hold rendered
+    values, stays out of the log: only the exit status counts.
+    """
+    for row in rows:
+        command = helmfile_command(root, row, "diff", values, companions)[:-len(FLAGS)]
+        command += ["--concurrency", "1", "--reset-values", "--diff-args=--allow-unreleased=false",
+                    "--suppress-secrets", "--detailed-exitcode"]
+        code = run(command, check=False, capture=True, cwd=root).returncode
+        if code:
+            return {"gate": "live-diff", "release": row["id"], "result": "changes" if code == 2 else "error"}
+    return None
+
+
+def companion_drift_gate(run, root, namespace, open_reader):
+    """Refuse a first companion install that would change anything but the ownership the preflight checked.
+
+    The companion renders offline with the install's own chart and values, and live_drift.py
+    classifies each object against the live one with GET requests only.
+    """
+    import live_drift  # Only this gate needs the drift report's rules.
+
+    values = workdir(root) / f"companion-{namespace}.json"
+    render = run(["helm", "template", release_phases.COMPANION, Path(root) / COMPANION_CHART, "--namespace", namespace,
+                  "--values", values, "--kube-version", kube_version()], capture=True, env=offline_env()).stdout
+    rendered = [(namespace + "/" + release_phases.COMPANION, obj) for obj in yaml.safe_load_all(render) if obj]
+    require(rendered, f"The {namespace} companion renders no object")
+    with open_reader() as get:
+        items, live = live_drift.read_live(get, rendered)
+    result = live_drift.compare(items, live)
+    refused = [{"identity": entry["identity"], "class": entry["class"]} for entry in result["objects"]
+               if entry["class"] in ("unexplained", "missing") or UNADOPTED in entry["reasons"]]
+    if refused:
+        return {"gate": "companion-drift", "release": namespace + "/" + release_phases.COMPANION, "objects": refused}
+    return None
+
+
 # ---------------------------------------------------------------- verification
 
 def retry(check, attempts=HEALTH_ATTEMPTS, delay=HEALTH_DELAY, sleep=time.sleep):
@@ -455,14 +569,42 @@ class ProductionChecks:
     """The live checks of each stack. Each method raises on failure."""
 
     def __init__(self, root, run, health=stack_health.check, trace=verify_trace.verify,
-                 binding=deploy.opensearch_data_binding, sleep=time.sleep):
+                 binding=deploy.opensearch_data_binding, sleep=time.sleep, open_reader=None):
         self.root, self.run, self.health, self.trace, self.binding, self.sleep = root, run, health, trace, binding, sleep
-        self.before = None
+        self.open_reader = open_reader or (lambda: cluster_reader(run))
+        self.before = self.expected = None
 
-    def prepare(self, stacks):
-        # The OpenSearch data claim and its volume, read before the first write.
+    def prepare(self, stacks, images=None):
+        # The OpenSearch data claim and its volume, read before the first write. images holds, per
+        # stack, the Jaeger and HotROD images the workloads must run afterwards (None: not checked).
+        self.expected = images
         if "otel" in stacks:
             self.before = self.binding()
+
+    def running_images(self, stack):
+        """Each ready Jaeger and HotROD workload runs the expected reference, and its Pods an expected digest."""
+        if self.expected is None:
+            return None
+        ns, found = promotion_images.STACKS[stack], {}
+        with self.open_reader() as get:
+            for name, repo in promotion_images.REPOS.items():
+                want = self.expected[stack][name]
+
+                def source(r, tag, reference_digest=None, want=want, repo=repo):
+                    if r != repo or tag != want["tag"] or reference_digest not in (None, want["digest"]):
+                        raise Failed(f"The running {stack} {name} image differs from the expected one")
+                    return {"sourceCommit": want["sourceCommit"], "digest": want["digest"],
+                            "platformManifest": want["platformManifest"]}
+
+                try:
+                    seen = live_observation.live_image(get, source, ns, name)
+                except ValueError:
+                    # A Pod on another digest, a rollout in progress or another reference.
+                    raise Failed(f"The running {stack} {name} image differs from the expected one") from None
+                if seen["reference"] not in (want["reference"], want["reference"].removeprefix("docker.io/")):
+                    raise Failed(f"The running {stack} {name} image differs from the expected one")
+                found[name] = want["reference"]
+        return found
 
     def rollouts(self, items):
         for ns, kind, name in items:
@@ -491,14 +633,17 @@ class ProductionChecks:
     def verify(self, stack):
         if stack == "oci":
             rolled = self.rollouts(OCI_ROLLOUTS)
-            return {"rollouts": rolled, "health": retry(lambda: self.health("oci"), sleep=self.sleep)}
+            images = self.running_images(stack)
+            return {"rollouts": rolled, "runningImages": images,
+                    "health": retry(lambda: self.health("oci"), sleep=self.sleep)}
         rolled = self.rollouts(OTEL_ROLLOUTS)
+        images = self.running_images(stack)
         if self.before is None or self.binding() != self.before:
             raise Failed("The OpenSearch data claim or its bound volume changed during the run")
         versions = chart_versions(self.root)
         self.trace(versions["opensearch/opensearch"], versions["opensearch/opensearch-dashboards"])
         certificates = self.certificates()
-        return {"rollouts": rolled, "openSearchDataBindingUnchanged": True, "freshTrace": "passed",
+        return {"rollouts": rolled, "runningImages": images, "openSearchDataBindingUnchanged": True, "freshTrace": "passed",
                 "readyCertificates": certificates, "health": retry(lambda: self.health("otel"), sleep=self.sleep)}
 
 
@@ -542,7 +687,7 @@ def error_entry(stage, error):
 
 
 def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
-              verify_charts=verify_locked_charts, sleep=time.sleep):
+              verify_charts=verify_locked_charts, sleep=time.sleep, open_reader=None, companion_gate=None):
     """Reconcile the selected releases and record the run. Returns the record; raises on failure."""
     root = Path(root)
     record_path = root / RECORD
@@ -571,9 +716,13 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
 
         # Reads only from here until release_phases.run.
         stage["operation"] = "images"
-        values = None
+        values = expected = None
+        open_reader = open_reader or (lambda: cluster_reader(run))
         if operation == "apply":
-            values, image_record, compatibility, core = resolve_values(mode, root, head, run, live_images, env)
+            if mode == "digest" and (work / GATE).is_file():
+                # The images step rejected the candidate: keep what it recorded about it.
+                record["imageGate"] = json.loads((work / GATE).read_text())
+            values, image_record, compatibility, core, expected = resolve_values(mode, root, head, run, live_images, env)
             record.update(coreMain=core, images=image_record, compatibility=compatibility)
         else:
             # A companion install renders no application release, so it needs no image values.
@@ -588,11 +737,29 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
         if operation == "install-companion":
             pending = sorted(key for key, entry in listed_releases(found).items() if entry["status"].startswith("pending"))
             require(not pending, "A companion is installed only while no release is pending: " + ", ".join(pending))
+            # The listing omits a release in the unknown state; an absent companion is expected.
+            unlisted = unlisted_releases(release_rows(root), found, run)
+            hidden = sorted(key for key, entry in unlisted.items() if entry is not None and entry["status"] != "deployed")
+            require(not hidden, "A companion is installed only while every present release is deployed: "
+                    + ", ".join(f"{key} is {unlisted[key]['status']}" for key in hidden))
             companion_preflight(run, namespace)
         before = {row["id"]: history(run, row["id"]) for row in rows}
         check_listing_agrees(rows, found, before)
         statuses = release_phases.selected_statuses(
             rows, found, lambda key: before[key]["status"] if before[key] else None)
+        # Adoption is a no-op apart from the ownership metadata. Prove it before the first write,
+        # once release_phases.run would accept every state; it refuses the others itself.
+        if all(statuses[row["id"]] in release_phases.METHODS or row["id"] in install for row in rows):
+            stage["operation"] = "adoption"
+            gate = None
+            if operation == "install-companion":
+                gate = (companion_gate or companion_drift_gate)(run, root, namespace, open_reader)
+            elif mode == "live":
+                gate = live_diff_gate(run, root, rows, values, work / COMPANION_VALUES)
+            if gate:
+                record["adoptionGate"] = gate
+                raise Refused(f"Adoption would change {gate['release']} beyond its ownership metadata ({gate['gate']})")
+            stage["operation"] = "read"
         entries = {}
         for row in rows:
             prior = before[row["id"]] or {}
@@ -601,7 +768,7 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
                                   "method": None, "revisionAfter": None, "statusAfter": None, "changed": False}
             record["releases"].append(entries[row["id"]])
         checks = checks or ProductionChecks(root, run, sleep=sleep)
-        checks.prepare({release_phases.stack_of(row["id"]) for row in rows} | {"oci"})
+        checks.prepare({release_phases.stack_of(row["id"]) for row in rows} | {"oci"}, images=expected)
         # Adoption must not change a pod template: the generator restart is for applies in digest
         # mode only, the routine deployments after adoption (parity with the scripts until #2).
         restart = operation == "apply" and mode == "digest"
@@ -626,8 +793,10 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
                     after = history(run, row["id"]) or {}
                 except Exception as error:  # noqa: BLE001
                     print(f"::warning::Could not read the history of {row['id']} ({type(error).__name__})", flush=True)
+                # Without a revision after, whether the release changed is unknown, never assumed.
+                known = after.get("revision") is not None
                 entry.update(revisionAfter=after.get("revision"), statusAfter=after.get("status"),
-                             changed=after.get("revision") != entry["revisionBefore"])
+                             changed=after["revision"] != entry["revisionBefore"] if known else None)
                 print("::endgroup::", flush=True)
             if after.get("status") != "deployed":
                 raise Failed(f"{row['id']} is {after.get('status') or 'unreadable'} after {method}, not deployed")
@@ -686,11 +855,28 @@ def summary(record):
     if error:
         where = error["release"] or error["stack"] or "run"
         lines.append(f"- Error: {error['operation']} ({where}), {error['type']}: {error['message']}")
+    gate = record.get("adoptionGate")
+    if gate:
+        objects = ", ".join(f"{o['identity']} ({o['class']})" for o in gate.get("objects", []))
+        lines.append(f"- Adoption gate {gate['gate']} refused {gate['release']}"
+                     + (f": {gate['result']}" if gate.get("result") else "") + (f": {objects}" if objects else ""))
+    image_gate = record.get("imageGate")
+    if image_gate:
+        candidate = "; ".join(f"{name} {image['reference']}" for name, image in image_gate["images"].items())
+        lines.append(f"- Image gate rejected stack {image_gate.get('rejectedStack') or 'unknown'} "
+                     f"({image_gate['type']}): {candidate}")
     if record["releases"]:
         lines += ["", "| Release | Status before | Revision before | Method | Revision after | Changed |",
                   "| --- | --- | --- | --- | --- | --- |"]
+
+        def after(r):
+            if not r["method"]:
+                return "-", "no"
+            changed = {True: "yes", False: "no", None: "unknown"}[r["changed"]]
+            return ("unknown" if r["revisionAfter"] is None else r["revisionAfter"]), changed
+
         lines += [f"| {r['id']} | {r['statusBefore']} | {r['revisionBefore']} | {r['method'] or 'not run'} | "
-                  f"{r['revisionAfter']} | {'yes' if r['changed'] else 'no'} |" for r in record["releases"]]
+                  f"{after(r)[0]} | {after(r)[1]} |" for r in record["releases"]]
     if record.get("images"):
         lines += ["", "| Stack | Image | Reference | Source commit | Digest |", "| --- | --- | --- | --- | --- |"]
         lines += [f"| {stack} | {name} | {image['reference']} | {image['sourceCommit']} | {image['digest']} |"
@@ -700,10 +886,12 @@ def summary(record):
 
 # ---------------------------------------------------------------- diff
 
-def diff(env, root=ROOT, run=run_command, live_images=None):
+def diff(env, root=ROOT, run=run_command, live_images=None, verify_charts=verify_locked_charts):
     """Read-only: report which releases Helmfile would change. Returns the per-release result."""
     root = Path(root)
     check_helm_context(env)
+    # The same freshness and archive checks as reconcile: a diff of a stale state answers nothing.
+    verify_charts(root)
     mode = image_mode(root)
     head = git_head(root, run)
     values = resolve_values(mode, root, head, run, live_images, env)[0]
