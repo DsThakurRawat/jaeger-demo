@@ -45,7 +45,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `operations` CI job rehearses it on kind as the deployer. Setting
   `DEMO_DEPLOY_ENGINE` needs `mode: digest` first, and returning to the scripts
   needs de-adoption first.
-  (refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
+  ([#153](https://github.com/jaegertracing/jaeger-demo/pull/153),
+  refs [#73](https://github.com/jaegertracing/jaeger-demo/issues/73))
 
 - `scripts/demo/live_drift.py`, a read-only drift report that compares every
   object the Helmfile render would own, rendered with the live Jaeger and HotROD
