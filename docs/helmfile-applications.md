@@ -67,7 +67,7 @@ This credential-free check uses the extracted scripts' chart versions and equiva
 
 ## Deployer role coverage
 
-`python3 scripts/demo/chart_objects.py --check` renders the Helmfile path from `.helmfile-locked.yaml` and `helmfile-resources.yaml.gotmpl` beside the script path, fails when they differ in an object identity or hook event, and requires an inventory record for every object and Helm history records for each of the ten releases. `scripts/demo/deployer_access.py` adds the release-record access of each Helmfile path command. [Deployer access](deployer-access.md#helmfile-path) lists the commands, and that no rule beyond the script path's is needed.
+`python3 scripts/demo/chart_objects.py --check` renders the Helmfile path from `.helmfile-locked.yaml` and `helmfile-resources.yaml.gotmpl` beside the script path, fails when they differ in an object identity or hook event, renders the companions again as their first `helm install`, and requires an inventory record for every object and Helm history records for each of the ten releases. `scripts/demo/deployer_access.py` adds the release-record access of each Helmfile path command. [Deployer access](deployer-access.md#helmfile-path) lists the commands, and that no rule beyond the script path's is needed.
 
 ## Read live fingerprints and images
 

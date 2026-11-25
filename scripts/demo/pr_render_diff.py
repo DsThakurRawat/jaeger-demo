@@ -101,7 +101,8 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
     `images` applies to the Helmfile render only; the script-era projection uses the fixture images.
     `stable` adds the public fixture Grafana password; without it the checkout's own values apply.
     `state` is the application Helmfile, relative to root. Another check passes the lock-verified
-    state that scripts/demo/chart_archives.py writes, which has local archives and no repositories.
+    state that scripts/demo/chart_archives.py writes, which has local archives and no repositories,
+    or None to render the companion releases alone.
     """
     def fixture_values(name):
         return stable_values(name) if stable else []
@@ -137,6 +138,8 @@ def render(root, temp, legacy, target=TARGET, index=index_objects, images=IMAGES
         if state == "helmfile.yaml":
             child(root, env, "helmfile", "-f", "helmfile.yaml", "repos")
         for path in (state, "helmfile-resources.yaml.gotmpl"):
+            if path is None:
+                continue
             if not (root / path).is_file():
                 if path == state:
                     raise ValueError("Missing head Helmfile")

@@ -54,7 +54,11 @@ The Helmfile path needs no rule beyond those above. It applies the same objects:
 applications from the lock-verified `.helmfile-locked.yaml` and the four
 `demo-resources` companions from `helmfile-resources.yaml.gotmpl`) and fails when
 they differ in an object identity or a hook event. The companions own exactly the
-supplemental objects that the scripts apply with `kubectl`. Helm keeps every
+supplemental objects that the scripts apply with `kubectl`. Those renders are
+upgrades; a companion's first release is a plain `helm install`, so the check also
+renders the four companions as an install. An object only that render has needs
+its own record, and a hook event that differs between the install and the upgrade
+fails the check. Helm keeps every
 revision of a release as the Secret `sh.helm.release.v1.<release>.v<N>` in the
 release's namespace, so the inventory holds history records for all ten releases.
 `HELMFILE_COMMANDS` in `scripts/demo/deployer_access.py` lists what each command of
@@ -444,7 +448,9 @@ adoption rehearsal` job runs on every pull request. Without cluster access it
 renders the six releases the way the scripts install them and the ten Helmfile
 releases from the lock-verified `.helmfile-locked.yaml` and
 `helmfile-resources.yaml.gotmpl`, fails when the two paths differ in an object
-identity or hook event, and compares the result with the inventory. It fails when
+identity or hook event, renders the four companions once more as the
+`helm install` of their first release, and compares the result with the
+inventory. It fails when
 a rendered object has no record, when a Helmfile release has no Helm history
 record, when hook events differ from a record, and when the inventory's chart
 archive list differs from `scripts/demo/chart-archives.lock.json`.

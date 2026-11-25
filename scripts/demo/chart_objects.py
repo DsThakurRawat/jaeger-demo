@@ -12,7 +12,9 @@ the way the deployment scripts install them and the ten Helmfile releases (the
 six applications from the lock-verified .helmfile-locked.yaml and the four
 demo-resources companions). Both paths must render the same object identities
 and hook events; the companions render the supplemental objects the scripts
-apply. Each Helmfile release must have Helm history records, the Secrets Helm
+apply. The companions are rendered once more as the plain `helm install` of
+their first release, and an object only that render has needs a record too.
+Each Helmfile release must have Helm history records, the Secrets Helm
 keeps its revisions in. `--check` exits non-zero when an object or a release
 has no record, a record's Helm hook events differ, or the inventory's chart
 archive list differs from scripts/demo/chart-archives.lock.json. `--write` adds
@@ -57,6 +59,8 @@ COMPONENTS = {
     ("jaeger", "jaeger"): "otel-jaeger", ("otel-demo", "otel-demo"): "otel-demo",
 }
 SUPPLEMENT = "supplement"
+# The Helm release of the supplemental objects in each namespace.
+COMPANION = "demo-resources"
 # Helm keeps each revision of a release as the Secret sh.helm.release.v1.<release>.v<N> in its
 # namespace. Records of one release share one identity: the access is for the kind, whatever N.
 HISTORY = "history"
@@ -230,14 +234,25 @@ def gather(root, records, version, state):
     the supplemental objects that the scripts apply and the four demo-resources companions own.
     Each Helmfile release adds the identity of its Helm records (history_key). `state` is the
     lock-verified application Helmfile from locked_state(), rendered with the companions.
+
+    A companion's first release is a plain helm install (release_phases.install_args), so the
+    companions are also rendered as an install. An object only that render has joins the result
+    and needs its own record; an object whose hook events differ between install and upgrade is
+    refused, because one record holds one set of hook events.
     """
     reviewed = reviewed_rows(records)
-    scripts, helmfile, releases = {}, {}, set()
-    helmfile_index = collector(helmfile, reviewed)
+    scripts, helmfile, install, releases, installed = {}, {}, {}, set(), set()
+    helmfile_index, install_index = collector(helmfile, reviewed), collector(install, reviewed)
 
     def index(records_, namespace, release, docs):
         releases.add((namespace, release))
         helmfile_index(records_, namespace, release, docs)
+
+    def first_install(records_, namespace, release, docs):
+        if release != COMPANION:
+            raise ValueError(f"The companion install render produced {namespace}/{release}")
+        installed.add((namespace, release))
+        install_index(records_, namespace, release, docs)
 
     with tempfile.TemporaryDirectory(prefix="chart-objects-") as scratch:
         # Upgrade renders without CRDs: Helm neither upgrades nor deletes crds/ objects.
@@ -246,9 +261,21 @@ def gather(root, records, version, state):
         # helmfile template has no --is-upgrade flag of its own; it passes this one to helm template.
         render_diff.render(root, Path(scratch) / "helmfile", False, state=state,
                            target=["--kube-version", version, "--template-args=--is-upgrade"], index=index)
+        # The companions alone, as helm install renders them: .Release.IsInstall.
+        render_diff.render(root, Path(scratch) / "install", False, state=None,
+                           target=["--kube-version", version], index=first_install)
     differences = path_differences(scripts, helmfile)
+    companions = {item for item in releases if item[1] == COMPANION}
+    if not companions or installed != companions:
+        differences.append(f"the companion install render has {sorted(installed)}, the upgrade render {sorted(companions)}")
+    differences += [f"hook events differ for {describe(key)} between the companion install and upgrade: "
+                    f"install '{install[key]['hook']}', upgrade '{helmfile[key]['hook']}'"
+                    for key in sorted(install.keys() & helmfile.keys())
+                    if events(install[key]["hook"]) != events(helmfile[key]["hook"])]
     if differences:
         raise ValueError("The script and Helmfile renders differ:\n  - " + "\n  - ".join(differences))
+    for key in sorted(install.keys() - helmfile.keys()):
+        helmfile[key] = install[key]
     for namespace, release in sorted(releases):
         helmfile[history_key(namespace, release)] = {"kind": "Secret", "hook": ""}
     return helmfile

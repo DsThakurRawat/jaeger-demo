@@ -120,8 +120,8 @@ deployment.
   `python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check`.
   Without cluster access it renders the six releases the way the scripts install them
   and the ten Helmfile releases from the lock-verified `.helmfile-locked.yaml`, fails
-  when the two paths differ, and lists every object and Helmfile release that has no
-  record. It also fails when the inventory's `chartArchiveSHA256` differs from
+  when the two paths differ, renders the four companions again as their first
+  `helm install`, and lists every object and Helmfile release that has no record. It also fails when the inventory's `chartArchiveSHA256` differs from
   `scripts/demo/chart-archives.lock.json`, so a chart bump runs `--write` too.
   `--write` adds the records and copies the archive list; review them, then update
   `ops/rbac/deployer.yaml` until `deployer_access_test.py` passes

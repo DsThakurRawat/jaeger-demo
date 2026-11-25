@@ -57,16 +57,22 @@ def render_records(records):
 def fake_render(calls, change=None):
     """A stand-in for pr_render_diff.render that indexes objects reproducing RECORDS on either path.
 
-    change maps "scripts" or "helmfile" to {"drop": record} or {"hook": record} to make that path differ.
-    The Helmfile path indexes the supplemental objects as the demo-resources release of their namespace.
+    change maps "scripts", "helmfile" or "install" to {"drop": record} or {"hook": record} to make
+    that render differ; "install" also takes {"extra": [(namespace, release, object)]}. The Helmfile
+    path indexes the supplemental objects as the demo-resources release of their namespace, and the
+    companion install render (state None) indexes only those.
     """
     change = change or {}
 
     def render(root, temp, legacy, target, index, state="helmfile.yaml"):
         calls.append({"legacy": legacy, "target": target, "state": state})
-        edit = change.get("scripts" if legacy else "helmfile", {})
+        edit = change.get("scripts" if legacy else "install" if state is None else "helmfile", {})
+        for namespace, release, obj in edit.get("extra", []):
+            index(None, namespace, release, [obj])
         for row in c.reviewed_rows(RECORDS).values():
             if row["component"] == c.HISTORY or row is edit.get("drop"):
+                continue
+            if state is None and (row["release"] != c.SUPPLEMENT or row["scope"] == edit.get("drop_namespace")):
                 continue
             obj = synthetic(row)
             if row is edit.get("hook"):
@@ -176,11 +182,15 @@ class ChartObjectsTests(unittest.TestCase):
         calls = []
         with patch.object(c.render_diff, "render", fake_render(calls)):
             found = c.gather(c.ROOT, RECORDS, c.kube_version(), c.chart_archives.LOCKED_STATE)
-        self.assertEqual([True, False], [call["legacy"] for call in calls], "the script path and the Helmfile path")
+        self.assertEqual([True, False, False], [call["legacy"] for call in calls],
+                         "the script path, the Helmfile path and the companion install")
         self.assertEqual(["--kube-version", c.kube_version(), "--is-upgrade"], calls[0]["target"])
         # helmfile template has no --is-upgrade; it passes it to helm template.
         self.assertEqual(["--kube-version", c.kube_version(), "--template-args=--is-upgrade"], calls[1]["target"])
         self.assertEqual(c.chart_archives.LOCKED_STATE, calls[1]["state"], "the lock-verified Helmfile state")
+        # The first companion release is a plain helm install: no --is-upgrade, companions only.
+        self.assertEqual(["--kube-version", c.kube_version()], calls[2]["target"])
+        self.assertIsNone(calls[2]["state"])
         for call in calls:
             self.assertNotIn("--include-crds", call["target"])
         self.assertEqual(render_records(RECORDS), found)
@@ -194,10 +204,29 @@ class ChartObjectsTests(unittest.TestCase):
                 ("an object only the script path renders", {"helmfile": {"drop": row}}, "only the script path renders"),
                 ("an object only the Helmfile path renders", {"scripts": {"drop": row}}, "only the Helmfile path renders"),
                 ("a supplement the companions do not own", {"helmfile": {"drop": supplement}}, "only the script path renders supplement"),
-                ("different hook events", {"helmfile": {"hook": hooked}}, "hook events differ")):
+                ("different hook events", {"helmfile": {"hook": hooked}}, "hook events differ"),
+                ("a companion hook that only an install renders", {"install": {"hook": supplement}},
+                 "between the companion install and upgrade"),
+                ("a companion missing from the install render", {"install": {"drop_namespace": supplement["scope"]}},
+                 "the companion install render has"),
+                ("an application in the install render",
+                 {"install": {"extra": [("otel-demo", "otel-demo", synthetic(row))]}},
+                 "companion install render produced otel-demo/otel-demo")):
             with self.subTest(name), patch.object(c.render_diff, "render", fake_render([], change)), \
                     self.assertRaisesRegex(ValueError, expected):
                 c.gather(c.ROOT, RECORDS, c.kube_version(), c.chart_archives.LOCKED_STATE)
+
+    def test_an_object_only_the_companion_install_renders_needs_a_record(self):
+        extra = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "install-only", "namespace": "jaeger"}}
+        change = {"install": {"extra": [("jaeger", "demo-resources", extra)]}}
+        with patch.object(c.render_diff, "render", fake_render([], change)):
+            found = c.gather(c.ROOT, RECORDS, c.kube_version(), c.chart_archives.LOCKED_STATE)
+        key = ("", c.SUPPLEMENT, "jaeger", "", "configmaps", "install-only")
+        self.assertEqual(([key], [], []), c.compare(found, RECORDS))
+        # Reviewed, it passes.
+        reviewed = RECORDS + [dict(component="otel-jaeger", release=c.SUPPLEMENT, scope="jaeger", apiGroup="",
+                                   resource="configmaps", name="install-only", verbs=["get", "patch"])]
+        self.assertEqual(([], [], []), c.compare(found, reviewed))
 
     def test_a_helmfile_release_without_history_records_is_missing(self):
         with patch.object(c.render_diff, "render", fake_render([])):
