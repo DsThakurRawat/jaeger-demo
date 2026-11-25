@@ -172,6 +172,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- `scripts/demo/deployer_kubeconfig.py` accepts the `kind: ""` that
+  `oci ce cluster create-kubeconfig` writes, as kubectl does. It refused the OKE
+  administrator kubeconfig as "Not a kubeconfig", so the adoption runbook stopped
+  at its first Cloud Shell step
+  ([#159](https://github.com/jaegertracing/jaeger-demo/pull/159),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
+
 - The live drift report instructions install PyYAML into a virtual environment.
   The render's helper scripts do not inherit `PYTHONPATH`, so in Cloud Shell the
   report failed with only `ValueError`. They also no longer say that the render

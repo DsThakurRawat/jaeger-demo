@@ -68,6 +68,22 @@ class DeployerKubeconfigTest(unittest.TestCase):
         self.assertEqual("oci", user["user"]["exec"]["command"])
         self.assertNotIn("not-copied", self.output.read_text())
 
+    def test_accepts_the_empty_kind_that_oci_writes_and_refuses_another_kind(self):
+        # `oci ce cluster create-kubeconfig` writes `kind: ""`; kubectl reads it, so must this.
+        for kind in ("", None):
+            with self.subTest(kind=kind):
+                config = dict(ADMIN, kind=kind) if kind is not None else {k: v for k, v in ADMIN.items() if k != "kind"}
+                self.source.write_text(yaml.safe_dump(config))
+                self.output.unlink(missing_ok=True)
+                code, _ = self.run_main("--user", USER)
+                self.assertEqual(0, code)
+                self.assertEqual("Config", yaml.safe_load(self.output.read_text())["kind"])
+        self.source.write_text(yaml.safe_dump(dict(ADMIN, kind="Pod")))
+        self.output.unlink(missing_ok=True)
+        code, _ = self.run_main("--user", USER)
+        self.assertNotEqual(0, code)
+        self.assertFalse(self.output.exists())
+
     def test_relative_files_resolve_against_the_source_kubeconfig(self):
         self.run_main("--user", USER)
         config = yaml.safe_load(self.output.read_text())
