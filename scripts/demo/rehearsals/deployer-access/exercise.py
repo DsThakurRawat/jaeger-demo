@@ -5,21 +5,29 @@
 """Prove the committed deployer role against a real Kubernetes API server.
 
 On a disposable cluster the administrator applies ops/rbac/deployer.yaml, binds
-two fixture users with deployer_access.py, and requires `check --user` to find no
-difference for either identity. Under an impersonating kubeconfig for each user,
-`kubectl auth whoami` and `check --self` must agree. The check must then report a
-removed rule as missing and an extra grant as not allowed.
+two fixture users with deployer_access.py, and requires `check --user`, with the
+groups each user really has, to find no difference for either identity. Under an
+impersonating kubeconfig for each user, `kubectl auth whoami` and `check --self`
+must agree. The check must then report a removed rule as missing and an extra
+grant as not allowed.
 
-The administrator installs the monitoring release from the lock-verified archive
-with the production values and flags. The scheduled identity, holding only the
-role, then runs the scheduled monitoring upgrade through
-examples/oci/deploy-all.sh, which runs `helm upgrade --wait` with its hooks. Last,
-the API server must refuse that identity a release in kube-system and an upgrade
-that adds an object there. No production credential is used.
+The administrator installs the monitoring release as the base of the change
+deployed it (the pull request's base commit, otherwise this checkout), by
+client-side apply. The scheduled identity, holding only the role, then runs this
+checkout's examples/oci/deploy-all.sh as a scheduled monitoring upgrade, which
+runs `helm upgrade --wait` with its hooks. The administrator moves the release
+back to the base by server-side apply, and the scheduled identity upgrades it
+again, so both ways Helm can have stored the production release are covered. The
+API audit log must show no request refused to that identity during either
+upgrade. A probe release shows that an upgrade fails without a rule it needs and
+succeeds once the rule is back. Last, Helm must stop that identity before it
+changes anything in kube-system. No production credential is used.
 """
 
 import argparse
+import base64
 import copy
+import gzip
 import json
 import os
 from pathlib import Path
@@ -39,14 +47,24 @@ import deployer_access
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPTS = ROOT / "scripts/demo"
-OCI = ROOT / "examples/oci"
+OCI = "examples/oci"
 CONTEXT = "kind-jaeger-demo-deployer-fixture"
+NODE = CONTEXT.removeprefix("kind-") + "-control-plane"
+# Where kind.yaml beside this file makes the API server write its audit log.
+AUDIT_LOG = "/var/log/kubernetes/audit.log"
 MANUAL = "ocid1.user.oc1..aaaafixturemanual"
 SCHEDULED = "ocid1.user.oc1..aaaafixturescheduled"
 PROBE = "deployer-access-probe"
-# Variables that would change what deploy-all.sh does if the caller's environment set them.
-OVERRIDES = ("KUBECONFIG", "HELM_KUBE", "HELM_NAMESPACE", "JAEGER_", "EXPECTED_CONFIG_SHA",
-             "PROMETHEUS_STACK_CHART_VERSION", "RUN_PUBLIC_SMOKE_TESTS", "GITHUB_")
+# Every command must finish inside this, which is inside the step limit in ci.yml.
+DEADLINE_MINUTES = 24
+# Upper bounds of the long phases. The deadline cuts any of them short.
+INSTALL_SECONDS, UPGRADE_SECONDS, COMMAND_SECONDS = 600, 480, 120
+# The monitoring inputs a checkout deploys, read by seed_inputs().
+SEED_FILES = ("deploy-all.sh", "monitoring-values.yaml", "prometheus-svc.yaml")
+# Variables that would change what Helm, kubectl or deploy-all.sh do if the caller's environment set them.
+OVERRIDES = ("KUBECONFIG", "KUBECTL_", "HELM_KUBE", "HELM_NAMESPACE", "HELM_DRIVER", "HELM_MAX_HISTORY",
+             "HELM_DEBUG", "JAEGER_", "EXPECTED_CONFIG_SHA", "PROMETHEUS_STACK_CHART_VERSION",
+             "RUN_PUBLIC_SMOKE_TESTS", "GITHUB_")
 # A forbidden answer names the user, the verb, the resource and the namespace. Helm may quote it.
 QUOTE = r'\\?"'
 REFUSAL = re.compile(rf'User {QUOTE}([^"\\]+){QUOTE} cannot ([a-z]+) resource {QUOTE}([^"\\]+){QUOTE} '
@@ -58,6 +76,25 @@ metadata:
   name: {name}
 data:
   purpose: deployer access rehearsal
+{{{{- if .Values.ingress }}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {name}
+spec:
+  rules:
+    - host: {name}.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {name}
+                port:
+                  number: 80
+{{{{- end }}}}
 {{{{- if .Values.kubeSystem }}}}
 ---
 apiVersion: v1
@@ -110,7 +147,7 @@ def without_rule(documents, namespace, resources, named):
 
 
 def differences(output):
-    """Parse `deployer_access.py check` output into (required, Request) pairs, as check() returns them."""
+    """Parse `deployer_access.py check` output into (Request, required) pairs, as check() returns them."""
     found = []
     for line in output.splitlines():
         for prefix, want in (("missing: ", True), ("must not be allowed: ", False)):
@@ -130,6 +167,22 @@ def monitoring_command(script):
     return words
 
 
+def seed_inputs(root):
+    """What the checkout at `root` deploys for monitoring: chart pin, helm words and input files."""
+    directory = Path(root) / OCI
+    missing = [name for name in SEED_FILES if not (directory / name).is_file()]
+    if missing or not (Path(root) / "scripts/demo/chart_archives.py").is_file():
+        raise ValueError("The checkout lacks " + ", ".join(missing or ["scripts/demo/chart_archives.py"]))
+    return {"root": Path(root), "directory": directory,
+            "version": chart_archives.pin(Path(root), "PROMETHEUS_STACK_CHART_VERSION"),
+            "words": monitoring_command((directory / "deploy-all.sh").read_text()),
+            "files": {name: (directory / name).read_bytes() for name in SEED_FILES[1:]}}
+
+
+def same_inputs(first, second):
+    return all(first[key] == second[key] for key in ("version", "words", "files"))
+
+
 def scheduled_env(base, config):
     """The environment deploy.py gives deploy-all.sh for a scheduled oci/monitoring upgrade."""
     env = {key: value for key, value in base.items() if not key.startswith(OVERRIDES)}
@@ -140,25 +193,67 @@ def scheduled_env(base, config):
     return env
 
 
-def settle(attempt, done, tries=30, pause=2):
-    """Repeat `attempt` until `done` accepts it: the authorizer applies a role change within seconds."""
-    for _ in range(tries):
+def release_record(encoded):
+    """Decode the `release` value of a Helm release Secret: the API's base64, then Helm's base64 and gzip."""
+    data = base64.b64decode(base64.b64decode(encoded))
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+    return json.loads(data)
+
+
+def apply_method(record):
+    """How Helm applied a release: "ssa" or "csa". Helm reads a record without the field as client-side."""
+    return record.get("apply_method") or "csa"
+
+
+def forbidden(lines, user, start, end):
+    """Requests refused to `user` (HTTP 403) between the audit events of two marker requests.
+
+    The markers are reads of objects named `start` and `end`. Returns "verb resource namespace/name" lines.
+    """
+    found, inside = [], False
+    for line in lines:
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        name = (event.get("objectRef") or {}).get("name")
+        if name == start:
+            inside = True
+        elif name == end and inside:
+            return sorted(set(found))
+        elif inside and (event.get("responseStatus") or {}).get("code") == 403:
+            who = (event.get("impersonatedUser") or event.get("user") or {}).get("username")
+            if who == user:
+                ref = event.get("objectRef") or {}
+                resource = "/".join(part for part in (ref.get("resource"), ref.get("subresource")) if part)
+                found.append(f"{event.get('verb')} {resource or event.get('requestURI')} "
+                             f"{ref.get('namespace', '')}/{ref.get('name', '')}")
+    raise ValueError(f"The audit log does not hold both markers {start} and {end}")
+
+
+def settle(attempt, done, seconds=60, pause=2):
+    """Repeat `attempt` until `done` accepts it or `seconds` pass: the authorizer applies a role change within seconds."""
+    deadline = time.monotonic() + seconds
+    while True:
         result = attempt()
-        if done(result):
-            break
+        if done(result) or time.monotonic() >= deadline:
+            return result
         time.sleep(pause)
-    return result
 
 
-def exercise(cfg, context):
+def exercise(cfg, context, baseline):
     source = yaml.safe_load(Path(cfg).read_text())
     base = {key: value for key, value in os.environ.items() if not key.startswith(OVERRIDES)}
+    deadline = time.monotonic() + DEADLINE_MINUTES * 60
 
-    def run(args, config=None, body=None, cwd=None, env=None, timeout=300, stream=False):
+    def run(args, config=None, body=None, cwd=None, env=None, timeout=COMMAND_SECONDS, stream=False):
+        limit = min(timeout, deadline - time.monotonic())
+        if limit <= 0:
+            raise AssertionError(f"The rehearsal passed its {DEADLINE_MINUTES}-minute deadline")
         env = env or dict(base, KUBECONFIG=str(config))
         output = dict(stdout=sys.stderr, stderr=sys.stderr) if stream else dict(capture_output=True)
         return subprocess.run([str(arg) for arg in args], input=body, cwd=cwd, env=env, text=True,
-                              timeout=timeout, **output)
+                              timeout=limit, **output)
 
     def ok(result):
         if result.returncode:
@@ -169,153 +264,248 @@ def exercise(cfg, context):
     with tempfile.TemporaryDirectory() as temp:
         temp = Path(temp)
         admin = kubeconfig(source, context, temp / "admin.yaml")
+        try:
+            summary = steps(source, context, baseline, temp, admin, base, run, ok)
+        except BaseException:
+            # What the cluster looked like when it failed, for the job log.
+            for namespace in ("default", "kube-system"):
+                subprocess.run(["kubectl", "get", "pods,events", "--namespace", namespace, "-o", "wide"],
+                               env=dict(base, KUBECONFIG=str(admin)), stdout=sys.stderr, stderr=sys.stderr,
+                               timeout=30, check=False)
+            raise
+    print(json.dumps(summary, indent=2))
 
-        def kube(args, body=None):
-            return ok(run(["kubectl", *args], admin, body))
 
-        def helm(args):
-            return ok(run(["helm", *args], admin))
+def steps(source, context, baseline, temp, admin, base, run, ok):
+    def kube(args, body=None):
+        return ok(run(["kubectl", *args], admin, body))
 
-        def helm_history(release):
-            entries = json.loads(helm(["history", release, "--namespace", "default", "-o", "json"]))
-            return [(entry["revision"], entry["status"]) for entry in entries]
+    def helm(args, timeout=COMMAND_SECONDS, **kwargs):
+        return ok(run(["helm", *args], admin, timeout=timeout, **kwargs))
 
-        view = json.loads(kube(["config", "view", "--minify", "-o", "json"]))
-        if urlsplit(view["clusters"][0]["cluster"]["server"]).hostname != "127.0.0.1":
-            raise ValueError("This rehearsal requires a disposable loopback API server")
-        others = [namespace for namespace in deployer_access.RELEASE_NAMESPACES if namespace != "default"]
-        namespaces = set(kube(["get", "ns", "-o", "jsonpath={.items[*].metadata.name}"]).split())
-        if namespaces & set(others):
-            raise ValueError("Use a new fixture without the demo namespaces")
-        server = json.loads(kube(["version", "-o", "json"]))["serverVersion"]["gitVersion"]
+    def history(release):
+        entries = json.loads(helm(["history", release, "--namespace", "default", "-o", "json"]))
+        return [(entry["revision"], entry["status"]) for entry in entries]
 
-        # 1. The release namespaces beside default, and the API server's acceptance of the role,
-        # including the empty resource name of the escalate rules.
-        for namespace in others:
-            kube(["create", "namespace", namespace])
-        kube(["apply", "--dry-run=server", "-f", deployer_access.ROLES])
-        kube(["apply", "-f", deployer_access.ROLES])
+    def method(release, revision):
+        encoded = kube(["--namespace", "default", "get", "secret", f"sh.helm.release.v1.{release}.v{revision}",
+                        "-o", "jsonpath={.data.release}"])
+        return apply_method(release_record(encoded))
 
-        # 2. Both identities, bound by the committed generator.
-        kube(["apply", "-f", "-"], json.dumps(deployer_access.bindings(MANUAL, SCHEDULED)))
-        users = {"scheduled": SCHEDULED, "manual": MANUAL}
+    view = json.loads(kube(["config", "view", "--minify", "-o", "json"]))
+    if urlsplit(view["clusters"][0]["cluster"]["server"]).hostname != "127.0.0.1":
+        raise ValueError("This rehearsal requires a disposable loopback API server")
+    others = [namespace for namespace in deployer_access.RELEASE_NAMESPACES if namespace != "default"]
+    namespaces = set(kube(["get", "ns", "-o", "jsonpath={.items[*].metadata.name}"]).split())
+    if namespaces & set(others):
+        raise ValueError("Use a new fixture without the demo namespaces")
+    server = json.loads(kube(["version", "-o", "json"]))["serverVersion"]["gitVersion"]
 
-        def check(identity, config=admin):
-            who = ["--self"] if config != admin else ["--user", users[identity]]
-            return run([sys.executable, SCRIPTS / "deployer_access.py", "check", "--identity", identity, *who],
-                       config)
+    # 1. The release namespaces beside default, and the API server's acceptance of the role,
+    # including the empty resource name of the escalate rules.
+    for namespace in others:
+        kube(["create", "namespace", namespace])
+    kube(["apply", "--dry-run=server", "-f", deployer_access.ROLES])
+    kube(["apply", "-f", deployer_access.ROLES])
 
-        def expect(identity, wanted, config=admin):
-            """Require the check's exit status and its differences, once the authorizer has the change."""
-            code = int(bool(wanted))
-            result = settle(lambda: check(identity, config),
-                            lambda r: r.returncode == code and differences(r.stdout) == wanted)
-            summary = f"{identity}: {len(wanted)} difference(s) from ops/rbac/deployer.yaml"
-            assert result.returncode == code and differences(result.stdout) == wanted, result.stdout + result.stderr
-            assert summary in result.stdout.splitlines(), result.stdout
+    # 2. Both identities, bound by the committed generator, and an impersonating kubeconfig for
+    # each. The API server says who each one is, with the groups it adds.
+    kube(["apply", "-f", "-"], json.dumps(deployer_access.bindings(MANUAL, SCHEDULED)))
+    users = {"scheduled": SCHEDULED, "manual": MANUAL}
+    configs = {identity: kubeconfig(source, context, temp / f"{identity}.yaml", user)
+               for identity, user in users.items()}
+    groups = {}
+    for identity, config in configs.items():
+        who = json.loads(ok(run(["kubectl", "auth", "whoami", "-o", "json"], config)))["status"]["userInfo"]
+        assert who["username"] == users[identity] and who.get("groups"), (identity, who)
+        groups[identity] = who["groups"]
 
-        # 3. Live answers equal the offline model, required and denied, for both identities.
-        for identity in ("scheduled", "manual"):
-            expect(identity, [])
+    def check(identity, config=admin):
+        who = ["--self"] if config != admin else ["--user", users[identity]]
+        if config == admin:
+            for group in groups[identity]:
+                who += ["--group", group]
+        return run([sys.executable, SCRIPTS / "deployer_access.py", "check", "--identity", identity, *who], config)
 
-        # 4. Each identity's own credential: who it is, and what it can do.
-        configs = {identity: kubeconfig(source, context, temp / f"{identity}.yaml", user)
-                   for identity, user in users.items()}
-        for identity, config in configs.items():
-            who = ok(run(["kubectl", "auth", "whoami", "-o", "jsonpath={.status.userInfo.username}"], config))
-            assert who == users[identity], (identity, who)
-            expect(identity, [], config)
-            # Helm reads the same kubeconfig. Its refusal names the user, so it impersonates too.
-            listed = run(["helm", "list", "--namespace", "kube-system"], config)
-            assert listed.returncode and ("list", "secrets") in refusals(listed.stderr, users[identity], "kube-system"), \
-                (identity, listed.returncode, listed.stderr[-2000:])
+    def expect(identity, wanted, config=admin):
+        """Require the check's exit status and its differences, once the authorizer has the change."""
+        code = int(bool(wanted))
+        result = settle(lambda: check(identity, config),
+                        lambda r: r.returncode == code and differences(r.stdout) == wanted)
+        line = f"{identity}: {len(wanted)} difference(s) from ops/rbac/deployer.yaml"
+        found = differences(result.stdout)
+        assert result.returncode == code and found == wanted, result.stdout + result.stderr
+        assert line in result.stdout.splitlines(), result.stdout
+        return len(found)
 
-        # 5. The check notices a missing rule and an extra grant.
-        committed = deployer_access.load_roles()
+    def reduced_role(namespace, resources, named):
+        """Apply the role without one rule and return the required requests the check must now miss."""
         documents = list(yaml.safe_load_all(deployer_access.ROLES.read_text()))
-        reduced, removed = without_rule(documents, "kube-system", ["services"], named=True)
-        reduced_path = temp / "reduced.yaml"
-        reduced_path.write_text(yaml.safe_dump_all(reduced))
-        smaller = deployer_access.load_roles(reduced_path)
+        reduced, removed = without_rule(documents, namespace, resources, named)
+        path = temp / f"without-{namespace or 'cluster'}-{'-'.join(resources)}.yaml"
+        path.write_text(yaml.safe_dump_all(reduced))
+        committed, smaller = deployer_access.load_roles(), deployer_access.load_roles(path)
         missing = [(request, True) for request in deployer_access.required("scheduled")
                    if deployer_access.allowed("scheduled", request, committed)
                    and not deployer_access.allowed("scheduled", request, smaller)]
-        assert missing and all(request.name in removed["resourceNames"] for request, _ in missing), missing
-        kube(["apply", "-f", reduced_path])
-        expect("scheduled", missing)
-        kube(["apply", "-f", deployer_access.ROLES])
-        expect("scheduled", [])
-        extra = [{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role",
-                  "metadata": {"name": PROBE, "namespace": "kube-system"},
-                  "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]},
-                 {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
-                  "metadata": {"name": PROBE, "namespace": "kube-system"},
-                  "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": SCHEDULED}],
-                  "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": PROBE}}]
-        extra = json.dumps({"apiVersion": "v1", "kind": "List", "items": extra})
-        granted = [(request, False) for request in deployer_access.denied("scheduled")
-                   if request[:4] == ("kube-system", "", "secrets", "get")]
-        assert granted, "The denied list no longer covers kube-system Secrets"
-        kube(["apply", "-f", "-"], extra)
-        expect("scheduled", granted)
-        kube(["delete", "-f", "-"], extra)
-        expect("scheduled", [])
+        assert missing, (namespace, resources)
+        kube(["apply", "-f", path])
+        return removed, missing
 
-        # 6. The administrator installs the monitoring release as a manual first install would:
-        # the verified archive and the flags and values of deploy-all.sh, run from its directory.
-        version = chart_archives.pin(ROOT, "PROMETHEUS_STACK_CHART_VERSION")
-        archive = ok(run([sys.executable, SCRIPTS / "chart_archives.py", "pull", "kube-prometheus-stack", version,
-                          temp], admin, timeout=600))
-        flags = ["upgrade", "--install", "--wait", *monitoring_command((OCI / "deploy-all.sh").read_text())]
-        flags[flags.index("$PROMETHEUS_STACK_CHART")] = archive
-        # The Services deploy-all.sh applies beside the release exist in production too.
-        kube(["apply", "-f", OCI / "prometheus-svc.yaml"])
-        ok(run(["helm", *flags], admin, cwd=OCI, timeout=1500, stream=True))
-        assert helm_history("prometheus") == [(1, "deployed")], helm_history("prometheus")
+    # 3. Live answers equal the offline model, required and denied, for both identities and
+    # their groups.
+    checked = {identity: expect(identity, []) for identity in users}
 
-        # 7. The scheduled identity runs the scheduled monitoring upgrade, hooks and Helm's default wait included.
-        upgrade = run(["bash", OCI / "deploy-all.sh", "upgrade"], cwd=ROOT, timeout=1500, stream=True,
-                      env=scheduled_env(base, configs["scheduled"]))
-        assert upgrade.returncode == 0, f"deploy-all.sh upgrade failed as the scheduled identity ({upgrade.returncode})"
-        assert helm_history("prometheus") == [(1, "superseded"), (2, "deployed")], helm_history("prometheus")
+    # 4. Each identity's own credential: what it can do, and that Helm uses it too.
+    selves = {}
+    for identity, config in configs.items():
+        selves[identity] = expect(identity, [], config)
+        # Helm reads the same kubeconfig. Its refusal names the user, so it impersonates too.
+        listed = run(["helm", "list", "--namespace", "kube-system"], config)
+        assert listed.returncode and ("list", "secrets") in refusals(listed.stderr, users[identity], "kube-system"), \
+            (identity, listed.returncode, listed.stderr[-2000:])
 
-        # 8. Helm cannot take that identity into kube-system, by a new release or by an upgrade.
-        chart = temp / PROBE
-        (chart / "templates").mkdir(parents=True)
-        (chart / "Chart.yaml").write_text(f"apiVersion: v2\nname: {PROBE}\nversion: 0.1.0\n")
-        (chart / "values.yaml").write_text("kubeSystem: false\n")
-        (chart / "templates/configmaps.yaml").write_text(PROBE_TEMPLATE.format(name=PROBE))
-        helm(["install", PROBE, chart, "--namespace", "default", "--wait"])
-        before = {release: helm_history(release) for release in ("prometheus", PROBE)}
-        refused = {}
-        for case, args in (("install into kube-system", ["install", PROBE, chart, "--namespace", "kube-system"]),
-                           ("upgrade adding a kube-system ConfigMap",
-                            ["upgrade", PROBE, chart, "--namespace", "default", "--set", "kubeSystem=true"])):
-            result = run(["helm", *args, "--dry-run=server"], configs["scheduled"])
-            found = refusals(result.stderr, SCHEDULED, "kube-system")
-            assert result.returncode and found and {resource for _, resource in found} == {"configmaps"}, \
-                (case, result.returncode, result.stderr[-2000:])
-            refused[case] = [" ".join(pair) for pair in found]
-        assert {release: helm_history(release) for release in before} == before, "A refused dry run changed a release"
-        assert kube(["-n", "kube-system", "get", "configmap", PROBE, "--ignore-not-found", "-o", "name"]) == ""
+    # 5. The check notices a missing rule and an extra grant.
+    removed, missing = reduced_role("kube-system", ["services"], named=True)
+    assert all(request.name in removed["resourceNames"] for request, _ in missing), missing
+    detected = {"removedRule": expect("scheduled", missing)}
+    kube(["apply", "-f", deployer_access.ROLES])
+    expect("scheduled", [])
+    extra = [{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role",
+              "metadata": {"name": PROBE, "namespace": "kube-system"},
+              "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]},
+             {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding",
+              "metadata": {"name": PROBE, "namespace": "kube-system"},
+              "subjects": [{"apiGroup": "rbac.authorization.k8s.io", "kind": "User", "name": SCHEDULED}],
+              "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": PROBE}}]
+    extra = json.dumps({"apiVersion": "v1", "kind": "List", "items": extra})
+    granted = [(request, False) for request in deployer_access.denied("scheduled")
+               if request[:4] == ("kube-system", "", "secrets", "get")]
+    assert granted, "The denied list no longer covers kube-system Secrets"
+    kube(["apply", "-f", "-"], extra)
+    detected["extraGrant"] = expect("scheduled", granted)
+    kube(["delete", "-f", "-"], extra)
+    expect("scheduled", [])
 
-    # 9. The evidence, for the job log.
-    print(json.dumps({
-        "kubernetes": server, "chart": f"kube-prometheus-stack-{version}", "roleAcceptedByServerDryRun": True,
-        "checkDifferences": {"scheduled": 0, "manual": 0}, "selfCheckDifferences": {"scheduled": 0, "manual": 0},
-        "detected": {"removedRule": len(missing), "extraGrant": len(granted)},
-        "scheduledUpgrade": {"command": "examples/oci/deploy-all.sh upgrade", "scope": "monitoring",
-                             "event": "schedule", "release": "default/prometheus", "revision": 2,
-                             "status": "deployed"},
-        "refused": refused, "productionAccess": False,
-    }, indent=2))
+    # 6. The administrator puts the monitoring release where production has it before this change:
+    # the base commit's chart pin, values, flags and Services, through the base's chart lock.
+    # Client-side apply first: a release Helm 3 stored has that method, and Helm then creates
+    # each hook object with a create request rather than an apply patch.
+    head = seed_inputs(ROOT)
+    seed, reason = head, "no base checkout"
+    if baseline:
+        try:
+            candidate = seed_inputs(baseline)
+            reason = "the base deploys the same monitoring inputs" if same_inputs(candidate, head) else None
+            seed = head if reason else candidate
+        except (OSError, ValueError) as error:
+            reason = f"the base checkout cannot seed the release ({error})"
+    if reason:
+        print(f"Seeding the monitoring release from this checkout: {reason}. "
+              "No base to head transition is exercised.", file=sys.stderr)
+    archive = ok(run([sys.executable, seed["root"] / "scripts/demo/chart_archives.py", "pull",
+                      "kube-prometheus-stack", seed["version"], temp], admin))
+    words = [archive if word == "$PROMETHEUS_STACK_CHART" else word for word in seed["words"]]
+
+    def seed_release(*how, timeout=UPGRADE_SECONDS):
+        kube(["apply", "-f", seed["directory"] / "prometheus-svc.yaml"])
+        helm(["upgrade", *how, "--wait", *words], timeout=timeout, cwd=seed["directory"], stream=True)
+
+    seed_release("--install", "--server-side=false", timeout=INSTALL_SECONDS)
+
+    # 7. The scheduled identity runs this checkout's scheduled monitoring upgrade, hooks and
+    # Helm's default wait included, on a client-side release and then, after the
+    # administrator returns the release to the base by server-side apply, on a server-side one.
+    # The audit log must show no request refused to it meanwhile, including any Helm ignored.
+    audit = {}
+
+    def audited(name, action):
+        start, end = f"{PROBE}-{name}-start", f"{PROBE}-{name}-end"
+        marker = ["kubectl", "--namespace", "default", "get", "configmap", "--ignore-not-found"]
+        ok(run([*marker, start], configs["scheduled"]))
+        action()
+        ok(run([*marker, end], configs["scheduled"]))
+        # The end marker's event can reach the file just after its response.
+        log = settle(lambda: ok(run(["docker", "exec", NODE, "cat", AUDIT_LOG])), lambda text: end in text, 15)
+        refused = forbidden(log.splitlines(), SCHEDULED, start, end)
+        assert refused == [], f"The API server refused the scheduled identity during {name}: {refused}"
+        audit[name] = len(refused)
+
+    def scheduled_upgrade():
+        result = run(["bash", ROOT / OCI / "deploy-all.sh", "upgrade"], cwd=ROOT, timeout=UPGRADE_SECONDS,
+                     stream=True, env=scheduled_env(base, configs["scheduled"]))
+        assert result.returncode == 0, f"deploy-all.sh upgrade failed as the scheduled identity ({result.returncode})"
+
+    audited("client-side-upgrade", scheduled_upgrade)
+    seed_release("--server-side=true", "--force-conflicts")
+    audited("server-side-upgrade", scheduled_upgrade)
+    revisions = history("prometheus")
+    methods = {revision: method("prometheus", revision) for revision, _ in revisions}
+    assert revisions == [(1, "superseded"), (2, "superseded"), (3, "superseded"), (4, "deployed")], revisions
+    assert methods == {1: "csa", 2: "csa", 3: "ssa", 4: "ssa"}, methods
+    by = {1: "administrator, seed", 2: "scheduled, head", 3: "administrator, seed", 4: "scheduled, head"}
+    upgrades = [{"revision": revision, "by": by[revision], "applyMethod": methods[revision], "status": status}
+                for revision, status in revisions]
+
+    # 8. A probe release. Without the rule it needs the scheduled identity's upgrade fails, as
+    # that user, before it changes anything; with the committed role the same upgrade succeeds.
+    chart = temp / PROBE
+    (chart / "templates").mkdir(parents=True)
+    (chart / "Chart.yaml").write_text(f"apiVersion: v2\nname: {PROBE}\nversion: 0.1.0\n")
+    (chart / "values.yaml").write_text("ingress: false\nkubeSystem: false\n")
+    (chart / "templates/objects.yaml").write_text(PROBE_TEMPLATE.format(name=PROBE))
+    helm(["install", PROBE, chart, "--namespace", "default", "--wait"])
+    add_ingress = ["helm", "upgrade", PROBE, chart, "--namespace", "default", "--set", "ingress=true"]
+    _, lost = reduced_role("default", ["ingresses"], named=False)
+    expect("scheduled", lost)
+    result = run(add_ingress, configs["scheduled"])
+    found = refusals(result.stderr, SCHEDULED, "default")
+    assert result.returncode and found and {resource for _, resource in found} == {"ingresses"}, \
+        (result.returncode, result.stderr[-2000:])
+    assert history(PROBE) == [(1, "deployed")], history(PROBE)
+    control = {"withoutRule": {"missing": len(lost), "refused": [" ".join(pair) for pair in found]}}
+    kube(["apply", "-f", deployer_access.ROLES])
+    expect("scheduled", [])
+    audited("probe-upgrade", lambda: ok(run(add_ingress, configs["scheduled"])))
+    assert history(PROBE) == [(1, "superseded"), (2, "deployed")], history(PROBE)
+    control["withRule"] = {"revision": history(PROBE)[-1][0], "status": history(PROBE)[-1][1]}
+
+    # 9. Helm stops the scheduled identity before it changes anything in kube-system: its check of
+    # whether each new object already exists is refused. Server dry runs, so a gap that let the
+    # check through would still change nothing.
+    before = {release: history(release) for release in ("prometheus", PROBE)}
+    refused = {}
+    for case, args in (("install into kube-system", ["install", PROBE, chart, "--namespace", "kube-system"]),
+                       ("upgrade adding a kube-system ConfigMap",
+                        ["upgrade", PROBE, chart, "--namespace", "default", "--set", "ingress=true",
+                         "--set", "kubeSystem=true"])):
+        result = run(["helm", *args, "--dry-run=server"], configs["scheduled"])
+        found = refusals(result.stderr, SCHEDULED, "kube-system")
+        assert result.returncode and found and {resource for _, resource in found} == {"configmaps"}, \
+            (case, result.returncode, result.stderr[-2000:])
+        refused[case] = [" ".join(pair) for pair in found]
+    assert {release: history(release) for release in before} == before, "A refused dry run changed a release"
+    assert kube(["-n", "kube-system", "get", "configmap", PROBE, "--ignore-not-found", "-o", "name"]) == ""
+
+    # The evidence, for the job log, from what was measured.
+    return {
+        "kubernetes": server, "roleAcceptedByServerDryRun": True, "groups": groups,
+        "checkDifferences": checked, "selfCheckDifferences": selves, "detected": detected,
+        "monitoring": {"release": "default/prometheus", "scheduledCommand": "examples/oci/deploy-all.sh upgrade",
+                       "seed": {"from": "head" if reason else "base", "reason": reason,
+                                "chart": Path(archive).name},
+                       "headChart": f"kube-prometheus-stack-{head['version']}.tgz", "revisions": upgrades},
+        "auditedRefusals": audit,
+        "upgradeWithoutRule": control, "refusedInKubeSystem": refused, "productionAccess": False,
+    }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--kubeconfig", required=True, type=Path)
     parser.add_argument("--context", required=True, choices=(CONTEXT,))
+    parser.add_argument("--base", type=Path, help="Checkout of the pull request's base commit, to seed the release")
     args = parser.parse_args()
     if not __debug__:
         parser.error("Rehearsal assertions must be enabled")
-    exercise(args.kubeconfig.resolve(), args.context)
+    exercise(args.kubeconfig.resolve(), args.context, args.base.resolve() if args.base else None)

@@ -20,7 +20,7 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
-## 2026-11-24
+## 2026-11-25
 
 ### Added
 
@@ -29,9 +29,16 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `deployer_access.py check` finds no difference for either identity and catches
   a removed rule and an extra grant, and the scheduled `oci` / `monitoring`
   upgrade through `examples/oci/deploy-all.sh`, Helm's default `--wait` and hooks
-  included, succeeds as a user holding only the role. A role change that breaks
+  included, succeeds as a user holding only the role, from the pull request's
+  base to its head and with both client-side and server-side apply, with no
+  request refused in the API audit log. A role or monitoring change that breaks
   that upgrade now fails its pull request.
   (fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
+
+## 2026-11-24
+
+### Added
+
 - **Reset OTel Demo OpenSearch Trace Data**, a manual workflow for the disposable
   traces of the OTel demo. `list` prints what a reset would delete. `reset` needs
   a typed acknowledgment and a `demo-apply` reviewer, deletes only the daily

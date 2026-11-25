@@ -294,37 +294,68 @@ the upgrade that failed in #87.
 The `deployer-access` job in [ci.yml](../.github/workflows/ci.yml) runs
 [the deployer access rehearsal](../scripts/demo/rehearsals/deployer-access/exercise.py)
 on every pull request and push to `main`, on a disposable kind cluster at the
-Kubernetes version of the toolchain lock. It uses no production credential.
-As the cluster administrator it:
+Kubernetes version of the toolchain lock. The cluster's API server writes an
+audit log ([kind.yaml](../scripts/demo/rehearsals/deployer-access/kind.yaml),
+[audit-policy.yaml](../scripts/demo/rehearsals/deployer-access/audit-policy.yaml)).
+It uses no production credential. As the cluster administrator it:
 
 1. creates the `jaeger`, `opensearch` and `otel-demo` namespaces and applies
    `ops/rbac/deployer.yaml`, first with `--dry-run=server`, so the API server
-   accepts every rule, including the empty resource name of the `escalate` rules;
+   accepts every rule;
 2. binds a fixture manual user and a fixture scheduled user with the `bindings`
-   output, and requires `check --user` to report `0 difference(s)` for both
-   identities, required and denied requests alike;
-3. under a kubeconfig that impersonates each user, requires `kubectl auth whoami`
-   to name that user, `check --self` to report `0 difference(s)`, and Helm to be
-   refused as that user;
+   output, reads each user's groups from `kubectl auth whoami` under a
+   kubeconfig that impersonates it, and requires `check --user` with those
+   groups to report `0 difference(s)` for both identities, required and denied
+   requests alike, so a grant to a group such as `system:authenticated` counts;
+3. under each impersonating kubeconfig, requires `check --self` to report
+   `0 difference(s)` and Helm to be refused as that user;
 4. removes the rule for the five named `kube-system` Services and requires
    `check` to report exactly those requests as `missing`, then grants an extra
    `get` on `kube-system` Secrets and requires it as `must not be allowed`;
-5. applies the two Services of `examples/oci/prometheus-svc.yaml` and installs
-   `default/prometheus` from the lock-verified archive with the values and flags
-   of `examples/oci/deploy-all.sh`, as production already holds them.
+5. installs `default/prometheus` and applies `prometheus-svc.yaml` as the base of
+   the change has them: on a pull request, the base commit's chart pin, values,
+   flags and Services, with the chart verified against the base's lock;
+   otherwise, or when the base deploys the same monitoring inputs or cannot seed
+   the release, this checkout's, and the job log says the base to head
+   transition was not exercised. It installs by client-side apply.
 
-Then, as the scheduled user holding only this role, it runs
+Then the scheduled user, holding only this role, runs this checkout's
 `examples/oci/deploy-all.sh upgrade` with the environment `deploy.py` gives a
 scheduled `oci` / `monitoring` run, public smoke checks off. That is Helm's
-default `helm upgrade --wait` with the chart's hooks, and revision 2 must be
-`deployed`. Last, Helm must be refused, as that user, an install into
-`kube-system` and an upgrade that adds a ConfigMap there, both with
-`--dry-run=server`. The test matches the refusal on the user, verb, resource and
-namespace, and the release history must not change.
+default `helm upgrade --wait` with the chart's hooks. The administrator returns
+the release to the base by server-side apply, and the scheduled user upgrades it
+again. Production may hold the release either way, and the two differ: with
+client-side apply Helm creates each hook object by a create request, which needs
+the `escalate` rule with the empty resource name; with server-side apply it
+creates them by an apply patch on the named object. The four revisions must end
+`deployed`, with apply methods client, client, server, server. The audit log
+must show no request refused to the scheduled user during either upgrade, so a
+refusal that Helm logs and then ignores fails the job too.
 
-The job does not prove the production cluster: it shows nothing about the
-bindings an administrator applied, OCI IAM policies, or group grants. The
-production check above still applies.
+`prometheus-svc.yaml` is already applied when the scheduled user runs, as in
+production. Its `kubectl apply` patches the two Services only when the pull
+request changes the file; otherwise it reads them and changes nothing.
+
+A probe release then shows that the check and the upgrade fail together: with
+the `default` Ingress rule removed, `check` reports exactly that rule's requests
+as `missing`, and the scheduled user's upgrade that adds an Ingress fails with a
+refusal naming that user, `get`, `ingresses` and `default`, before any change to
+the release. With the committed role back, `check` reports `0 difference(s)` and
+the same upgrade succeeds.
+
+Last, as the scheduled user, Helm's install into `kube-system` and its upgrade
+that adds a ConfigMap there, both with `--dry-run=server`, must stop at Helm's
+check of whether the new object exists: the API server refuses that user `get`
+on ConfigMaps in `kube-system`. The test matches the refusal on the user, verb,
+resource and namespace, and the release history must not change. This shows that
+the role does not let Helm start such a change. It does not run one.
+
+The rehearsal runs `deploy-all.sh`, not `deploy.py`. What `deploy.py` itself
+calls, such as its `helm status` checks and the revision ConfigMap, is covered
+only by the access reviews of `check`. The job also does not prove the
+production cluster: it shows nothing about the bindings an administrator
+applied, OCI IAM policies, or group grants outside Kubernetes. The production
+check above still applies.
 
 ## Changing the role
 

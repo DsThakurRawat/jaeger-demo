@@ -3,6 +3,8 @@
 
 """The pure parts of the deployer access rehearsal. The `deployer-access` CI job runs the rest on kind."""
 
+import base64
+import gzip
 import importlib.util
 import json
 import os
@@ -170,7 +172,8 @@ class ProductionPathTests(unittest.TestCase):
         base = {"PATH": "/bin", "HOME": "/home/runner", "KUBECONFIG": "/admin", "HELM_KUBEASUSER": "admin",
                 "HELM_NAMESPACE": "kube-system", "EXPECTED_CONFIG_SHA": "1" * 40,
                 "PROMETHEUS_STACK_CHART_VERSION": "1.0.0", "JAEGER_DEMO_IMAGE_TAG": "x",
-                "GITHUB_STEP_SUMMARY": "/summary", "RUN_PUBLIC_SMOKE_TESTS": "true"}
+                "GITHUB_STEP_SUMMARY": "/summary", "RUN_PUBLIC_SMOKE_TESTS": "true", "HELM_DRIVER": "memory",
+                "HELM_MAX_HISTORY": "1", "HELM_DEBUG": "true", "KUBECTL_EXTERNAL_DIFF": "true"}
         env = rehearsal.scheduled_env(base, Path("/fixture/scheduled.yaml"))
         self.assertEqual({
             "PATH": "/bin", "HOME": "/home/runner", "KUBECONFIG": "/fixture/scheduled.yaml",
@@ -181,6 +184,101 @@ class ProductionPathTests(unittest.TestCase):
         source = (ROOT / "scripts/demo/deploy.py").read_text()
         self.assertIn("JAEGER_DEMO_DEPLOY_SCOPE=scope", source)
         self.assertIn('"oci-monitoring": ("oci", "monitoring"', source)
+
+
+class SeedTests(unittest.TestCase):
+    def copy(self, root, changes=None):
+        directory = Path(root) / "examples/oci"
+        directory.mkdir(parents=True)
+        (Path(root) / "scripts/demo").mkdir(parents=True)
+        (Path(root) / "scripts/demo/chart_archives.py").write_text("")
+        for name in rehearsal.SEED_FILES:
+            text = (ROOT / "examples/oci" / name).read_text()
+            (directory / name).write_text((changes or {}).get(name, lambda t: t)(text))
+        return rehearsal.seed_inputs(Path(root))
+
+    def test_the_head_seeds_from_its_own_monitoring_inputs(self):
+        head = rehearsal.seed_inputs(ROOT)
+        self.assertEqual(ROOT / "examples/oci", head["directory"])
+        self.assertIn("$PROMETHEUS_STACK_CHART", head["words"])
+        self.assertEqual(sorted(rehearsal.SEED_FILES[1:]), sorted(head["files"]))
+
+    def test_a_changed_pin_values_or_services_file_is_a_different_seed(self):
+        head = rehearsal.seed_inputs(ROOT)
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertTrue(rehearsal.same_inputs(self.copy(Path(temp) / "same"), head))
+            bumped = self.copy(Path(temp) / "pin", {"deploy-all.sh": lambda t: re.sub(
+                r'(PROMETHEUS_STACK_CHART_VERSION:-)[0-9.]+', r'\g<1>1.2.3', t)})
+            self.assertEqual("1.2.3", bumped["version"])
+            self.assertFalse(rehearsal.same_inputs(bumped, head))
+            for name in rehearsal.SEED_FILES[1:]:
+                with self.subTest(name=name):
+                    changed = self.copy(Path(temp) / name, {name: lambda t: t + "# changed\n"})
+                    self.assertFalse(rehearsal.same_inputs(changed, head))
+
+    def test_a_base_without_the_inputs_cannot_seed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "examples/oci").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "lacks deploy-all.sh"):
+                rehearsal.seed_inputs(Path(temp))
+
+
+class ReleaseRecordTests(unittest.TestCase):
+    def secret_value(self, record):
+        helm = base64.b64encode(gzip.compress(json.dumps(record).encode()))
+        return base64.b64encode(helm).decode()
+
+    def test_reads_the_apply_method_from_a_stored_release(self):
+        for stored, method in (("ssa", "ssa"), ("csa", "csa"), (None, "csa")):
+            record = {"name": "prometheus", "version": 2, **({"apply_method": stored} if stored else {})}
+            with self.subTest(stored=stored):
+                decoded = rehearsal.release_record(self.secret_value(record))
+                self.assertEqual(record, decoded)
+                self.assertEqual(method, rehearsal.apply_method(decoded))
+
+
+class AuditTests(unittest.TestCase):
+    START, END = "deployer-access-probe-upgrade-start", "deployer-access-probe-upgrade-end"
+
+    def event(self, name, code=200, user=None, verb="get", resource="configmaps", namespace="default", **extra):
+        event = {"kind": "Event", "stage": "ResponseComplete", "verb": verb,
+                 "user": {"username": "kubernetes-admin"},
+                 "impersonatedUser": {"username": user or rehearsal.SCHEDULED, "groups": ["system:authenticated"]},
+                 "objectRef": {"resource": resource, "namespace": namespace, "name": name},
+                 "responseStatus": {"code": code}, **extra}
+        return json.dumps(event)
+
+    def test_reports_refusals_to_the_user_between_the_markers_only(self):
+        lines = [self.event("before", 403),
+                 self.event(self.START, 404),
+                 self.event("prometheus-grafana", 200, verb="patch", resource="deployments"),
+                 self.event("hook", 403, resource="pods", namespace="default"),
+                 self.event("other-user", 403, user=rehearsal.MANUAL),
+                 "",
+                 self.event(self.END, 404),
+                 self.event("after", 403)]
+        lines[3] = lines[3].replace('"resource": "pods"', '"resource": "pods", "subresource": "log"')
+        self.assertEqual(["get pods/log default/hook"],
+                         rehearsal.forbidden(lines, rehearsal.SCHEDULED, self.START, self.END))
+
+    def test_a_clean_window_reports_nothing(self):
+        lines = [self.event(self.START, 404), self.event("x", 200), self.event(self.END, 404)]
+        self.assertEqual([], rehearsal.forbidden(lines, rehearsal.SCHEDULED, self.START, self.END))
+
+    def test_a_missing_marker_fails_instead_of_passing(self):
+        for lines in ([self.event(self.START, 404)], [self.event(self.END, 404)], []):
+            with self.subTest(lines=len(lines)):
+                with self.assertRaisesRegex(ValueError, "does not hold both markers"):
+                    rehearsal.forbidden(lines, rehearsal.SCHEDULED, self.START, self.END)
+
+
+class ProbeChartTests(unittest.TestCase):
+    def test_probe_renders_each_object_only_when_asked(self):
+        rendered = rehearsal.PROBE_TEMPLATE.format(name=rehearsal.PROBE)
+        self.assertEqual(2, rendered.count("{{- if .Values."))
+        self.assertIn("kind: Ingress", rendered)
+        self.assertIn("namespace: kube-system", rendered)
+        self.assertNotIn("{name}", rendered)
 
 
 def json_line(request):
