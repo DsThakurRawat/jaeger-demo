@@ -21,7 +21,7 @@ when the role was applied and the earlier grants were removed.
 
 | Role | Bound to | Purpose |
 | --- | --- | --- |
-| `jaeger-demo-deployer` | `demo-apply` and `demo-scheduled` identities | Upgrade the six Helm releases and run their checks |
+| `jaeger-demo-deployer` | `demo-apply` and `demo-scheduled` identities | Upgrade the six application releases, and on the [Helmfile path](#helmfile-path) the four `demo-resources` companions, and run their checks |
 | `jaeger-demo-recovery` | `demo-apply` identity only | Manual OpenSearch volume expansion |
 
 Each role is one ClusterRole for kinds that have no namespace, plus one Role per
@@ -34,7 +34,7 @@ watch by name.
 
 | Scope | Access | Needed by |
 | --- | --- | --- |
-| `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks |
+| `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks, the [Helmfile path](#helmfile-path) |
 | `default` | Roles and RoleBindings, monitoring custom resources, hook Jobs | `default/prometheus` and its hooks |
 | `jaeger` | `pods/portforward` | `verify_trace.py` writes and reads one trace |
 | `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check, `opensearch_reset.py` |
@@ -46,6 +46,73 @@ watch by name.
 The verbs cover a release that Helm stored with either apply method. With
 client-side apply Helm creates and patches; with server-side apply it creates by
 patch.
+
+### Helmfile path
+
+The Helmfile path needs no rule beyond those above. It applies the same objects:
+`chart_objects.py --check` renders the script path and the Helmfile path (the six
+applications from the lock-verified `.helmfile-locked.yaml` and the four
+`demo-resources` companions from `helmfile-resources.yaml.gotmpl`) and fails when
+they differ in an object identity or a hook event. The companions own exactly the
+supplemental objects that the scripts apply with `kubectl`. Those renders are
+upgrades; a companion's first release is a plain `helm install`, so the check also
+renders the four companions as an install. An object only that render has needs
+its own record, and a hook event that differs between the install and the upgrade
+fails the check. Helm keeps every
+revision of a release as the Secret `sh.helm.release.v1.<release>.v<N>` in the
+release's namespace, so the inventory holds history records for all ten releases.
+`HELMFILE_COMMANDS` in `scripts/demo/deployer_access.py` lists what each command of
+the path asks of those records. Each row applies in all four release namespaces.
+The scheduled identity runs the Helmfile engine once `DEMO_DEPLOY_ENGINE=helmfile`,
+so both identities need every row except the first companion install, which is a
+manual dispatch only: the deploy driver of [#73](https://github.com/jaegertracing/jaeger-demo/issues/73) refuses it on a schedule, so `check`
+requires it of the manual identity alone. The scheduled identity's other rows
+already need the same Secret verbs, so this changes no rule.
+
+| Command | Code that builds or runs it | Identities | Secret verbs | Why |
+| --- | --- | --- | --- | --- |
+| `helm list -n <namespace> --max 0 -o json` | `release_phases.list_args` | both | list | Helm lists a namespace's release records by label, one namespace at a time |
+| `helm history <release> -n <namespace> --max 1 -o json` | the `read_status` callback of `release_phases.selected_statuses` | both | list | Reads one release's records when the listing omits it |
+| `helm diff upgrade --allow-unreleased=false --suppress-secrets` | `helmfile apply`, helm-diff 3.15.15 | both | list, get | Reads the stored manifest and hooks; its render runs the charts' `lookup` of a Secret |
+| `helmfile apply` or `sync` with `--install=false --reset-values` (Helm's default `--server-side=auto`) | the `reconcile` callback of `release_phases.run` | both | list, get, create, update, delete | Writes the new revision, marks the previous one superseded, reads a revision by name to roll back on failure, and deletes revisions beyond `historyMax` (10) |
+| `helm install demo-resources` with `--server-side=true --wait=legacy --create-namespace=false` | `release_phases.install_args` | manual | list, create, update | Checks that the name is unused, writes revision 1 and records its status |
+
+What the rows rest on, from Helm 4.3.2 and helm-diff 3.15.15:
+
+- **helm-diff.** It reads the stored release with `helm get manifest` and
+  `helm get hooks`, then, under Helm 4 and without its own `--dry-run` flag,
+  renders with `helm template --dry-run=server --is-upgrade`. That render asks the
+  API server for discovery and runs the charts' `lookup` calls. It creates, patches
+  and dry-runs no object, and with `--is-upgrade` it skips the existence check of
+  `helm install`. The pinned charts look up Secrets in their own namespace (the
+  Grafana admin password of `default/prometheus`) and Grafana's
+  PersistentVolumeClaim, which only a release that renders a Grafana claim reaches;
+  none does. A chart bump that adds a `lookup` of another kind fails `helm diff`
+  with a refusal; the `deployer-access` CI job runs `helmfile diff` on the
+  monitoring release as the scheduled identity
+  ([tested against a real API server](#tested-against-a-real-api-server)).
+- **Apply method.** Neither `helmfile.yaml` nor the Helmfile path passes
+  `--server-side` to an upgrade, so Helm 4.3.2 uses its default `auto`: each
+  release keeps the apply method its last revision was stored with, and the
+  releases the scripts upgraded may hold either. Both read the live object first.
+  Client-side apply then changes an existing object with a strategic merge or merge
+  patch and creates a new one with a create request. Server-side apply sends an
+  apply patch, which the API server authorizes as `patch` and, when it creates the
+  object, also as `create`. `APPLY_METHODS` in `deployer_access.py` records this,
+  and the object verbs cover both methods: get and patch on every object, and
+  create in the release namespaces. Only the first companion install passes
+  `--server-side=true`, from `install_args()`. Helm writes its release records with
+  plain create, update and delete; it never patches them.
+- **First companion install.** Besides the records, Helm reads each object it
+  would create, to refuse one that exists without this release's ownership, then
+  applies it. Those are the object verbs of the companion's supplemental records.
+- **Discovery.** Discovery and OpenAPI reads are non-resource requests that
+  Kubernetes grants every authenticated user. The model does not list them.
+
+`check` also requires that neither identity can list Secrets in every namespace
+(the reason `release_phases.list_args` lists one namespace at a time), create a
+namespace (the path passes `--create-namespace=false`), or delete a collection of
+Secrets in a release namespace (Helm prunes revisions one at a time).
 
 The `jaeger-demo-recovery` role adds what volume expansion needs: in `opensearch`
 it patches PersistentVolumeClaims, and at cluster scope it reads PersistentVolumes
@@ -257,7 +324,8 @@ the empty resource name in the `escalate` rules; confirm with
 
 `check` asks the cluster, with one SubjectAccessReview per request, whether an
 identity has every access the deployment needs and none of a list of accesses it
-must not have. A review changes nothing in the cluster.
+must not have. The required access covers both the script path and the
+[Helmfile path](#helmfile-path). A review changes nothing in the cluster.
 
 ```bash
 python3 scripts/demo/deployer_access.py check --identity manual --user "$MANUAL_USER_OCID"
@@ -333,6 +401,19 @@ creates them by an apply patch on the named object. The four revisions must end
 must show no request refused to the scheduled user during either upgrade, so a
 refusal that Helm logs and then ignores fails the job too.
 
+The scheduled user then runs the read-only commands of the
+[Helmfile path](#helmfile-path) on that release, in another audited window:
+`helm list` with `release_phases.list_args` for each release namespace,
+`helm history prometheus --max 1`, and
+`helmfile --file .helmfile-locked.yaml --selector namespace=default,name=prometheus --skip-deps diff`
+with the diff arguments the Helmfile apply passes (`--reset-values`,
+`--diff-args=--allow-unreleased=false`, `--suppress-secrets`). The administrator
+first writes `.helmfile-locked.yaml` with `chart_archives.py state`, so the diff
+uses this checkout's Helmfile state and lock-verified chart, not the
+`deploy-all.sh` command. The audit log must show no request refused to that user,
+which covers Helmfile, helm-diff's Helm 4 render and the monitoring chart's
+`lookup` of its Grafana Secret.
+
 `prometheus-svc.yaml` is already applied when the scheduled user runs, as in
 production. Its `kubectl apply` patches the two Services only when the pull
 request changes the file; otherwise it reads them and changes nothing.
@@ -353,16 +434,22 @@ the role does not let Helm start such a change. It does not run one.
 
 The rehearsal runs `deploy-all.sh`, not `deploy.py`. What `deploy.py` itself
 calls, such as its `helm status` checks and the revision ConfigMap, is covered
-only by the access reviews of `check`. The job also does not prove the
+only by the access reviews of `check`. This job does not run `helmfile apply` or
+`sync` or the first companion install. The release phase and companion adoption
+rehearsals in the `Helmfile render and adoption rehearsal` job run them as a user
+bound to the committed roles, on fixture releases, and fail on a refusal that
+Helm or Helmfile reports; they read no audit log, so a refusal that a tool
+ignores is not caught there. The job also does not prove the
 production cluster: it shows nothing about the bindings an administrator
 applied, OCI IAM policies, or group grants outside Kubernetes. The production
 check above still applies.
 
 ## Changing the role
 
-`scripts/demo/deployer_access.py` builds the required access from two sources: the
-object inventory in [chart-objects.json](../ops/rbac/chart-objects.json), and
-a table in the module of the commands the scripts run beyond those objects.
+`scripts/demo/deployer_access.py` builds the required access from three sources: the
+object inventory in [chart-objects.json](../ops/rbac/chart-objects.json), a
+table in the module of the commands the scripts run beyond those objects, and
+`HELMFILE_COMMANDS`, the commands of the [Helmfile path](#helmfile-path).
 `scripts/demo/deployer_access_test.py` fails in both directions:
 
 - A chart object or listed command that needs access the role lacks fails with
@@ -371,17 +458,28 @@ a table in the module of the commands the scripts run beyond those objects.
 
 The inventory is kept equal to the pinned charts by
 `python3 scripts/demo/chart_objects.py --check`, which the `Helmfile render and
-adoption rehearsal` job runs on every pull request. It renders the six releases
-the way the scripts install them, without cluster access, and compares object
-identities and hook events; the chart archive list in the inventory's header is
-not part of that comparison. It fails when a rendered object has no record.
-`--write` adds the missing records and corrects hook events. It never removes a
+adoption rehearsal` job runs on every pull request. Without cluster access it
+renders the six releases the way the scripts install them and the ten Helmfile
+releases from the lock-verified `.helmfile-locked.yaml` and
+`helmfile-resources.yaml.gotmpl`, fails when the two paths differ in an object
+identity or hook event, renders the four companions once more as the
+`helm install` of their first release, and compares the result with the
+inventory. It fails when
+a rendered object has no record, when a Helmfile release has no Helm history
+record, when hook events differ from a record, and when the inventory's chart
+archive list differs from `scripts/demo/chart-archives.lock.json`.
+`--write` adds the missing records, corrects hook events and copies the archive
+list from the lock. It never removes a
 record that no pinned chart renders any more, because Helm deletes that object on
 the next upgrade and needs the access to do so; remove the record by hand once no
 release needs it. So a chart
 bump that adds a kind, a hook or a cluster-scoped object changes the inventory and
 the role in the same pull request, and the reviewer sees the access change. A new
-`kubectl` or `helm` call in a script needs a row in the module's table. The
+`kubectl` or `helm` call in a script needs a row in the module's table, and a new
+command of the Helmfile path, or a new helm-diff or Helm release, a review of
+`HELMFILE_COMMANDS`; `deployer_access_test.py` fails when the code a row names
+changes its flags, when the pinned helm-diff version changes, and when Helm leaves
+major version 4. The
 `deployer-access` CI job then applies the changed file to a real API server and
 runs the scheduled monitoring upgrade under it
 ([tested against a real API server](#tested-against-a-real-api-server)), so a

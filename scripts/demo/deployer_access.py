@@ -7,7 +7,8 @@
 
 `bindings` prints the role bindings for an administrator to apply. `check` asks
 the cluster, through SubjectAccessReviews, whether an identity has exactly the
-access this module derives from the chart inventory and the deployment scripts.
+access this module derives from the chart inventory, the deployment scripts and
+the commands of the Helmfile path.
 """
 
 import argparse
@@ -46,6 +47,48 @@ ROLE_REFS = {
     ("", "prometheus-grafana-clusterrolebinding"): "prometheus-grafana-clusterrole",
     ("opensearch", "opensearch-dashboards-dashboards-rolebinding"): "opensearch-dashboards-dashboards",
 }
+# The commands of the Helmfile path, by the code that builds or runs them, and what each asks of
+# the Helm release records beyond the objects the releases hold. Helm keeps every revision of a
+# release as the Secret sh.helm.release.v1.<release>.v<N> in the release's namespace and reads
+# them with a label-selected list, so these are Secret verbs in each of the four release
+# namespaces, which hold an application release and a demo-resources companion each. The
+# objects themselves come from the inventory, which chart_objects.py keeps equal to both
+# renders, with the verbs of APPLY_METHODS. Upgrades pass no --server-side flag; only the
+# first companion install does.
+# Both identities run every row but the first companion install: the scheduled one once
+# DEMO_DEPLOY_ENGINE=helmfile. The deploy driver (#73) refuses a companion install on a
+# schedule, so that row is the manual identity's only.
+HelmfileCommand = namedtuple("HelmfileCommand", "command code verbs identities why")
+BOTH = ("scheduled", "manual")
+HELMFILE_COMMANDS = (
+    HelmfileCommand("helm list -n <namespace> --max 0 -o json", "release_phases.list_args", ("list",), BOTH,
+                    "lists the namespace's release records; one namespace at a time, never every namespace at once"),
+    HelmfileCommand("helm history <release> -n <namespace> --max 1 -o json",
+                    "release_phases.selected_statuses read_status", ("list",), BOTH,
+                    "reads one release's records by label when the listing omits it"),
+    HelmfileCommand("helm diff upgrade --allow-unreleased=false --suppress-secrets", "helmfile apply, helm-diff 3.15.15",
+                    ("list", "get"), BOTH, "helm get manifest and helm get hooks list the records; under Helm 4 the "
+                    "render is helm template --dry-run=server --is-upgrade, whose lookup calls read a Secret by name "
+                    "in the release namespace (the Grafana admin password)"),
+    HelmfileCommand("helmfile apply|sync --install=false --reset-values", "release_phases.run reconcile",
+                    ("list", "get", "create", "update", "delete"), BOTH, "writes the new revision, marks the previous "
+                    "one superseded, reads a revision by name to roll back on failure and deletes revisions beyond "
+                    "historyMax"),
+    HelmfileCommand("helm install demo-resources --server-side=true --wait=legacy --create-namespace=false",
+                    "release_phases.install_args", ("list", "create", "update"), ("manual",),
+                    "checks that the name is unused, writes revision 1 and records its status"),
+)
+# Helm 4.3.2 upgrades default to --server-side=auto: a release keeps the apply method its last
+# revision was stored with. The script path's releases were stored either way (Helm 3 and
+# client-side upgrades, and the server-side ones since), and neither helmfile.yaml nor the
+# Helmfile path changes that, so both methods must work on every object a release holds.
+# Each method reads the live object first; what else it asks of an object:
+APPLY_METHODS = {
+    # A strategic merge or merge patch of an existing object, a POST create of a new one.
+    "client-side": ("get", "patch", "create"),
+    # An apply patch, which the API server also authorizes as create when it creates the object.
+    "server-side": ("get", "patch", "create"),
+}
 
 # namespace "" is cluster scope. name "" is the collection, or any name where the
 # script chooses it at run time.
@@ -77,8 +120,9 @@ def allowed(identity, request, roles):
 def chart_requests(records):
     """What Helm and kubectl need for the objects the six releases own.
 
-    The verbs cover a release stored with either apply method: Helm patches an
-    existing object in both, and with server-side apply it also creates by patch.
+    The verbs cover a release stored with either apply method (APPLY_METHODS): Helm
+    reads and patches an existing object in both, and in the release namespaces a
+    chart change can add an object, which either method needs create for.
     """
     for record in records:
         namespace = "" if record["scope"] == "cluster" else record["scope"]
@@ -94,8 +138,10 @@ def chart_requests(records):
         else:
             verbs |= {"list", "watch"}  # helm --wait and kubectl rollout watch the kind
             verbs.add("delete")  # Helm deletes an object when a chart stops rendering it
+            # Each stored apply method reads and patches the object.
+            verbs |= {verb for method in APPLY_METHODS.values() for verb in method if verb != "create"}
             if namespace in RELEASE_NAMESPACES:
-                verbs.add("create")  # a chart change adds an object
+                verbs.add("create")  # a chart change adds an object, by POST or by apply patch
         for verb in sorted(verbs):
             yield Request(namespace, group, resource, verb, "" if verb in COLLECTION else name)
         if resource in ("roles", "clusterroles"):
@@ -141,6 +187,13 @@ def script_requests(identity):
     return requests
 
 
+def helmfile_requests(identity):
+    """What each Helmfile path command that `identity` runs needs beyond the objects: {command: [Request]}."""
+    return {row.command: [Request(namespace, "", "secrets", verb, "") for namespace in RELEASE_NAMESPACES
+                          for verb in row.verbs]
+            for row in HELMFILE_COMMANDS if identity in row.identities}
+
+
 def retired_requests():
     """What the removed backup and restore tooling held and nothing needs any more (#76).
 
@@ -161,7 +214,8 @@ def retired_requests():
 
 def required(identity, inventory=INVENTORY):
     records = json.loads(Path(inventory).read_text())["records"]
-    return sorted(set(chart_requests(records)) | set(script_requests(identity)))
+    helmfile = {request for requests in helmfile_requests(identity).values() for request in requests}
+    return sorted(set(chart_requests(records)) | set(script_requests(identity)) | helmfile)
 
 
 def denied(identity):
@@ -189,8 +243,13 @@ def denied(identity):
     requests += each("", "", "users", ["impersonate"], "example")
     requests += each("", "", "nodes/proxy", ["get", "create"], "example")
     requests += each("", "certificates.k8s.io", "certificatesigningrequests/approval", ["update"], "example")
-    requests += each("", "", "secrets", ["list"])  # every namespace at once
+    # Every namespace at once: a release listing of all namespaces, which release_phases.list_args avoids.
+    requests += each("", "", "secrets", ["list"])
+    # The Helmfile path passes --create-namespace=false and never creates a namespace.
     requests += each("", "", "namespaces", ["create"])
+    for namespace in RELEASE_NAMESPACES:
+        # Helm reads, writes and prunes release records one by one; a collection delete would erase a history.
+        requests += each(namespace, "", "secrets", ["deletecollection"])
     for namespace in RELEASE_NAMESPACES:
         requests += each("", "", "namespaces", ["delete", "patch"], namespace)
         requests += each(namespace, "", "persistentvolumeclaims", ["delete", "deletecollection"])

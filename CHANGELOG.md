@@ -49,6 +49,24 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
   fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
 
+- The deployer access model covers the Helmfile path. `chart_objects.py --check`
+  renders the Helmfile releases from `.helmfile-locked.yaml` and the four
+  `demo-resources` companions beside the script path, fails when the two differ in
+  an object identity or hook event, renders the companions again as their first
+  `helm install` so an install-only object needs a record, and requires Helm
+  history records for all ten releases. `deployer_access.py` gains a row for each
+  Helmfile path command (`helm list -n`, `helm history`, `helm diff upgrade`,
+  `helmfile apply`/`sync`, and the first companion `helm install`, which only the
+  manual identity runs) and denies a collection delete of release records.
+  Upgrades keep Helm 4's default `--server-side=auto`, and the model covers
+  releases stored with either apply method. The offline model finds no difference
+  for either identity, so `ops/rbac/deployer.yaml` is unchanged. The
+  `deployer-access` CI job also runs the read-only Helmfile path commands, a
+  `helmfile diff` of the monitoring release from `.helmfile-locked.yaml` included,
+  as the scheduled fixture user with no refused request in the audit log.
+  ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
+  fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
+
 ### Changed
 
 - The owner decided to keep the community ingress-nginx controller in place, with no
@@ -88,6 +106,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   from the failed OpenSearch recovery run that the removed backup tooling left
   behind. ([#151](https://github.com/jaegertracing/jaeger-demo/pull/151),
   fixes [#149](https://github.com/jaegertracing/jaeger-demo/issues/149))
+
+### Fixed
+
+- The chart archive list in `ops/rbac/chart-objects.json` still named the
+  OpenSearch 3.7.0 archives. `chart_objects.py --write` now copies it from
+  `scripts/demo/chart-archives.lock.json`, and `--check` fails while it differs, so
+  a chart bump updates it with the rest of the inventory.
+  ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
+  refs [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
 ## 2026-11-24
 
