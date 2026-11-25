@@ -1,0 +1,878 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Live objects by identity, as the named GETs return them; null is a 404.
+# Every UID, address, certificate and secret value is fake.
+objects:
+  admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration:-:prometheus-kube-prometheus-admission:
+    apiVersion: admissionregistration.k8s.io/v1
+    kind: ValidatingWebhookConfiguration
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-kube-prometheus-admission
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000008
+    webhooks:
+    - admissionReviewVersions:
+      - v1
+      clientConfig:
+        caBundle: Zml4dHVyZS1jYS1idW5kbGUtbm90LWEtY2VydGlmaWNhdGU=
+        service:
+          name: prometheus-kube-prometheus-operator
+          namespace: default
+          path: /admission-prometheusrules/validate
+          port: 443
+      failurePolicy: Ignore
+      matchPolicy: Equivalent
+      name: prometheusrulevalidate.monitoring.coreos.com
+      namespaceSelector: {}
+      objectSelector: {}
+      rules:
+      - apiGroups:
+        - monitoring.coreos.com
+        apiVersions:
+        - '*'
+        operations:
+        - CREATE
+        - UPDATE
+        resources:
+        - prometheusrules
+        scope: '*'
+      sideEffects: None
+      timeoutSeconds: 10
+  apiextensions.k8s.io/v1:CustomResourceDefinition:-:probes.monitoring.coreos.com:
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        operator.prometheus.io/version: 0.95.2
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: probes.monitoring.coreos.com
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000006
+    spec:
+      conversion:
+        strategy: None
+      group: monitoring.coreos.com
+      names:
+        kind: Probe
+        listKind: ProbeList
+        plural: probes
+        singular: probe
+      scope: Namespaced
+      versions:
+      - name: v1
+        schema:
+          openAPIV3Schema:
+            properties:
+              spec:
+                properties:
+                  endpoints:
+                    items:
+                      properties:
+                        port:
+                          type: string
+                        relabelings:
+                          items:
+                            properties:
+                              action:
+                                default: replace
+                                type: string
+                              targetLabel:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    type: array
+                type: object
+            type: object
+        served: true
+        storage: true
+    status:
+      acceptedNames:
+        kind: Probe
+      storedVersions:
+      - v1
+  apiextensions.k8s.io/v1:CustomResourceDefinition:-:servicemonitors.monitoring.coreos.com:
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        operator.prometheus.io/version: 0.95.2
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: servicemonitors.monitoring.coreos.com
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000005
+    spec:
+      conversion:
+        strategy: None
+      group: monitoring.coreos.com
+      names:
+        kind: ServiceMonitor
+        listKind: ServiceMonitorList
+        plural: servicemonitors
+        singular: servicemonitor
+      scope: Namespaced
+      versions:
+      - name: v1
+        schema:
+          openAPIV3Schema:
+            properties:
+              spec:
+                properties:
+                  endpoints:
+                    items:
+                      properties:
+                        port:
+                          type: string
+                        relabelings:
+                          items:
+                            properties:
+                              action:
+                                default: replace
+                                type: string
+                              targetLabel:
+                                type: string
+                            type: object
+                          type: array
+                      type: object
+                    type: array
+                type: object
+            type: object
+        served: true
+        storage: true
+    status:
+      acceptedNames:
+        kind: ServiceMonitor
+      storedVersions:
+      - v1
+  apps/v1:DaemonSet:otel-demo:otel-collector-agent:
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      annotations:
+        deprecated.daemonset.template.generation: '4'
+        meta.helm.sh/release-name: otel-demo
+        meta.helm.sh/release-namespace: otel-demo
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: otel-collector-agent
+      namespace: otel-demo
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000020
+    spec:
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app: agent
+      template:
+        metadata:
+          labels:
+            app: agent
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+      updateStrategy:
+        rollingUpdate:
+          maxSurge: 0
+          maxUnavailable: 1
+        type: RollingUpdate
+  apps/v1:Deployment:default:jaeger:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: '7'
+        meta.helm.sh/release-name: jaeger
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: jaeger
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000001
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: jaeger
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: jaeger
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          serviceAccount: jaeger
+          serviceAccountName: jaeger
+          terminationGracePeriodSeconds: 30
+    status:
+      readyReplicas: 1
+      replicas: 1
+  apps/v1:Deployment:default:prometheus-grafana:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: '7'
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: grafana
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-grafana
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000010
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          annotations:
+            checksum/secret: bbbbdcd3f827db1761650325c5164cd89a2db35be935cf16a4c77be9145fa6b0
+          labels:
+            app.kubernetes.io/name: grafana
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+    status:
+      readyReplicas: 1
+      replicas: 1
+  apps/v1:Deployment:default:trace-generator:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: '7'
+        kubectl.kubernetes.io/last-applied-configuration: '{}'
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app: trace-generator
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: trace-generator
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000014
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app: trace-generator
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          annotations:
+            kubectl.kubernetes.io/restartedAt: '2026-11-20T13:00:00Z'
+          labels:
+            app: trace-generator
+        spec:
+          containers:
+          - image: python:3.12-slim
+            imagePullPolicy: IfNotPresent
+            name: trace-generator
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+    status:
+      readyReplicas: 1
+      replicas: 1
+  apps/v1:Deployment:otel-demo:cart:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: '7'
+        meta.helm.sh/release-name: otel-demo
+        meta.helm.sh/release-namespace: otel-demo
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: cart
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: cart
+      namespace: otel-demo
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000019
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: cart
+          extra: fixture
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: cart
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+    status:
+      readyReplicas: 1
+      replicas: 1
+  apps/v1:Deployment:otel-demo:frontend:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      annotations:
+        deployment.kubernetes.io/revision: '3'
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/name: frontend
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: frontend
+      namespace: otel-demo
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000018
+    spec:
+      progressDeadlineSeconds: 600
+      replicas: 1
+      revisionHistoryLimit: 10
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: frontend
+      strategy:
+        rollingUpdate:
+          maxSurge: 25%
+          maxUnavailable: 25%
+        type: RollingUpdate
+      template:
+        metadata:
+          annotations:
+            kubectl.kubernetes.io/restartedAt: '2026-11-20T13:00:00Z'
+          labels:
+            app.kubernetes.io/name: frontend
+        spec:
+          containers:
+          - image: docker.io/jaegertracing/jaeger-snapshot:0012345
+            imagePullPolicy: Always
+            name: jaeger
+            ports:
+            - containerPort: 16686
+              name: query
+              protocol: TCP
+            readinessProbe:
+              failureThreshold: 3
+              httpGet:
+                path: /
+                port: 14269
+                scheme: HTTP
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                cpu: '1'
+                memory: 512Mi
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+    status:
+      readyReplicas: 1
+      replicas: 1
+  batch/v1:Job:default:prometheus-crds-upgrade: null
+  batch/v1:Job:default:prometheus-kube-prometheus-admission-create: null
+  monitoring.coreos.com/v1:ServiceMonitor:default:prometheus-grafana:
+    apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-grafana
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000007
+    spec:
+      endpoints:
+      - port: http-web
+        relabelings:
+        - action: replace
+          targetLabel: cluster
+  networking.k8s.io/v1:Ingress:default:jaeger-demo-ingress:
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      annotations:
+        cert-manager.io/issuer: letsencrypt
+        kubectl.kubernetes.io/last-applied-configuration: '{"fixture":"last-applied"}'
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger-demo-ingress
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000013
+    spec:
+      ingressClassName: nginx
+      rules:
+      - host: demo.example.test
+        http:
+          paths:
+          - backend:
+              service:
+                name: jaeger-query
+                port:
+                  number: 16686
+            path: /
+            pathType: Prefix
+  networking.k8s.io/v1:Ingress:opensearch:opensearch-demo-ingress:
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: opensearch-demo-ingress
+      namespace: opensearch
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000016
+    spec:
+      ingressClassName: nginx
+  v1:ConfigMap:default:prometheus-grafana:
+    apiVersion: v1
+    data:
+      grafana.ini: fixture-configmap-live
+    kind: ConfigMap
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-grafana
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000012
+  v1:Secret:default:alertmanager-prometheus-kube-prometheus-alertmanager:
+    apiVersion: v1
+    data:
+      alertmanager.yaml: Zml4dHVyZS1zZWNyZXQtbGl2ZS1jb25maWc=
+    kind: Secret
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: alertmanager-prometheus-kube-prometheus-alertmanager
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000011
+    type: Opaque
+  v1:Secret:default:prometheus-grafana:
+    apiVersion: v1
+    data:
+      admin-password: Zml4dHVyZS1zZWNyZXQtZ3JhZmFuYS1saXZl
+      admin-user: Zml4dHVyZS1zZWNyZXQtYWRtaW4tdXNlcg==
+      ldap-toml: ''
+    kind: Secret
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-grafana
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000009
+    type: Opaque
+  v1:Service:default:jaeger-collector:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: jaeger
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger-collector
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000002
+    spec:
+      clusterIP: None
+      clusterIPs:
+      - None
+      internalTrafficPolicy: Cluster
+      ipFamilies:
+      - IPv4
+      ipFamilyPolicy: SingleStack
+      ports:
+      - name: grpc
+        port: 4317
+        protocol: TCP
+        targetPort: 4317
+      selector:
+        app.kubernetes.io/name: jaeger
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  v1:Service:default:jaeger-hotrod:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: jaeger
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger-hotrod
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000004
+    spec:
+      clusterIP: 10.96.0.18
+      clusterIPs:
+      - 10.96.0.18
+      internalTrafficPolicy: Cluster
+      ipFamilies:
+      - IPv4
+      ipFamilyPolicy: SingleStack
+      ports:
+      - name: frontend
+        port: 80
+        protocol: TCP
+        targetPort: 8080
+      selector:
+        app.kubernetes.io/name: jaeger
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  v1:Service:default:jaeger-query:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: jaeger
+        meta.helm.sh/release-namespace: default
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger-query
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000003
+    spec:
+      clusterIP: 10.96.0.17
+      clusterIPs:
+      - 10.96.0.17
+      internalTrafficPolicy: Cluster
+      ipFamilies:
+      - IPv4
+      ipFamilyPolicy: SingleStack
+      ports:
+      - name: query
+        port: 16686
+        protocol: TCP
+        targetPort: 16686
+      selector:
+        app.kubernetes.io/name: jaeger
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  v1:Service:jaeger:jaeger-query-clusterip:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        helm.sh/resource-policy: keep
+        meta.helm.sh/release-name: demo-resources
+        meta.helm.sh/release-namespace: jaeger
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app: jaeger
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: jaeger-query-clusterip
+      namespace: jaeger
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000015
+    spec:
+      clusterIP: 10.96.0.19
+      clusterIPs:
+      - 10.96.0.19
+      internalTrafficPolicy: Cluster
+      ipFamilies:
+      - IPv4
+      ipFamilyPolicy: SingleStack
+      ports:
+      - name: query
+        port: 16686
+        protocol: TCP
+        targetPort: 16686
+      selector:
+        app.kubernetes.io/name: jaeger
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  v1:Service:otel-demo:checkout: null
+  v1:ServiceAccount:otel-demo:otel-demo:
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: another-release
+        meta.helm.sh/release-namespace: otel-demo
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: otel-demo
+      namespace: otel-demo
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000017

@@ -20,10 +20,19 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import companion_ownership
+import deployer_access
+import release_phases
 from companion_values import ROOT, source_values
+
+# A rehearsal identity bound to the committed deployer roles. It matches the OCI user OCID pattern.
+DEPLOYER_USER = "ocid1.user.oc1..aaaarehearsalcompanion"
 
 
 def exercise(cfg, context):
+    # The cluster admin (kubectl, kube) builds the fixture: namespaces, seeded objects, the role and
+    # its bindings. It also applies the reviewed ownership patches, which are an operator step, and
+    # inspects and manipulates release records and objects that a check compares. The first install,
+    # the Helmfile applies and the chart upgrade run as the bound deployer user (see `deployer`).
     kubectl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
 
     def kube(args, body=None):
@@ -47,6 +56,9 @@ def exercise(cfg, context):
             kube(["create", "namespace", ns])
         for obj in inputs["objects"]:
             kube(["-n", ns, "apply", "-f", "-"], json.dumps(obj))
+    # The committed deployer roles, bound to a rehearsal user. They need all four namespaces.
+    kube(["apply", "-f", str(deployer_access.ROLES)])
+    kube(["apply", "-f", "-"], json.dumps(deployer_access.bindings(DEPLOYER_USER)))
     # The old scripts restart these deployments after applying their manifests.
     for ns in ("default", "jaeger"):
         kube(["-n", ns, "rollout", "restart", "deployment/trace-generator"])
@@ -112,6 +124,18 @@ def exercise(cfg, context):
     # Apply the reviewed plan with the documented script. It writes the record for de-adoption.
     scratch = tempfile.TemporaryDirectory()
     work = Path(scratch.name)
+    # The same cluster as the deployer user: the admin credentials with every request impersonating it.
+    deployer_config = yaml.safe_load(Path(cfg).read_text())
+    deployer_config["current-context"] = context
+    for entry in deployer_config["users"]:
+        entry["user"]["as"] = DEPLOYER_USER
+        entry["user"]["as-groups"] = ["system:authenticated"]
+    deployer = work / "deployer.kubeconfig"
+    with open(os.open(deployer, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as f:
+        yaml.safe_dump(deployer_config, f)
+    who = subprocess.run(["kubectl", "--kubeconfig", str(deployer), "--context", context, "auth", "whoami",
+                          "-o", "jsonpath={.status.userInfo.username}"], capture_output=True, text=True, check=True)
+    assert who.stdout.strip() == DEPLOYER_USER, who.stdout
     planned, recorded = work / "ownership.json", work / "adopted.json"
     planned.write_text(json.dumps(desired))
     apply_script = str(ROOT / "scripts" / "demo" / "apply-ownership-patches.sh")
@@ -147,7 +171,7 @@ def exercise(cfg, context):
     # require an absent release, whereas install fails on any stored record of that name and refuses
     # an existing object that lacks this release's ownership metadata.
     name = companion_ownership.RELEASE
-    helm = ["helm", "--kubeconfig", str(cfg), "--kube-context", context]
+    helm = ["helm", "--kubeconfig", str(deployer), "--kube-context", context]
     state_values = work / "state.json"
     state_values.write_text(json.dumps(values))
     refusals = 0
@@ -177,15 +201,14 @@ def exercise(cfg, context):
     def install(ns):
         inputs = work / (ns + ".json")
         inputs.write_text(json.dumps({"objects": values["companions"][ns]["objects"]}))
-        return subprocess.run(helm + ["install", name, str(archive), "--namespace", ns, "--values", str(inputs),
-                                      "--wait=legacy", "--timeout", "300s", "--rollback-on-failure=false",
-                                      "--create-namespace=false"], capture_output=True, text=True)
+        # The arguments the deploy driver uses, as the deployer user.
+        return subprocess.run(helm + release_phases.install_args(ns, archive, inputs), capture_output=True, text=True)
 
     def apply(ns):
         # Native Helmfile on one existing companion release. For an absent release the diff fails
         # first (--allow-unreleased=false), and --install=false keeps Helmfile's upgrade --install
         # from installing one.
-        return subprocess.run(["helmfile", "--kubeconfig", str(cfg), "--kube-context", context,
+        return subprocess.run(["helmfile", "--kubeconfig", str(deployer), "--kube-context", context,
                                "-f", str(ROOT / "helmfile-resources.yaml.gotmpl"), "--state-values-file", str(state_values),
                                "-l", "namespace=" + ns, "--skip-deps", "apply", "--concurrency", "1", "--reset-values",
                                "--sync-args=--install=false --rollback-on-failure=false --create-namespace=false",
@@ -195,10 +218,14 @@ def exercise(cfg, context):
     def succeeded(result, step):
         assert result.returncode == 0, f"{step} failed: {result.stderr[-2000:]}"
 
-    def refused(ns, step, action, expected):
+    def refused(ns, step, action, expected, causes=()):
         snapshot = full_states()
         result = action(ns)
         assert result.returncode, f"{step} in {ns} was not refused"
+        # A refusal for a missing permission proves nothing, and a named cause must appear.
+        assert "forbidden" not in result.stderr.lower(), f"{step} in {ns} was forbidden: {result.stderr[-2000:]}"
+        assert not causes or any(cause in result.stderr for cause in causes), \
+            f"{step} in {ns} was refused for another reason: {result.stderr[-2000:]}"
         assert stored(ns) == expected, f"{step} changed the stored release in {ns}"
         unchanged(snapshot, f"{step} in {ns}")
         return 1
@@ -212,14 +239,15 @@ def exercise(cfg, context):
         # Without --take-ownership, Helm never adopts an object that lacks this release's ownership metadata.
         first = ["-n", ns, "annotate", objects[0]["kind"] + "/" + objects[0]["metadata"]["name"]]
         kube(first + ["meta.helm.sh/release-name-"])
-        count += refused(ns, "Install over an object without release metadata", install, [])
+        count += refused(ns, "Install over an object without release metadata", install, [],
+                            ("invalid ownership metadata",))
         kube(first + ["meta.helm.sh/release-name=" + name])
         snapshot = full_states()
         succeeded(install(ns), f"First install in {ns}")
         assert stored(ns) == [(1, "deployed")], f"First install did not store one deployed revision in {ns}"
         unchanged(snapshot, f"First install in {ns}")
         # A stored release cannot be installed again. Helmfile apply is then a no-op.
-        count += refused(ns, "Second install", install, [(1, "deployed")])
+        count += refused(ns, "Second install", install, [(1, "deployed")], ("cannot reuse a name", "cannot re-use a name"))
         succeeded(apply(ns), f"Apply after the first install in {ns}")
         assert stored(ns) == [(1, "deployed")], f"No-op apply added a revision in {ns}"
         unchanged(snapshot, f"No-op apply in {ns}")
@@ -238,7 +266,7 @@ def exercise(cfg, context):
     with tempfile.TemporaryDirectory() as tmp:
         inputs = Path(tmp) / "state.json"
         inputs.write_text(json.dumps(values))
-        cmd = ["helmfile", "--kubeconfig", str(cfg), "--kube-context", context, "-f",
+        cmd = ["helmfile", "--kubeconfig", str(deployer), "--kube-context", context, "-f",
                str(ROOT / "helmfile-resources.yaml.gotmpl"), "--state-values-file", str(inputs)]
         subprocess.run(cmd + ["apply", "--skip-deps", "--concurrency", "1"], check=True)
         after = states()
@@ -247,7 +275,7 @@ def exercise(cfg, context):
             raise AssertionError(f"Adoption changed identity, spec or data for {changed}")
         def history(ns):
             return json.loads(subprocess.check_output([
-                "helm", "--kubeconfig", str(cfg), "--kube-context", context, "-n", ns,
+                "helm", "--kubeconfig", str(deployer), "--kube-context", context, "-n", ns,
                 "history", "demo-resources", "--output", "json"], text=True))
         revisions = {ns: history(ns) for ns in values["companions"]}
         assert all([r["status"] for r in rows] == ["deployed"] for rows in revisions.values())
@@ -263,7 +291,7 @@ def exercise(cfg, context):
         (chart / "allowlist.yaml").write_text(yaml.safe_dump(allowed))
         remaining = [o for o in values["companions"]["default"]["objects"]
                      if (o["kind"], o["metadata"]["name"]) != retained[1:]]
-        subprocess.run(["helm", "--kubeconfig", str(cfg), "--kube-context", context, "-n", "default",
+        subprocess.run(["helm", "--kubeconfig", str(deployer), "--kube-context", context, "-n", "default",
                         "upgrade", "demo-resources", str(chart), "--reset-values", "-f", "-"],
                        input=json.dumps({"objects": remaining}), text=True, check=True)
         assert states()[retained] == before[retained]
@@ -281,7 +309,8 @@ def exercise(cfg, context):
     record["data"]["release"] = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(payload).encode()))).decode()
     record["metadata"]["labels"]["status"] = "failed"
     kube(["-n", ns, "replace", "-f", "-"], json.dumps(record))
-    refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")])
+    refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")],
+                         ("cannot reuse a name", "cannot re-use a name"))
     snapshot = full_states()
     selector = "owner=helm,name=" + name
     kube(["-n", ns, "delete", "secret", "-l", selector])
@@ -315,7 +344,7 @@ def exercise(cfg, context):
                       "firstInstallNoOpCreatedRevisions": 0, "failedFirstInstallRecovered": True,
                       "recordRemovalKeptObjects": True, "partialAdoptionRetriedWithOneRecord": True,
                       "deAdoptedNamespaces": len(first_contact),
-                      "deAdoptionRestoredMetadata": True}))
+                      "deAdoptionRestoredMetadata": True, "helmRanAsDeployer": True}))
 
 
 if __name__ == "__main__":

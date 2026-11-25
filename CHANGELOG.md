@@ -22,6 +22,33 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ## 2026-11-25
 
+### Added
+
+- `scripts/demo/live_drift.py`, a read-only drift report that compares every
+  object the Helmfile render would own, rendered with the live Jaeger and HotROD
+  images, with the live object, and classifies each as identical, explained by a
+  fixed reason code, unexplained or missing. It prints identities, reason codes and
+  hashes only, never a live-only map key, and exits non-zero on any unexplained or
+  missing object. `--output` writes the report outside the checkout.
+  `docs/helmfile-applications.md` has the operator command and the reason codes.
+  The deployer role gains a named `get` on the monitoring chart's ten CRDs for it,
+  and no list; `chart_objects.py --check` fails when the rendered CRDs differ from
+  that grant.
+  ([#148](https://github.com/jaegertracing/jaeger-demo/pull/148),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
+
+- A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
+  kind cluster without production credentials: the API server accepts the role,
+  `deployer_access.py check` finds no difference for either identity and catches
+  a removed rule and an extra grant, and the scheduled `oci` / `monitoring`
+  upgrade through `examples/oci/deploy-all.sh`, Helm's default `--wait` and hooks
+  included, succeeds as a user holding only the role, from the pull request's
+  base to its head and with both client-side and server-side apply, with no
+  request refused in the API audit log. A role or monitoring change that breaks
+  that upgrade now fails its pull request.
+  ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
+  fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
+
 ### Changed
 
 - The owner decided to keep the community ingress-nginx controller in place, with no
@@ -31,6 +58,32 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   cluster is rebuilt.
   ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
   fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+- `docs/MIGRATION.md` records the node pool initialization script being set and
+  verified on a new node.
+  ([#150](https://github.com/jaegertracing/jaeger-demo/pull/150),
+  fixes [#120](https://github.com/jaegertracing/jaeger-demo/issues/120))
+
+- The release phase gate reads releases with one `helm list -n <namespace>` per
+  release namespace instead of a cluster-wide listing, which the deployer role
+  cannot do. An absent companion release is no longer installed with
+  `helmfile apply`: `release_phases.run` installs it, as a plain `helm install`
+  from the shared `install_args()`, only when asked and only as the single
+  selected release, and refuses every other absent release. The release phase
+  and companion adoption rehearsals run their Helm and Helmfile commands as a
+  user bound to the committed deployer roles, and the `adoption` CI job gives the
+  release phase rehearsal a fresh kind cluster. Nothing calls the new install
+  path yet.
+  ([#145](https://github.com/jaegertracing/jaeger-demo/pull/145),
+  fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
+
+- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
+  pulls each repository chart through the existing SHA-256 check, requires its
+  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
+  `.helmfile-locked.yaml` with local archive paths and no repositories;
+  `make validate` renders from it. A changed archive is refused and deleted.
+  ([#146](https://github.com/jaegertracing/jaeger-demo/pull/146),
+  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
+
 - `docs/MIGRATION.md` now records the recovery role apply and the leftover cleanup
   from the failed OpenSearch recovery run that the removed backup tooling left
   behind. ([#151](https://github.com/jaegertracing/jaeger-demo/pull/151),

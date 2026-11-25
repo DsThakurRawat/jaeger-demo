@@ -1,0 +1,17 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+# API audit policy of the deployer access rehearsal's kind cluster. The rehearsal
+# reads the log for any request refused to the scheduled fixture user while it
+# upgrades, including refusals Helm logs and then ignores. Requests the
+# rehearsal makes reach the API server as the kind administrator impersonating
+# that user, so they are logged; cluster components are not.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages: [RequestReceived]
+rules:
+  - level: None
+    userGroups: ["system:nodes", "system:serviceaccounts"]
+  - level: None
+    users: ["system:apiserver", "system:kube-controller-manager", "system:kube-proxy", "system:kube-scheduler"]
+  - level: Metadata
