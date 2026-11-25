@@ -170,6 +170,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#157](https://github.com/jaegertracing/jaeger-demo/pull/157),
   fixes [#70](https://github.com/jaegertracing/jaeger-demo/issues/70)).
 
+- `docs/MIGRATION.md` records the first Helmfile adoption steps: the paused
+  schedule, the read-only baseline, and the adoption of all four namespaces'
+  supplemental objects into `demo-resources` releases, the adoption apply and a
+  second no-op apply, plus the OTel shop outage
+  that a restarted `flagd` caused and its fix
+  ([#161](https://github.com/jaegertracing/jaeger-demo/pull/161),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
+
 ### Fixed
 
 - `scripts/demo/deployer_kubeconfig.py` accepts the `kind: ""` that
