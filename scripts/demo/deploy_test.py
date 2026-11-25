@@ -386,8 +386,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(1, len(re.findall(r"^  [a-z-]+:$", workflow.split("\njobs:\n", 1)[1], re.MULTILINE)))
         job, *steps = workflow.split("\n    - name: ")
         names = [step.split("\n", 1)[0] for step in steps]
-        # Nothing runs between the reconciliation and the notification: no restore test to clean up after.
-        self.assertEqual(["Reconcile demo components", "Send detailed Slack notification on failure"], names[-2:])
+        # Nothing runs between the reconciliation and the notification but the upload of the Helmfile
+        # engine's record: no restore test to clean up after.
+        self.assertEqual(["Reconcile demo components", "Upload the deployment record",
+                          "Send detailed Slack notification on failure"], names[-3:])
+        self.assertIn("\n      uses: actions/upload-artifact@", steps[-2])
+        self.assertNotIn("\n      run:", steps[-2])
         self.assertFalse([name for name in names if "lock" in name.lower()])
         self.assertNotIn("continue-on-error", workflow)
         limit = re.search(r"^    timeout-minutes: (\d+)$", job, re.MULTILINE)
