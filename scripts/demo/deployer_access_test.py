@@ -4,8 +4,12 @@
 """The committed deployer roles must grant what the deployment needs and nothing else."""
 
 import copy
+import io
 import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import deployer_access as d
 
@@ -22,6 +26,13 @@ CLUSTER_KINDS = {
 }
 
 
+def request_of(spec):
+    """The Request an access review asks about."""
+    a = spec["resourceAttributes"]
+    resource = a["resource"] + ("/" + a["subresource"] if "subresource" in a else "")
+    return R(a.get("namespace", ""), a.get("group", ""), resource, a["verb"], a.get("name", ""))
+
+
 def missing(identity, roles=ROLES):
     return [r for r in d.required(identity) if not d.allowed(identity, r, roles)]
 
@@ -36,11 +47,12 @@ class DeployerAccessTests(unittest.TestCase):
             with self.subTest(identity=identity):
                 self.assertEqual(missing(identity), [])
         records = json.loads(d.INVENTORY.read_text())["records"]
-        # Guard against a vacuous pass: the inventory holds all six releases.
+        # Guard against a vacuous pass: the inventory holds the six application releases and the
+        # four demo-resources companions of the Helmfile path.
         self.assertEqual({(r["scope"], r["release"]) for r in records if r["component"] == "history"},
                          {("default", "jaeger"), ("default", "prometheus"), ("jaeger", "jaeger"),
                           ("opensearch", "opensearch"), ("opensearch", "opensearch-dashboards"),
-                          ("otel-demo", "otel-demo")})
+                          ("otel-demo", "otel-demo")} | {(namespace, "demo-resources") for namespace in d.RELEASE_NAMESPACES})
         self.assertGreater(len(d.required("scheduled")), 800)
 
     def test_every_granted_verb_answers_a_request(self):
@@ -103,6 +115,100 @@ class DeployerAccessTests(unittest.TestCase):
         added[d.DEPLOYER, "otel-demo"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["patch"]})
         self.assertEqual(d.unexplained("scheduled", added, d.required("scheduled")),
                          [(d.DEPLOYER, "otel-demo", "", "secrets", "patch", None)])
+
+    def test_helmfile_commands_are_required_of_both_identities_and_granted(self):
+        rows = d.helmfile_requests()
+        self.assertEqual([row[0] for row in d.HELMFILE_COMMANDS], list(rows))
+        for identity in d.IDENTITIES:
+            required = set(d.required(identity))
+            for command, requests in rows.items():
+                with self.subTest(identity=identity, command=command):
+                    self.assertTrue(requests)
+                    self.assertEqual({r.namespace for r in requests}, set(d.RELEASE_NAMESPACES))
+                    self.assertEqual({(r.group, r.resource, r.name) for r in requests}, {("", "secrets", "")})
+                    self.assertLessEqual(set(requests), required)
+                    self.assertEqual([r for r in requests if not d.allowed(identity, r, ROLES)], [])
+        # The rows hold without the inventory's history records, so dropping those cannot hide a command.
+        document = json.loads(d.INVENTORY.read_text())
+        document["records"] = [r for r in document["records"] if r["component"] != "history"]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "inventory.json"
+            path.write_text(json.dumps(document))
+            for identity in d.IDENTITIES:
+                self.assertLessEqual({r for requests in rows.values() for r in requests}, set(d.required(identity, path)))
+
+    def test_helmfile_rows_name_the_code_that_runs_them(self):
+        """A row whose command has gone, or changed what it asks of Helm, is stale."""
+        import release_phases
+        for command, code, verbs, why in d.HELMFILE_COMMANDS:
+            with self.subTest(command=command):
+                self.assertTrue(verbs and why)
+                if code.startswith("release_phases."):
+                    self.assertTrue(callable(getattr(release_phases, code.split()[0].split(".", 1)[1])))
+        listing = release_phases.list_args("otel-demo")
+        self.assertEqual(listing, ["list", "-n", "otel-demo", "--max", "0", "-o", "json"])
+        install = release_phases.install_args("otel-demo", "chart.tgz", "values.json")
+        self.assertEqual(install[:2], ["install", "demo-resources"])
+        for flag in ("--server-side=true", "--wait=legacy", "--create-namespace=false"):
+            self.assertIn(flag, install)
+            self.assertIn(flag, d.HELMFILE_COMMANDS[4][0])
+        # The rehearsal that runs the status read and native Helmfile as the bound deployer.
+        phases = (d.ROOT / "scripts/demo/rehearsals/release-phases/exercise.py").read_text()
+        for text in ['"history", rel, "--max", "1", "-o", "json"', "release_phases.selected_statuses(",
+                     "release_phases.run(", '"--install=false"', '"--reset-values"', "--allow-unreleased=false",
+                     '"--suppress-secrets"']:
+            self.assertIn(text, phases)
+        # helm-diff's requests were read from this release; another one must be read again.
+        lock = json.loads((d.ROOT / "scripts/demo/helmfile-tools.lock.json").read_text())["tools"]
+        self.assertIn("helm-diff " + lock["helm-diff"]["version"].lstrip("v"), d.HELMFILE_COMMANDS[2][1])
+        # helm-diff renders with --dry-run=server only under Helm 4; Helm 4 defaults to server-side apply.
+        self.assertTrue(lock["helm"]["version"].startswith("v4."), "review the rows for another Helm major")
+        # Helm deletes revisions beyond historyMax, which is why an upgrade deletes Secrets.
+        self.assertIn("historyMax: 10", (d.ROOT / "helmfile.yaml").read_text())
+
+    def test_check_reports_a_dropped_or_extra_helmfile_grant(self):
+        def check_lines(identity, roles):
+            def run(reviews):
+                return [{"spec": r["spec"], "status": {"allowed": d.allowed(identity, request_of(r["spec"]), roles)}}
+                        for r in reviews]
+            out = io.StringIO()
+            user = SCHEDULED_USER if identity == "scheduled" else MANUAL_USER
+            with patch.object(d, "create", run), patch("sys.stdout", out):
+                status = d.main(["check", "--identity", identity, "--user", user])
+            return status, out.getvalue().splitlines()
+
+        def line(prefix, request):
+            return prefix + json.dumps(request._asdict(), sort_keys=True)
+
+        rows = d.helmfile_requests()
+        for identity in d.IDENTITIES:
+            self.assertEqual((0, [f"{identity}: 0 difference(s) from ops/rbac/deployer.yaml"]), check_lines(identity, ROLES))
+            # Without the otel-demo Secret rule, every Helmfile command there is missing.
+            dropped = copy.deepcopy(ROLES)
+            dropped[d.DEPLOYER, "otel-demo"] = [rule for rule in dropped[d.DEPLOYER, "otel-demo"]
+                                                if rule["resources"] != ["secrets"]]
+            status, lines = check_lines(identity, dropped)
+            self.assertEqual(1, status)
+            for command, requests in rows.items():
+                for request in requests:
+                    if request.namespace == "otel-demo":
+                        with self.subTest(identity=identity, command=command, request=request):
+                            self.assertIn(line("missing: ", request), lines)
+            self.assertFalse([text for text in lines if text.startswith("must not be allowed: ")])
+            # A cluster-wide Secret list (a release listing of every namespace) and a collection delete of the
+            # release records are extra grants the check names, and the model cannot explain.
+            added = copy.deepcopy(ROLES)
+            added[d.DEPLOYER, ""].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]})
+            added[d.DEPLOYER, "otel-demo"].append({"apiGroups": [""], "resources": ["secrets"],
+                                                   "verbs": ["deletecollection"]})
+            status, lines = check_lines(identity, added)
+            self.assertEqual(1, status)
+            for request in (R("", "", "secrets", "list", ""), R("otel-demo", "", "secrets", "deletecollection", "")):
+                with self.subTest(identity=identity, request=request):
+                    self.assertIn(line("must not be allowed: ", request), lines)
+            self.assertFalse([text for text in lines if text.startswith("missing: ")])
+            self.assertEqual({(item[1], item[4]) for item in d.unexplained(identity, added, d.required(identity))},
+                             {("", "list"), ("otel-demo", "deletecollection")})
 
     def test_rules_have_no_wildcards_and_cluster_rules_name_only_cluster_kinds(self):
         for (name, namespace), rules in ROLES.items():
@@ -280,10 +386,7 @@ class DeployerAccessTests(unittest.TestCase):
             return run
 
         def committed(spec):
-            a = spec["resourceAttributes"]
-            resource = a["resource"] + ("/" + a["subresource"] if "subresource" in a else "")
-            request = R(a.get("namespace", ""), a.get("group", ""), resource, a["verb"], a.get("name", ""))
-            return d.allowed("scheduled", request, ROLES)
+            return d.allowed("scheduled", request_of(spec), ROLES)
 
         self.assertEqual(d.check("scheduled", SCHEDULED_USER, run=cluster(committed)), [])
         # The deploy job's own preflight asks only for what it needs.
