@@ -675,6 +675,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(job_limit - step_limit, 30)
         self.assertLess(job_limit, 360)
 
+    def test_adoption_job_runs_the_release_phases_rehearsal_on_a_cluster_created_after_the_adoption_one(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['adoption']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        adoption, = [i for i, run in enumerate(runs) if 'rehearsals/companion-adoption/exercise.py' in run]
+        phases, = [i for i, run in enumerate(runs) if 'rehearsals/release-phases/exercise.py' in run]
+        reset, = [i for i, run in enumerate(runs) if 'rehearsals/opensearch-reset/exercise.py' in run]
+        created = [i for i, run in enumerate(runs) if 'kind create cluster --name jaeger-demo-phases-fixture' in run]
+        self.assertEqual(1, len(created))
+        self.assertTrue(adoption < created[0] < phases)
+        self.assertIn('kind delete cluster --name jaeger-demo-adoption-fixture', runs[created[0]])
+        self.assertIn('--context kind-jaeger-demo-phases-fixture', runs[phases])
+        self.assertIn('phases-fixture.yaml', runs[phases])
+        self.assertNotIn('adoption-fixture', runs[phases])
+        # The reset rehearsal keeps its own cluster and stays last.
+        self.assertIn('kind delete cluster --name jaeger-demo-phases-fixture', runs[reset - 1])
+        self.assertEqual(len(runs) - 1, reset)
+
 
 if __name__ == '__main__':
     unittest.main()
