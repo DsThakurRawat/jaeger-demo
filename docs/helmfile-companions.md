@@ -18,20 +18,16 @@ python3 scripts/demo/helmfile_tools.py run -- helmfile -f helmfile-resources.yam
 
 ## Inspect existing ownership
 
-> **Under revision.** The commands in this section were written for the separate
-> read-only plan identity (`$PLAN_KUBECONFIG`, `$PLAN_CONTEXT`), which the
-> [migration plan](MIGRATION.md#execution-contract) retires. The planner still only
-> reads the twelve named objects. [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)
-> tracks the rewrite for the deployer identity.
+The planner performs twelve named GETs, or fewer with `--namespace`. It rejects controller-owned objects, old or partial Helm ownership, conflicting retention, missing identities and deletion in progress. An already owned object returns an empty patch. Proposed changes modify top-level metadata only. The UID and resource version in each JSON Patch protect against replacement or concurrent change. A stale patch requires a fresh check of the object and its proposed inputs.
 
-Use the read-only plan kubeconfig for the approved cluster context. The planner performs twelve named GETs. It rejects controller-owned objects, old or partial Helm ownership, conflicting retention, missing identities and deletion in progress. An already owned object returns an empty patch. Proposed changes modify top-level metadata only. The UID and resource version in each JSON Patch protect against replacement or concurrent change. A stale patch requires a fresh check of the object and its proposed inputs.
+It stays read-only and needs no credentials of its own. In production it runs with the deployer kubeconfig of the [operator shell](cutover.md#operator-shell): the cluster administrator's kubeconfig with every request impersonating the manual deployer identity, written by `scripts/demo/deployer_kubeconfig.py`, so it has exactly the named `get` access of [ops/rbac/deployer.yaml](../ops/rbac/deployer.yaml). `$KUBECONFIG` and `$CONTEXT` are that file and its only context, and `$RECORD` is the runbook's private record directory:
 
 ```bash
-python3 scripts/demo/companion_ownership.py --kubeconfig "$PLAN_KUBECONFIG" \
-  --context "$PLAN_CONTEXT" > "$work/ownership.json"
+python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
+  --namespace "$ns" > "$RECORD/ownership-$ns.json"
 ```
 
-Apply a reviewed plan with `scripts/demo/apply-ownership-patches.sh`, which records each applied patch, and reverse that record with the planner's `--de-adopt` option. The exact commands are in [Apply the ownership patches](cutover.md#apply-the-ownership-patches) and [De-adopt companion releases](cutover.md#de-adopt-companion-releases).
+Apply a reviewed plan with `scripts/demo/apply-ownership-patches.sh`, which records each applied patch and needs only `patch` on the named objects, and reverse that record with the planner's `--de-adopt` option, through the same kubeconfig. The exact commands, one namespace at a time and in the adoption order, are in [Apply the ownership patches](cutover.md#apply-the-ownership-patches) and [De-adopt companion releases](cutover.md#de-adopt-companion-releases); the [runbook rehearsal](cutover.md#how-the-commands-run-and-how-they-are-rehearsed) runs them verbatim as a user bound to the deployer role.
 
 Review this ownership plan alongside the adoption render before applying the ownership patches. The production decision also requires full configuration and live-state comparison, including chart inputs, Services, pod templates and rollback state. Keep raw production inventory and release data in private storage.
 

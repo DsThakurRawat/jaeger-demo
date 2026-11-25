@@ -492,9 +492,11 @@ Two operator steps follow the merge. Neither blocks a deployment.
 ten releases of `helmfile.yaml` and `helmfile-resources.yaml.gotmpl` from the same
 `deploy` job, identities, role and concurrency group as the scripts
 ([#73](https://github.com/jaegertracing/jaeger-demo/issues/73)). Its first
-production use is manual adoption: the procedure, including the order of the
-companion installs and the no-op apply that follows, is
-[#74](https://github.com/jaegertracing/jaeger-demo/issues/74).
+production use is manual adoption. The [Helmfile adoption](cutover.md#helmfile-adoption)
+runbook gives the procedure: the operator shell and checks, the ownership patches
+and companion installs in their order, the adoption apply and the no-op that
+follows, and the recovery, rollback and de-adoption steps
+([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
 
 ### The engine switch
 
@@ -681,32 +683,43 @@ The **Helmfile deploy driver rehearsal** CI job runs the driver on a kind cluste
 as a user bound to `ops/rbac/deployer.yaml`, with synthetic application charts,
 the real `demo-resources` chart and stub image selection, registry lookup, health
 and trace checks. Its live-mode pass reads fixture Jaeger and HotROD Deployments and
-runs the production rollout, storage and Certificate checks.
+runs the production rollout, storage and Certificate checks. On a second cluster the
+same job runs the adoption runbook's marked commands verbatim, through the
+deployer kubeconfig the runbook writes
+([how they are rehearsed](cutover.md#how-the-commands-run-and-how-they-are-rehearsed)).
 
 ### When a Helmfile run fails
 
 - **Refused** (the record's `outcome`): nothing was written. Fix the input or the
   state the error names. A release in a `pending-*` or `unknown` state, or a
-  missing application release, needs an operator before any run continues. A listing
+  missing application release, needs an operator before any run continues
+  ([recover a pending release](cutover.md#recover-a-pending-release)). A listing
   and history that disagree mean another writer was active: let it finish and run
   again.
 - **The live image read or the OpenSearch binding read refuses**, for example while
   a Deployment is still rolling out or a Pod is not on its registry digest: this is
   operator repair under the adoption runbook
-  ([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)). Do not fall back
-  to the scripts to get past it.
+  ([incidents and escalation](cutover.md#incidents-and-escalation)). Do not fall
+  back to the scripts to get past it.
 - **Failed** after a write: the releases before the failure were reconciled and
   later ones were not touched. A failed OCI check leaves every OTel release as it
   was. A Jaeger release that fails rolls back by itself (`atomic`); any other
-  failed release stays `failed`, and the next run syncs it. Fingerprints are
-  patched only for a stack that passed its checks.
+  failed release stays `failed`. In `digest` mode the next run syncs it. In `live`
+  mode the next apply is refused, because its read-only diff reports a release
+  that is not `deployed` as changed; return the release to its last deployed
+  revision first ([recover a failed release](cutover.md#recover-a-failed-release)).
+  An upgrade that fails on an immutable StatefulSet field needs
+  [its own repair](cutover.md#repair-an-immutable-statefulset-field).
+  Fingerprints are patched only for a stack that passed its checks.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
   [De-adopt companion releases](cutover.md#de-adopt-companion-releases) step 1,
   then install again.
 - To return to the scripts, follow [the engine switch](#the-engine-switch): pause,
   drain the writers and de-adopt first. The general rules above (Slack
   notification, rollback by recorded revision, no OpenSearch downgrade) apply
-  unchanged.
+  unchanged. A rollback to a revision a run recorded, and how it must be paired
+  with the schedule or a revert because the next apply re-applies `main`, is in
+  [roll back to a recorded revision](cutover.md#roll-back-to-a-recorded-revision).
 
 ### Deployment record
 

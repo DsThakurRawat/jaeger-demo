@@ -196,7 +196,8 @@ A scheduled run selects both Jaeger components every day, to refresh the snapsho
 images, plus every component whose fingerprint differs from its key in the
 ConfigMap. It upgrades existing releases in place only. A dashed outline marks the
 Helmfile engine. It is tested locally and in PR CI, including a kind rehearsal as
-the deployer. Its production use starts with manual adoption
+the deployer. Its production use starts with manual adoption, following the
+[adoption runbook](docs/cutover.md#helmfile-adoption)
 ([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)), and the schedule
 switches to it only after that is verified ([migration plan](docs/MIGRATION.md)).
 

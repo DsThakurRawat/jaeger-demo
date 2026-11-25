@@ -448,7 +448,18 @@ the generator restarts, the running image check, the
 fingerprint patches, the live image reads through `kubectl proxy`, and the
 rollout, OpenSearch claim and Certificate checks, on synthetic application charts,
 fixture workloads and the real `demo-resources` chart. Only the registry lookup,
-the public health checks and the trace write are stubbed there. Neither job proves the
+the public health checks and the trace write are stubbed there. On a second cluster
+the same job runs the operator commands of the
+[Helmfile adoption runbook](cutover.md#helmfile-adoption) verbatim, through a
+kubeconfig that impersonates a fixture manual user bound to this role
+(`scripts/demo/deployer_kubeconfig.py`): the ownership planner and patches,
+`check --self`, `helm rollback` of a failed and of a pending release, the
+delete of the OpenSearch StatefulSet with orphan propagation, and the release
+record deletes of de-adoption, one Secret at a time by name. These need no rule
+beyond the ones above; `HELMFILE_COMMANDS` does not list them because no workflow
+runs them. The runbook's administrator steps that it runs (`check --user`, and
+reading events and Certificates in `default`) use the administrator's kubeconfig
+there too. Neither job proves the
 production cluster: it shows nothing about the bindings an administrator
 applied, OCI IAM policies, or group grants outside Kubernetes. The production
 check above still applies.

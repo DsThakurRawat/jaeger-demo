@@ -929,19 +929,41 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual([], list(secret_references(step)))
         self.assertLessEqual(sum(step['timeout-minutes'] for step in job['steps']), job['timeout-minutes'])
         runs = [step['run'] for step in job['steps'] if 'run' in step]
-        create, = [run for run in runs if 'kind create cluster' in run]
-        self.assertIn('--name jaeger-demo-operations-fixture', create)
-        rehearsal, = [run for run in runs if 'rehearsals/helmfile-deploy/exercise.py' in run]
-        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
-        self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 '
-                      'scripts/demo/rehearsals/helmfile-deploy/exercise.py', rehearsal)
-        context = re.search(r'--context (\S+)', rehearsal)[1]
-        source = (ROOT / 'scripts/demo/rehearsals/helmfile-deploy/exercise.py').read_text()
-        self.assertIn(f'CONTEXT = "{context}"', source)
-        self.assertIn('choices=(CONTEXT,)', source)
-        # The rehearsal drives the deploy workflow's own driver, not a copy of it.
-        self.assertIn('helmfile_deploy.reconcile(', source)
-        self.assertIn('helmfile_deploy.images(', source)
+        creates = [i for i, run in enumerate(runs) if 'kind create cluster' in run]
+        self.assertEqual(2, len(creates))
+        self.assertIn('--name jaeger-demo-operations-fixture', runs[creates[0]])
+        driver, = [i for i, run in enumerate(runs) if 'rehearsals/helmfile-deploy/exercise.py' in run]
+        runbook, = [i for i, run in enumerate(runs) if 'rehearsals/helmfile-runbook/exercise.py' in run]
+        # The runbook rehearsal creates the release namespaces itself: it runs last, on a cluster
+        # created after the driver rehearsal's one is deleted.
+        self.assertTrue(creates[0] < driver < creates[1] < runbook)
+        self.assertEqual(len(runs) - 1, runbook)
+        self.assertIn('kind delete cluster --name jaeger-demo-operations-fixture', runs[creates[1]])
+        self.assertIn('--name jaeger-demo-runbook-fixture', runs[creates[1]])
+        for index, name in ((driver, 'helmfile-deploy'), (runbook, 'helmfile-runbook')):
+            with self.subTest(rehearsal=name):
+                rehearsal = runs[index]
+                self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 '
+                              f'scripts/demo/rehearsals/{name}/exercise.py', rehearsal)
+                context = re.search(r'--context (\S+)', rehearsal)[1]
+                kubeconfig = re.search(r'--kubeconfig (\S+)', rehearsal)[1]
+                # Each rehearsal runs on the cluster its own preceding step created.
+                cluster = context.removeprefix('kind-')
+                creating = runs[creates[0] if name == 'helmfile-deploy' else creates[1]]
+                self.assertIn(f'--name {cluster} --kubeconfig {kubeconfig}', creating)
+                source = (ROOT / f'scripts/demo/rehearsals/{name}/exercise.py').read_text()
+                self.assertIn(f'CONTEXT = "{context}"', source)
+                self.assertIn('choices=(CONTEXT,)', source)
+                # The rehearsal drives the deploy workflow's own driver, not a copy of it.
+                self.assertIn('helmfile_deploy.reconcile(', source)
+        driver_source = (ROOT / 'scripts/demo/rehearsals/helmfile-deploy/exercise.py').read_text()
+        self.assertIn('helmfile_deploy.images(', driver_source)
+        # The runbook rehearsal runs the documented commands, read from the runbook at run time.
+        runbook_source = (ROOT / 'scripts/demo/rehearsals/helmfile-runbook/exercise.py').read_text()
+        self.assertIn('runbook_blocks.rehearsed()', runbook_source)
+        # Each block's own text runs as an operator pastes it; the block itself is the strict script.
+        self.assertIn('["bash", "-c", code]', runbook_source)
+        self.assertIn('runbook_blocks.strict_body(code) is not None', runbook_source)
 
     def test_a_companion_install_skips_the_image_gate_step(self):
         steps = self.deploy_steps()

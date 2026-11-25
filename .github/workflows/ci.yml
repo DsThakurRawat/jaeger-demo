@@ -175,12 +175,13 @@ jobs:
 
   # The Helmfile deploy driver of the deploy workflow on a real API server, as a user that holds
   # only the committed deployer role: no-op, failed-release retry, pending refusal, the OCI gate
-  # and an incompatible image (#73).
+  # and an incompatible image (#73). Then, on a new cluster, the adoption runbook of
+  # docs/cutover.md, whose marked blocks run verbatim as that user (#74).
   operations:
     name: Helmfile deploy driver rehearsal
     runs-on: ubuntu-latest
     # The step limits add up to less than this.
-    timeout-minutes: 45
+    timeout-minutes: 85
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       timeout-minutes: 1
@@ -203,6 +204,20 @@ jobs:
       run: |
         python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/helmfile-deploy/exercise.py \
           --kubeconfig "$RUNNER_TEMP/operations-fixture.yaml" --context kind-jaeger-demo-operations-fixture
+    # The runbook rehearsal creates the release namespaces itself, so it needs a cluster without
+    # what the driver rehearsal left behind.
+    - name: Replace the fixture for the adoption runbook rehearsal
+      working-directory: ${{ runner.temp }}
+      timeout-minutes: 6
+      run: |
+        ./kind delete cluster --name jaeger-demo-operations-fixture --kubeconfig "$RUNNER_TEMP/operations-fixture.yaml"
+        ./kind create cluster --name jaeger-demo-runbook-fixture --kubeconfig "$RUNNER_TEMP/runbook-fixture.yaml" \
+          --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    - name: Rehearse the adoption runbook as the deployer
+      timeout-minutes: 35
+      run: |
+        python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/rehearsals/helmfile-runbook/exercise.py \
+          --kubeconfig "$RUNNER_TEMP/runbook-fixture.yaml" --context kind-jaeger-demo-runbook-fixture
 
   render-diff:
     name: Rendered resource changes
