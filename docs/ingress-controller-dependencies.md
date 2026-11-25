@@ -9,14 +9,14 @@ migration. It does not authorize changing the externally owned controller,
 cert-manager, public routes or certificate issuers. The
 [migration constraints](MIGRATION.md#ownership-and-fixed-constraints) still apply.
 
-## Operator information still needed
+## Operator information
 
 | Item | Status |
 | --- | --- |
 | Controller owner and operational contact | The cluster administrator (`jkowall`); see the [migration plan](MIGRATION.md#ownership-and-fixed-constraints) |
 | Installed controller distribution and version | Community ingress-nginx from its static manifest, retired upstream with no patch stream; recorded in the [migration plan](MIGRATION.md#ownership-and-fixed-constraints). The exact version is not published here |
-| Existing replacement plan | None selected |
-| Replacement choice and timing relative to Helmfile adoption | Maintainer/operator decision still open |
+| Existing replacement plan | None. No replacement is planned in this migration |
+| Replacement choice and timing relative to Helmfile adoption | Decided: keep the current ingress-nginx controller as an accepted risk for this public demo. Revisit if an exploitable ingress-nginx CVE is published or when the cluster is rebuilt |
 
 ## Five source Ingress objects
 
@@ -93,7 +93,10 @@ migration pass.
 
 The inventory can be reviewed independently of selecting Gateway API, another
 Ingress controller or an OCI-specific service. None is selected here. The owner
-and distribution are recorded above. Before an implementation, agree on timing
-relative to the Helmfile phases, and define route, redirect, TLS renewal and
-rollback evidence. Until then, #41 remains open and the existing
-production constraints remain unchanged.
+and distribution are recorded above. The owner has decided to keep the current
+community ingress-nginx controller. No replacement is planned in this migration.
+This is an accepted risk for a public demo whose data is disposable and which
+holds no credentials behind its routes. Revisit the decision if an exploitable
+ingress-nginx CVE is published, or when the cluster is rebuilt. Any future
+replacement needs its own proposal that defines route, redirect, TLS renewal and
+rollback evidence. The existing production constraints remain unchanged.

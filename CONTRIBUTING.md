@@ -107,7 +107,14 @@ deployment.
   commit changes its `Chart.lock`.
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
   the versions in `scripts/demo/helmfile-tools.lock.json` and lists every other
-  literal that disagrees. Change all listed files in one commit.
+  literal that disagrees. Change all listed files in one commit. The kubectl
+  download in the `deployer-access` job of `.github/workflows/ci.yml` is one of
+  them and carries a literal SHA-256; replace it with the digest of the new
+  release in the same commit.
+- **kind.** The `adoption` and `deployer-access` jobs in `.github/workflows/ci.yml`
+  each download kind with a literal SHA-256 and create their clusters from the
+  same `kindest/node` image digest. Change both jobs together;
+  `scripts/demo/workflow_test.py` fails while they differ.
 - **Chart objects.** The deployer role is derived from the object inventory in
   `ops/rbac/chart-objects.json`. After a chart pin changes, run
   `python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check`.
