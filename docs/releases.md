@@ -18,8 +18,10 @@ Manual deployments use a reviewed GitHub environment. The
 and reconciler in its own environment, `demo-scheduled`, behind the
 `DEMO_SCHEDULE_ENABLED` switch. The same job can run the
 [Helmfile engine](#helmfile-engine) instead of the scripts. It is off by default:
-production runs the scripts until manual Helmfile adoption is verified
-([Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1)). The
+scheduled runs take the scripts until `DEMO_DEPLOY_ENGINE` is `helmfile`, and once a
+companion release is installed the scripts must not run at all
+([the engine switch](#the-engine-switch),
+[Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1)). The
 generated bundle and read-only `plan` operation of the earlier design are retired
 ([migration plan](MIGRATION.md#execution-contract)).
 
