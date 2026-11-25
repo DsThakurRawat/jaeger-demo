@@ -31,6 +31,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   cluster is rebuilt.
   ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
   fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+- `docs/MIGRATION.md` now records the recovery role apply and the leftover cleanup
+  from the failed OpenSearch recovery run that the removed backup tooling left
+  behind. (fixes [#149](https://github.com/jaegertracing/jaeger-demo/issues/149))
 
 ## 2026-11-24
 
