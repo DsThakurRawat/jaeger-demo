@@ -34,7 +34,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   The deployer role gains a named `get` on the monitoring chart's ten CRDs for it,
   and no list; `chart_objects.py --check` fails when the rendered CRDs differ from
   that grant.
-  (refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
+  ([#148](https://github.com/jaegertracing/jaeger-demo/pull/148),
+  refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
 
 ## 2026-11-24
 
