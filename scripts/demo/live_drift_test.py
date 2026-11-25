@@ -812,6 +812,25 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertFalse(d.schema_payload(("openAPIV3Schema", "properties", "default", "properties")))
         self.assertFalse(d.schema_payload(("spec", "template", "default")))
 
+    def test_an_empty_label_selector_is_not_an_omitted_map(self):
+        pdb = {"apiVersion": "policy/v1", "kind": "PodDisruptionBudget", "metadata": {"name": "p", "namespace": "default"},
+               "spec": {"maxUnavailable": 1}}
+        # An empty LabelSelector selects every Pod; an absent one selects none.
+        entry = one("default/jaeger", dict(pdb, spec={"maxUnavailable": 1, "selector": {}}), as_live(pdb))
+        self.assertEqual(entry["unexplainedFields"], ["spec.selector"])
+        # Its empty matchLabels map is omitted like any other empty map.
+        live = as_live(dict(pdb, spec={"maxUnavailable": 1, "selector": {}}))
+        render = dict(pdb, spec={"maxUnavailable": 1, "selector": {"matchLabels": {}}})
+        self.assertEqual(one("default/jaeger", render, live)["class"], "explained")
+        # A Service selector is a plain map: empty and absent are the same.
+        svc = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "s", "namespace": "default"},
+               "spec": {"type": "ExternalName", "externalName": "example.test"}}
+        render = dict(svc, spec=dict(svc["spec"], selector={}))
+        self.assertEqual(one("default/jaeger", render, as_live(svc))["class"], "explained")
+        # An empty struct that a pointer holds is kept by the API server.
+        entry = one("default/jaeger", deployment(container={"securityContext": {}}), as_live(deployment()))
+        self.assertEqual(entry["unexplainedFields"], ["spec.template.spec.containers[0].securityContext"])
+
     def test_a_missing_crd_makes_its_objects_missing_without_reading_them(self):
         rendered, _, live = fixture()
         crds = [obj for _, obj in rendered if obj["kind"] == "CustomResourceDefinition"]

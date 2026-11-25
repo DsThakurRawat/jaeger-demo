@@ -325,32 +325,51 @@ def schema_payload(path):
     return False
 
 
-def omitted(path, render, builtin):
+# Kinds whose spec.selector is a plain label map. Elsewhere `selector` is a LabelSelector, where an
+# empty selector selects everything and an absent one selects nothing.
+MAP_SELECTOR_KINDS = {"v1:Service", "v1:ReplicationController"}
+
+
+def map_typed(path, kind):
+    """Whether the field at `path` is map-typed, which Go omits when empty, rather than a struct."""
+    if not path or path[-1] not in MAP_FIELDS | SCHEMA_CONTAINERS:
+        return False
+    if path[-1] == "selector":
+        return kind in MAP_SELECTOR_KINDS and path == ("spec", "selector")
+    if path[-1] in SCHEMA_CONTAINERS and path[-1] not in MAP_FIELDS:
+        return "openAPIV3Schema" in path
+    return True
+
+
+def omitted(path, render, builtin, kind=""):
     """Whether the API server omits this rendered value, so that an absent live field equals it."""
-    if not (builtin or path[:1] == ("metadata",)) or (len(path) >= 2 and path[-2] in MAP_FIELDS):
+    if not (builtin or path[:1] == ("metadata",)) or (len(path) >= 2 and map_typed(path[:-1], kind)):
         return False  # a custom resource keeps what it is given; a map keeps every entry
     if schema_payload(path):
         return False  # a CRD schema default, example or enum value is kept even when empty
-    if isinstance(render, (dict, list)):
+    if isinstance(render, dict):
+        # An empty map is omitted. An empty struct, such as a LabelSelector, is kept as {}.
+        return not render and map_typed(path, kind)
+    if isinstance(render, list):
         return not render
     return not isinstance(render, (dict, list)) and not render and tail(OMITTED_ZERO, path)
 
 
-def differences(render, live, builtin, path=()):
+def differences(render, live, builtin, path=(), kind=""):
     """Yield (path, render value, live value) for every leaf that differs."""
     if isinstance(render, dict) and isinstance(live, dict):
         for key in sorted(render.keys() | live.keys()):
-            yield from differences(render.get(key, ABSENT), live.get(key, ABSENT), builtin, path + (key,))
+            yield from differences(render.get(key, ABSENT), live.get(key, ABSENT), builtin, path + (key,), kind)
     elif render is ABSENT and isinstance(live, dict) and live:
         for key in sorted(live):
-            yield from differences(ABSENT, live[key], builtin, path + (key,))
+            yield from differences(ABSENT, live[key], builtin, path + (key,), kind)
     elif live is ABSENT and isinstance(render, dict) and render:
         for key in sorted(render):
-            yield from differences(render[key], ABSENT, builtin, path + (key,))
+            yield from differences(render[key], ABSENT, builtin, path + (key,), kind)
     elif isinstance(render, list) and isinstance(live, list) and len(render) == len(live):
         for index, (r, v) in enumerate(zip(render, live)):
-            yield from differences(r, v, builtin, path + (index,))
-    elif live is ABSENT and render is not ABSENT and omitted(path, render, builtin):
+            yield from differences(r, v, builtin, path + (index,), kind)
+    elif live is ABSENT and render is not ABSENT and omitted(path, render, builtin, kind):
         return
     elif render is ABSENT or live is ABSENT or not same(render, live):
         yield path, render, live
@@ -643,7 +662,7 @@ def classify(key, items, live, schemas, grafana_lookup=False):
            "kind": api + ":" + kind_name, "builtin": builtin_api(api), "schemas": schemas, "items": items,
            "live": live, "normalized": current, "render": render, "grafana_lookup": grafana_lookup}
     reasons, unexplained = _ownership(ctx, render, current)
-    for path, r, v in differences(render, current, ctx["builtin"]):
+    for path, r, v in differences(render, current, ctx["builtin"], kind=ctx["kind"]):
         reason = explain(ctx, path, r, v)
         if reason:
             reasons.add(reason)
