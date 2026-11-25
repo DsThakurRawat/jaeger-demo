@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import companion_values  # noqa: E402
 import deploy  # noqa: E402
 import deployer_access  # noqa: E402
+import deployer_kubeconfig  # noqa: E402
 import helmfile_deploy  # noqa: E402
 import release_phases  # noqa: E402
 
@@ -216,6 +217,36 @@ class Checks:
         return {"fixture": "healthy"}
 
 
+def commit(root, message="fixture"):
+    """Commit everything in the fixture root and return the new head: the engine deploys a commit."""
+    git = ["git", "-C", str(root), "-c", "user.name=rehearsal", "-c", "user.email=rehearsal@example.invalid"]
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", message], check=True)
+    return subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+
+
+def fixture_root(work, mode="digest"):
+    """The configuration root: the real chart, companion sources and fingerprint inputs, and a fixture
+    state of six releases on one local chart. Returns the root and its first commit."""
+    root = work / "root"
+    root.mkdir()
+    for name in ("examples", "scripts", "charts", "helmfile-resources.yaml.gotmpl"):
+        (root / name).symlink_to(REPO / name)
+    (root / "helmfile").mkdir()
+    (root / "helmfile/jaeger-images.yaml.gotmpl").symlink_to(REPO / "helmfile/jaeger-images.yaml.gotmpl")
+    (root / "helmfile/images.yaml").write_text(f"mode: {mode}\n")
+    (root / "fixture-charts/app/templates").mkdir(parents=True)
+    (root / "fixture-charts/app/Chart.yaml").write_text("apiVersion: v2\nname: app-fixture\nversion: 1.0.0\n")
+    (root / "fixture-charts/app/templates/config.yaml").write_text(CHART)
+    (root / "fixture-charts/app/templates/secret.yaml").write_text(SECRET)
+    (root / "fixture-charts/app/templates/workload.yaml").write_text(WORKLOAD)
+    state = yaml.safe_dump(fixture_state())
+    (root / "helmfile.yaml").write_text(state)
+    (root / helmfile_deploy.APPLICATIONS).write_text(state)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+    return root, commit(root)
+
+
 def exercise(cfg, context):
     ctl = ["kubectl", "--kubeconfig", str(cfg), "--context", context]
     # The admin inspects with the pinned Helm directly, so its reads stay out of the deployer's Helm log.
@@ -238,14 +269,7 @@ def exercise(cfg, context):
 
     scratch = tempfile.TemporaryDirectory()
     work = Path(scratch.name)
-    config = yaml.safe_load(Path(cfg).read_text())
-    config["current-context"] = context
-    for entry in config["users"]:
-        entry["user"]["as"] = USER
-        entry["user"]["as-groups"] = ["system:authenticated"]
-    deployer = work / "deployer.kubeconfig"
-    with open(os.open(deployer, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as f:
-        yaml.safe_dump(config, f)
+    deployer = deployer_kubeconfig.write(cfg, context, USER, work / "deployer.kubeconfig", groups=("system:authenticated",))
     who = subprocess.run(["kubectl", "--kubeconfig", str(deployer), "auth", "whoami", "-o",
                           "jsonpath={.status.userInfo.username}"], capture_output=True, text=True, check=True)
     assert who.stdout.strip() == USER, who.stdout
@@ -260,27 +284,7 @@ def exercise(cfg, context):
     (shim / "helm").chmod(0o755)
     os.environ["PATH"] = str(shim) + os.pathsep + os.environ["PATH"]
 
-    # The configuration root: the real chart, companion sources and fingerprint inputs, and a fixture state.
-    root = work / "root"
-    root.mkdir()
-    for name in ("examples", "scripts", "charts", "helmfile-resources.yaml.gotmpl"):
-        (root / name).symlink_to(REPO / name)
-    (root / "helmfile").mkdir()
-    (root / "helmfile/jaeger-images.yaml.gotmpl").symlink_to(REPO / "helmfile/jaeger-images.yaml.gotmpl")
-    (root / "helmfile/images.yaml").write_text("mode: digest\n")
-    (root / "fixture-charts/app/templates").mkdir(parents=True)
-    (root / "fixture-charts/app/Chart.yaml").write_text("apiVersion: v2\nname: app-fixture\nversion: 1.0.0\n")
-    (root / "fixture-charts/app/templates/config.yaml").write_text(CHART)
-    (root / "fixture-charts/app/templates/secret.yaml").write_text(SECRET)
-    (root / "fixture-charts/app/templates/workload.yaml").write_text(WORKLOAD)
-    state = yaml.safe_dump(fixture_state())
-    (root / "helmfile.yaml").write_text(state)
-    (root / helmfile_deploy.APPLICATIONS).write_text(state)
-    git = ["git", "-C", str(root), "-c", "user.name=rehearsal", "-c", "user.email=rehearsal@example.invalid"]
-    subprocess.run(git + ["init", "-q"], check=True)
-    subprocess.run(git + ["add", "-A"], check=True)
-    subprocess.run(git + ["commit", "-q", "-m", "fixture"], check=True)
-    head = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+    root, head = fixture_root(work)
     summary = work / "summary.md"
     base = {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": head,
             "EXPECTED_CONFIG_SHA": head, "DEPLOY_ENGINE": "helmfile", "HELMFILE_OPERATION": "apply",

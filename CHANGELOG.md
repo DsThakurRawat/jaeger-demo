@@ -91,6 +91,28 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
   fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
+- The operator runbook for Helmfile adoption, in `docs/cutover.md`
+  ([Helmfile adoption](docs/cutover.md#helmfile-adoption)): the Cloud Shell
+  operator shell, the read-only checks before adoption, the ownership patches and
+  first companion install of each namespace (`default` first, then `otel-demo`,
+  `opensearch` and `jaeger`), the adoption apply and a second no-op apply with
+  identity comparisons, recovery of a failed or pending release, rollback to a
+  revision from the deploy record and how it pairs with the schedule, repair of an
+  immutable StatefulSet field that keeps the data claim, de-adoption, and
+  incidents and escalation. Its commands run as the manual deployer identity
+  through `scripts/demo/deployer_kubeconfig.py`, which writes a private copy of the
+  administrator's kubeconfig that impersonates that identity; the few steps the
+  deployer role cannot run are marked as the administrator's. The `operations` CI
+  job now also runs `scripts/demo/rehearsals/helmfile-runbook/exercise.py` on a
+  second kind cluster: it reads the runbook's marked commands at run time and runs
+  them verbatim as a user bound to the deployer role, with the workflow dispatches
+  replaced by the engine's reconcile. `scripts/demo/runbook_blocks_test.py` fails
+  when a bash block of the runbook has no marker, when a marked block and the
+  rehearsal's step list disagree, and when a block uses a retired identity, deletes
+  Secrets by selector or uninstalls a release.
+  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
+
 ### Changed
 
 - The owner decided to keep the community ingress-nginx controller in place, with no
@@ -131,6 +153,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   behind. ([#151](https://github.com/jaegertracing/jaeger-demo/pull/151),
   fixes [#149](https://github.com/jaegertracing/jaeger-demo/issues/149))
 
+- The ownership planning, patch and de-adoption commands in
+  `docs/cutover.md` and `docs/helmfile-companions.md` use the deployer kubeconfig
+  (`$KUBECONFIG` and `$CONTEXT`) instead of the retired read-only plan identity and
+  separate apply identity, and de-adoption deletes the companion's release records
+  one by one by name, because the deployer role cannot delete a collection of
+  Secrets. Both "Under revision" notes are gone.
+  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
+
 ### Fixed
 
 - The chart archive list in `ops/rbac/chart-objects.json` still named the
@@ -139,6 +170,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   a chart bump updates it with the rest of the inventory.
   ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
   refs [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
+
+- `docs/releases.md` said that the next Helmfile run syncs a failed release. In
+  `live` image mode the next apply is refused instead, because its read-only diff
+  reports a release that is not `deployed` as changed; the text now says so and
+  links the runbook's recovery steps.
+  ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
 
 ## 2026-11-24
 
