@@ -34,7 +34,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   user bound to the committed deployer roles, and the `adoption` CI job gives the
   release phase rehearsal a fresh kind cluster. Nothing calls the new install
   path yet.
-  (fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
+  ([#145](https://github.com/jaegertracing/jaeger-demo/pull/145),
+  fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
 
 ## 2026-11-24
 
