@@ -36,8 +36,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the live references (`helmfile/images.yaml` `mode: live`) or, in `digest` mode,
   are resolved for the run's upstream commit and validated before any step holds
   the OCI API key. Adoption runs (`live` mode and companion installs) restart no
-  trace generator. The OTel Certificates must be present and Ready, which the
-  scripts only log. Each run uploads `deploy-record.json` for 90 days. A new
+  trace generator and are refused before any write if they would change anything
+  but ownership: a live-mode apply when a read-only diff shows a change, a companion
+  install when the live drift classification finds a difference. After an apply,
+  each Jaeger and HotROD workload must run the expected image. The OTel Certificates
+  must be present and Ready, which the scripts only log. Each run uploads
+  `deploy-record.json` for 90 days, also when the image gate rejects a candidate. A new
   `operations` CI job rehearses it on kind as the deployer. Setting
   `DEMO_DEPLOY_ENGINE` needs `mode: digest` first, and returning to the scripts
   needs de-adoption first.

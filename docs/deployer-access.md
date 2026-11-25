@@ -357,7 +357,8 @@ calls, such as its `helm status` checks and the revision ConfigMap, is covered
 only by the access reviews of `check`. The `operations` job runs the Helmfile
 engine, `helmfile_deploy.py`, on its own kind cluster as a user bound to this role:
 `helm list` per namespace, `helm history`, the per-release Helmfile apply and sync,
-the companion object reads and first install, the generator restarts, the
+the companion object reads, drift gate and first install, the live-mode diff gate,
+the generator restarts, the running image check, the
 fingerprint patches, the live image reads through `kubectl proxy`, and the
 rollout, OpenSearch claim and Certificate checks, on synthetic application charts,
 fixture workloads and the real `demo-resources` chart. Only the registry lookup,

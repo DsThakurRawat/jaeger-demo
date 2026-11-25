@@ -546,15 +546,23 @@ gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
 It runs `release_phases.install_args`: a plain `helm install` of `demo-resources`,
 not atomic and without `--take-ownership`, and only while Helm reports that release
 absent. Before it, with reads only, it refuses the run while any release in the four
-namespaces is `pending-*`, and unless every object that
+namespaces is `pending-*`, or present by name but not `deployed` although Helm's
+listing omits it (the `unknown` state; a companion that is simply not installed yet
+is fine), and unless every object that
 [charts/demo-resources/allowlist.yaml](../charts/demo-resources/allowlist.yaml) lists
 for that namespace exists and carries exactly the reviewed ownership: the
 `app.kubernetes.io/managed-by: Helm` label, the `meta.helm.sh/release-name:
 demo-resources` and `meta.helm.sh/release-namespace` annotations and the keep
 policy ([companion adoption](helmfile-companions.md)). Helm would otherwise create
-a missing object, with a new UID and, for a Service, a new ClusterIP. A companion
-install reads no image and restarts nothing, so no pod template changes. A
-scheduled run never installs.
+a missing object, with a new UID and, for a Service, a new ClusterIP. It then
+renders the companion offline with the install's own chart and values and compares
+every object with the live one, by GET requests only, using the classification of
+the [live drift report](helmfile-applications.md#live-drift-report): an object that
+is missing, differs in a way the report cannot explain, or was never adopted
+refuses the install. A changed generator pod template is such a difference. A
+companion install selects, validates and reads no image (the workflow skips
+**Resolve and validate images** and the record says `not used: install-companion`)
+and restarts nothing, so no pod template changes. A scheduled run never installs.
 
 ### Images
 
@@ -566,15 +574,22 @@ scheduled run never installs.
   `docker.io/<repository>:<tag>` is refused, because any other form would change
   the pod template. The record keeps each reference with its registry digest and
   source commit, and records compatibility as `live: not revalidated`. A scheduled
-  run refuses this mode, and so does a manual run with an image tag input.
+  run refuses this mode, and so does a manual run with an image tag input. Because
+  a live-mode apply is adoption, it first runs the read-only `helmfile diff
+  --detailed-exitcode` of every release with the apply's own values and flags, and
+  refuses the run if any release would change (or is not `deployed`, which Helmfile
+  reports as a change). The diff output stays out of the log.
 - **`digest`**, set by a later reviewed pull request after adoption. **Resolve and
   validate images** selects the images for the upstream `main` commit that **Resolve
   upstream Jaeger main** already exported as `MAIN_SHA`, with the image tag inputs,
   so the summary and the selection name one commit. It renders both Jaeger releases
   with `helmfile template` and no cluster, and runs the Jaeger configuration gate.
   An incompatible image fails that step, before any step holds the OCI API key.
-  Reconcile applies only a selection whose compatibility receipt matches it and the
-  configuration commit.
+  The step prints each candidate's public reference, digest and source commit before
+  the gate runs, and on a rejection writes `deploy-record.json` and the step summary
+  itself, naming the rejected stack, the candidate references and the exception type,
+  never rendered values. Reconcile applies only a selection whose compatibility
+  receipt matches it and the configuration commit.
 
 ### What a Helmfile run does
 
@@ -627,7 +642,12 @@ the pinned tools for every Helm and Helmfile call:
    [#2](https://github.com/jaegertracing/jaeger-demo/issues/2). A `live` mode apply
    and a companion install are adoption steps and restart nothing.
 5. Verifies each stack even when nothing changed, and records it as verified as soon
-   as its checks pass. OCI: rollouts of `jaeger`, `jaeger-hotrod`, `trace-generator`
+   as its checks pass. Right after the rollouts of an apply, each Jaeger and HotROD
+   Deployment of the stack must run exactly the expected reference, and each of its
+   ready Pods one of that image's registry digests (`live_observation.py`): the
+   validated selection in `digest` mode, the references read at the start in `live`
+   mode. A mismatch fails the stack before it is recorded or its fingerprints are
+   patched. OCI: rollouts of `jaeger`, `jaeger-hotrod`, `trace-generator`
    and `prometheus-grafana`, then `stack_health.py --stack oci`. OTel: rollouts of
    OpenSearch, Dashboards, Jaeger, HotROD, the generator, the collector agent, the
    frontend and the load generator; the OpenSearch data claim and volume unchanged;
@@ -644,8 +664,9 @@ the pinned tools for every Helm and Helmfile call:
    fingerprints.
 
 To see what a run would change, run the same preparation and then the read-only
-`diff` with a kubeconfig for the cluster. It reports a release that is not
-`deployed` as changed, because the apply would sync it:
+`diff` with a kubeconfig for the cluster. Like reconcile, it first checks that
+`.helmfile-locked.yaml` is current and its archives match the lock. It reports a
+release that is not `deployed` as changed, because the apply would sync it:
 
 ```bash
 python3 scripts/demo/helmfile_deploy.py prepare
@@ -686,7 +707,8 @@ runs the production rollout, storage and Certificate checks.
 
 ### Deployment record
 
-Every Helmfile reconcile, including one that fails or is refused, appends a
+Every Helmfile reconcile, including one that fails or is refused, and an image gate
+rejection, appends a
 summary to the run page and uploads `deploy-record.json` as the artifact
 `deploy-record-<run id>-<attempt>`, kept for 90 days. It holds the configuration
 commit and upstream Jaeger `main`, the image mode, each stack's Jaeger and HotROD
@@ -694,7 +716,14 @@ reference, source commit and digest, the compatibility receipt or `live: not
 revalidated`, the tool versions and archive SHA-256 of the toolchain lock, the
 chart archive SHA-256s and Jaeger chart commit, each selected release's status and
 revision before, method, revision after and whether it changed, the stack check
-results, the generator restarts, the patched fingerprints and the outcome. A
+results with the running image references, the generator restarts, the patched
+fingerprints and the outcome. When Helm's history cannot be read after a write,
+the revision after and `changed` are recorded as unknown (`null`), never as a
+change. A refusing adoption gate is recorded with its name (`live-diff` or
+`companion-drift`), the release, and for a companion the identity and class of each
+refusing object. A rejected image candidate is recorded as the rejected stack, the
+candidate references and digests and the exception type, also when **Resolve and
+validate images** fails and reconcile never runs. A
 failure is recorded as the operation, release or stack, the exception type and a
 fixed message, never the command line, command output or an endpoint. It holds no
 Helm value, Secret, diff or storage identifier: anyone who can read the
@@ -750,10 +779,20 @@ and the reviewed records it no longer renders, and the role must cover them.
 To apply such a change under review rather than unattended, pause the schedule
 first, then:
 
-1. Dispatch **Deploy Jaeger Demo to OKE** from `main` for the affected component
-   (the workflow always runs `upgrade`). The OTel sample application is
-   `demo_stack=otel` and `otel_deploy_scope=otel-demo`. OCI monitoring is
-   `demo_stack=oci` and `otel_deploy_scope=monitoring`.
+1. Dispatch **Deploy Jaeger Demo to OKE** from `main` (the workflow always runs
+   `upgrade`).
+   - **Scripts engine only**, before Helmfile adoption: dispatch for the affected
+     component. The OTel sample application is `demo_stack=otel` and
+     `otel_deploy_scope=otel-demo`. OCI monitoring is `demo_stack=oci` and
+     `otel_deploy_scope=monitoring`.
+   - **After Helmfile adoption**: the Helmfile engine has no component scope and
+     ignores those two inputs. Dispatch an apply of all ten releases with the
+     reviewed commit; helm-diff changes only the affected releases:
+
+     ```bash
+     gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
+       -f engine=helmfile -f expected_config_sha="$(git rev-parse origin/main)"
+     ```
 2. Verify the component as in step 5 of the
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>

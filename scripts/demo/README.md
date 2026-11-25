@@ -55,7 +55,10 @@ both stacks even when nothing changed, patches the fingerprints above for each
 verified stack and writes `deploy-record.json`. Only an apply in `digest` image mode
 restarts the trace generators, before each stack's checks; a `live` apply and a
 companion install change no pod template. A companion install first requires every
-allowlisted object of its namespace to exist with the reviewed ownership.
+allowlisted object of its namespace to exist with the reviewed ownership and to show
+no other difference under `live_drift.py`'s classification, and a `live` apply first
+requires an empty read-only `helmfile diff` for every release. After an apply each
+Jaeger and HotROD workload must run the expected image.
 `helmfile/images.yaml` selects `live` image references or `digest` promotion. The
 `operations` CI job runs it on kind as the deployer
 ([Helmfile engine](../../docs/releases.md#helmfile-engine)).
