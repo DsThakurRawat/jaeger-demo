@@ -159,7 +159,7 @@ Exit criteria:
 
 ### 7. Promotion and acceptance
 
-Status: pending.
+Status: in progress. [helmfile/images.yaml](../helmfile/images.yaml) is in `mode: digest` in the repository ([#162](https://github.com/jaegertracing/jaeger-demo/pull/162)); no apply in that mode, engine switch or scheduled Helmfile run has happened yet.
 
 Requires: manual-helmfile-adoption.
 
