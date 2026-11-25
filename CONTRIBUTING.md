@@ -96,12 +96,25 @@ deployment.
   this lock: `scripts/demo/chart_archives.py` pulls each chart at
   its pinned version from the publisher and installs it only when the archive's
   SHA-256 matches, and `scripts/demo/jaeger-chart.sh` checks the Jaeger chart's
-  built dependencies against `jaegerDependencies`. The update script never changes
+  built dependencies against `jaegerDependencies`. Helmfile enforces the lock too:
+  `python3 scripts/demo/chart_archives.py state <dir>` pulls each repository chart of
+  `helmfile.yaml` through the same check and writes the ignored
+  `.helmfile-locked.yaml`, whose `chart:` fields are the verified local archives and
+  which has no `repositories:`. It also requires each release's `version` to equal
+  its `deploy-all.sh` pin and lock entry. `make validate` renders from that state.
+  The update script never changes
   `jaegerDependencies`; maintain those entries by hand when the Jaeger chart
   commit changes its `Chart.lock`.
 - **Helm and Kubernetes versions.** `scripts/demo/version_literals_test.py` reads
   the versions in `scripts/demo/helmfile-tools.lock.json` and lists every other
-  literal that disagrees. Change all listed files in one commit.
+  literal that disagrees. Change all listed files in one commit. The kubectl
+  download in the `deployer-access` job of `.github/workflows/ci.yml` is one of
+  them and carries a literal SHA-256; replace it with the digest of the new
+  release in the same commit.
+- **kind.** The `adoption` and `deployer-access` jobs in `.github/workflows/ci.yml`
+  each download kind with a literal SHA-256 and create their clusters from the
+  same `kindest/node` image digest. Change both jobs together;
+  `scripts/demo/workflow_test.py` fails while they differ.
 - **Chart objects.** The deployer role is derived from the object inventory in
   `ops/rbac/chart-objects.json`. After a chart pin changes, run
   `python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check`.

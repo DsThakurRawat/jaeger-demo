@@ -37,6 +37,49 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#148](https://github.com/jaegertracing/jaeger-demo/pull/148),
   refs [#70](https://github.com/jaegertracing/jaeger-demo/issues/70))
 
+- A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
+  kind cluster without production credentials: the API server accepts the role,
+  `deployer_access.py check` finds no difference for either identity and catches
+  a removed rule and an extra grant, and the scheduled `oci` / `monitoring`
+  upgrade through `examples/oci/deploy-all.sh`, Helm's default `--wait` and hooks
+  included, succeeds as a user holding only the role, from the pull request's
+  base to its head and with both client-side and server-side apply, with no
+  request refused in the API audit log. A role or monitoring change that breaks
+  that upgrade now fails its pull request.
+  ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
+  fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
+
+### Changed
+
+- The owner decided to keep the community ingress-nginx controller in place, with no
+  replacement planned in this migration. This is an accepted risk for a public demo
+  whose data is disposable and which holds no credentials behind its routes. The
+  decision is revisited if an exploitable ingress-nginx CVE is published or when the
+  cluster is rebuilt.
+  ([#143](https://github.com/jaegertracing/jaeger-demo/pull/143),
+  fixes [#41](https://github.com/jaegertracing/jaeger-demo/issues/41))
+
+- The release phase gate reads releases with one `helm list -n <namespace>` per
+  release namespace instead of a cluster-wide listing, which the deployer role
+  cannot do. An absent companion release is no longer installed with
+  `helmfile apply`: `release_phases.run` installs it, as a plain `helm install`
+  from the shared `install_args()`, only when asked and only as the single
+  selected release, and refuses every other absent release. The release phase
+  and companion adoption rehearsals run their Helm and Helmfile commands as a
+  user bound to the committed deployer roles, and the `adoption` CI job gives the
+  release phase rehearsal a fresh kind cluster. Nothing calls the new install
+  path yet.
+  ([#145](https://github.com/jaegertracing/jaeger-demo/pull/145),
+  fixes [#141](https://github.com/jaegertracing/jaeger-demo/issues/141))
+
+- Helmfile now installs only lock-verified chart archives. `chart_archives.py state`
+  pulls each repository chart through the existing SHA-256 check, requires its
+  version to equal the `deploy-all.sh` pin and lock entry, and writes the ignored
+  `.helmfile-locked.yaml` with local archive paths and no repositories;
+  `make validate` renders from it. A changed archive is refused and deleted.
+  ([#146](https://github.com/jaegertracing/jaeger-demo/pull/146),
+  fixes [#140](https://github.com/jaegertracing/jaeger-demo/issues/140))
+
 ## 2026-11-24
 
 ### Added

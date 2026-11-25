@@ -10,13 +10,18 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import chart_archives  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[4]
-STATE = ROOT / "helmfile.yaml"
+# The state derived by scripts/demo/chart_archives.py state: lock-verified local chart archives.
+STATE = ROOT / ".helmfile-locked.yaml"
 TARGET = ["--kube-version", "1.37.0", "--include-crds"]
 # Exercise digit-only tags, independent pins, tag-only adoption and digest promotion.
 IMAGES = {
@@ -145,6 +150,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--validate", action="store_true", help="Schema-check application and companion renders")
     args = parser.parse_args()
+    # Helmfile installs only archives whose SHA-256 equals the reviewed lock.
+    archives = ROOT / ".tools/chart-archives"
+    archives.mkdir(parents=True, exist_ok=True)
+    chart_archives.locked_state(ROOT, archives)
     with tempfile.TemporaryDirectory() as temp:
         fixture = Path(temp) / "images.json"
         fixture.write_text(json.dumps({"images": IMAGES}))
