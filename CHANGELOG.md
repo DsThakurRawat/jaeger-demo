@@ -22,6 +22,20 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ## 2026-11-25
 
+### Added
+
+- A `deployer-access` CI job that proves `ops/rbac/deployer.yaml` on a disposable
+  kind cluster without production credentials: the API server accepts the role,
+  `deployer_access.py check` finds no difference for either identity and catches
+  a removed rule and an extra grant, and the scheduled `oci` / `monitoring`
+  upgrade through `examples/oci/deploy-all.sh`, Helm's default `--wait` and hooks
+  included, succeeds as a user holding only the role, from the pull request's
+  base to its head and with both client-side and server-side apply, with no
+  request refused in the API audit log. A role or monitoring change that breaks
+  that upgrade now fails its pull request.
+  ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
+  fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
+
 ### Changed
 
 - The owner decided to keep the community ingress-nginx controller in place, with no

@@ -1,0 +1,43 @@
+# Copyright (c) 2026 The Jaeger Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+# The deployer access rehearsal's kind cluster: the API server writes an audit
+# log with audit-policy.yaml. Run kind from the repository root; kind resolves
+# the relative hostPath against the working directory. Kubernetes v1.36 and later
+# get a kubeadm v1beta4 configuration from kind, whose extraArgs is a list.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: scripts/demo/rehearsals/deployer-access/audit-policy.yaml
+        containerPath: /etc/kubernetes/policies/audit-policy.yaml
+        readOnly: true
+kubeadmConfigPatchesJSON6902:
+  - group: kubeadm.k8s.io
+    version: v1beta4
+    kind: ClusterConfiguration
+    patch: |
+      - op: add
+        path: /apiServer/extraArgs/-
+        value:
+          name: audit-policy-file
+          value: /etc/kubernetes/policies/audit-policy.yaml
+      - op: add
+        path: /apiServer/extraArgs/-
+        value:
+          name: audit-log-path
+          value: /var/log/kubernetes/audit.log
+      - op: add
+        path: /apiServer/extraVolumes
+        value:
+          - name: audit-policies
+            hostPath: /etc/kubernetes/policies
+            mountPath: /etc/kubernetes/policies
+            readOnly: true
+            pathType: DirectoryOrCreate
+          - name: audit-logs
+            hostPath: /var/log/kubernetes
+            mountPath: /var/log/kubernetes
+            readOnly: false
+            pathType: DirectoryOrCreate
