@@ -322,7 +322,8 @@ def images(env, root=ROOT, run=run_command, resolve=None, validate=None):
     except Exception as error:
         rejected = re.search(r"the (oci|otel) configuration", str(error))
         gate = {"operation": "validate", "rejectedStack": rejected[1] if rejected else None,
-                "images": candidate, "coreMain": selection.get("coreMain"), "type": type(error).__name__}
+                "images": candidate, "configCommit": selection.get("configCommit"),
+                "coreMain": selection.get("coreMain"), "type": type(error).__name__}
         print(f"The Jaeger configuration gate rejected the candidate for stack {gate['rejectedStack'] or 'unknown'}",
               flush=True)
         record_gate_failure(env, root, gate)
@@ -338,7 +339,8 @@ def record_gate_failure(env, root, gate):
     because the workflow stops at the images step and reconcile does not run."""
     (workdir(root) / GATE).write_text(json.dumps(gate, indent=2, sort_keys=True) + "\n")
     record = {"engine": "helmfile", "event": env.get("GITHUB_EVENT_NAME"), "run": env.get("GITHUB_RUN_ID"),
-              "outcome": "refused", "imageMode": "digest", "coreMain": gate.get("coreMain"), "imageGate": gate,
+              "outcome": "refused", "imageMode": "digest", "configCommit": gate.get("configCommit"),
+              "coreMain": gate.get("coreMain"), "imageGate": gate,
               "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": [], "generatorRestarts": [],
               "error": {"operation": "images", "release": None, "stack": gate.get("rejectedStack"), "type": gate["type"],
                         "message": "The Jaeger configuration gate rejected the candidate images"}}

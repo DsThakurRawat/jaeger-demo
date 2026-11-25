@@ -359,12 +359,16 @@ class DriverTest(unittest.TestCase):
         # The candidate is named before the gate runs, and its rejection is kept, without rendered values.
         log = output.getvalue()
         self.assertLess(log.index("Validating jaeger " + reference), log.index("rejected the candidate for stack oci"))
-        gate = {"operation": "validate", "rejectedStack": "oci", "coreMain": CORE, "type": "ValueError",
+        gate = {"operation": "validate", "rejectedStack": "oci", "configCommit": HEAD, "coreMain": CORE,
+                "type": "ValueError",
                 "images": {"jaeger": {"reference": reference, "digest": DIGEST, "sourceCommit": "1" * 40}}}
         self.assertEqual(gate, json.loads((self.root / hd.WORK / hd.GATE).read_text()))
         early = self.record()
         self.assertEqual(("refused", gate, "images"), (early["outcome"], early["imageGate"], early["error"]["operation"]))
         self.assertNotIn("kind: Deployment", (self.root / hd.RECORD).read_text())
+        # The early record names the configuration commit that rejected the images.
+        self.assertEqual(HEAD, early["configCommit"])
+        self.assertIn(f"Configuration commit: {HEAD}; upstream Jaeger main: {CORE}", self.summary.read_text())
         self.assertIn("Image gate rejected stack oci (ValueError): jaeger " + reference, self.summary.read_text())
         # Reconcile, should it run, refuses before any cluster call and folds the gate into its record.
         cluster = self.assert_refused("gate rejected the candidate images")
