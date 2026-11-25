@@ -33,7 +33,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   base to its head and with both client-side and server-side apply, with no
   request refused in the API audit log. A role or monitoring change that breaks
   that upgrade now fails its pull request.
-  (fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
+  ([#147](https://github.com/jaegertracing/jaeger-demo/pull/147),
+  fixes [#100](https://github.com/jaegertracing/jaeger-demo/issues/100))
 
 ## 2026-11-24
 
