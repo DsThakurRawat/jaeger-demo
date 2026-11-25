@@ -405,23 +405,31 @@ The invariants hold throughout:
 - From the first companion install until the schedule switches to Helmfile, the
   schedule stays paused and no run uses `engine=scripts`: the scripts
   `kubectl apply` the supplemental objects that the companions then own
-  ([the engine switch](releases.md#the-engine-switch)). Plan the `mode: digest`
-  pull request to follow adoption closely, because there is no daily refresh in
-  between.
+  ([the engine switch](releases.md#the-engine-switch)). Nothing enforces this; it
+  is the operator's rule. Plan the `mode: digest` pull request to follow adoption
+  closely, because there is no daily refresh in between.
 
 ### How the commands run and how they are rehearsed
 
-Each step runs in one Cloud Shell session, from a clean checkout of the reviewed
-commit, in a shell that has the pinned Helm and Helmfile first on its `PATH`.
-`kubectl` and Helm read `$KUBECONFIG`, which is a private copy of the cluster
-administrator's kubeconfig whose every request impersonates the manual
-(`demo-apply`) deployer identity
-([scripts/demo/deployer_kubeconfig.py](../scripts/demo/deployer_kubeconfig.py)).
-Each step therefore has exactly the access of
-[ops/rbac/deployer.yaml](../ops/rbac/deployer.yaml), and the ownership planner
-needs no credentials of its own. A step that needs more says so and passes the
+The commands run in two places:
+
+- **Cloud Shell**, as the cluster administrator, from a clean checkout of the
+  reviewed commit, in a shell with the pinned Helm and Helmfile first on its
+  `PATH` and a Python virtual environment with PyYAML. `kubectl` and Helm read
+  `$KUBECONFIG`, a private copy of the administrator's kubeconfig whose every
+  request impersonates the manual (`demo-apply`) deployer identity
+  ([scripts/demo/deployer_kubeconfig.py](../scripts/demo/deployer_kubeconfig.py)).
+  Each step therefore has the access of
+  [ops/rbac/deployer.yaml](../ops/rbac/deployer.yaml), and the ownership planner
+  needs no credentials of its own.
+- **The maintainer's machine**, where the GitHub CLI is signed in: every `gh`
+  command, the workflow dispatches and the deployment record downloads. No GitHub
+  token enters Cloud Shell. A downloaded record is uploaded to Cloud Shell with
+  its **Upload** menu and moved into the private record there.
+
+A step that needs more than the deployer role says so and passes the
 administrator kubeconfig itself. These are the only ones, and each needs
-something the deployer role deliberately does not grant:
+something the role deliberately does not grant:
 
 | Administrator step | Why the deployer role cannot run it |
 | --- | --- |
@@ -430,88 +438,135 @@ something the deployer role deliberately does not grant:
 | Read events and Pod logs in `default` | The role reads Pods and ReplicaSets there, not events or logs |
 | Delete an orphaned OpenSearch Pod | The role creates and deletes no Pod |
 
-The variables below are the only input to the commands. Set them as the steps say.
+**Run each block as shown.** A block that does work is one
+`bash -euo pipefail <<'EOF'` command, so it stops at the first failure and exits
+non-zero even when pasted into an interactive shell, and its first line refuses to
+run when a variable it needs is empty, so an administrator step can never fall
+back to the deployer kubeconfig or the reverse. Such a block sees only exported
+variables: set every variable below with `export`. The few blocks that are not
+wrapped set shell state (the variables, `umask`, the pinned shell) or are a
+single command.
 
-| Variable | Set in | Meaning |
+| Variable | Where | Meaning |
 | --- | --- | --- |
-| `REVIEWED_COMMIT` | [Operator shell](#operator-shell) | The full SHA of `main` that the maintainer reviewed for adoption |
-| `ADMIN_KUBECONFIG`, `ADMIN_CONTEXT` | Operator shell | The administrator's Cloud Shell kubeconfig and its demo-cluster context, which is its current context |
-| `MANUAL_USER_OCID`, `SCHEDULED_USER_OCID` | Operator shell | The OCI user OCIDs of the `demo-apply` and `demo-scheduled` identities. The repository never records them |
-| `RECORD` | Operator shell | A private directory outside the checkout, kept with the release record |
-| `KUBECONFIG`, `CONTEXT` | Operator shell | The deployer kubeconfig and its only context |
-| `ns` | Each namespace step | A release namespace: `default`, `jaeger`, `opensearch` or `otel-demo` |
-| `release`, `REVISION` | Recovery and rollback | A release name in `$ns`, and the revision to return to |
-| `RUN_ID` | After each dispatch | The run of **Deploy Jaeger Demo to OKE** whose record a step reads |
-| `STEP`, `FROM` | Identity captures | The name of a capture, and the earlier capture to compare it with (`baseline` unless a step says otherwise) |
+| `REVIEWED_COMMIT` | Both | The full 40-character SHA of `main` that the maintainer reviewed for adoption |
+| `ADMIN_KUBECONFIG`, `ADMIN_CONTEXT` | Cloud Shell | The administrator's Cloud Shell kubeconfig and its demo-cluster context, which is its current context |
+| `MANUAL_USER_OCID`, `SCHEDULED_USER_OCID` | Cloud Shell | The OCI user OCIDs of the `demo-apply` and `demo-scheduled` identities. The repository never records them |
+| `RECORD` | Cloud Shell | A private directory outside the checkout, kept with the release record |
+| `KUBECONFIG`, `CONTEXT` | Cloud Shell | The deployer kubeconfig, `$RECORD/deployer.kubeconfig`, and its only context |
+| `ns` | Both | A release namespace: `default`, `jaeger`, `opensearch` or `otel-demo` |
+| `release`, `REVISION` | Cloud Shell | A release name in `$ns`, and the revision to return to |
+| `RUN_ID` | Both | The run of **Deploy Jaeger Demo to OKE** whose record a step reads |
+| `STEP`, `FROM` | Cloud Shell | The name of an identity capture, and the earlier capture to compare it with (`baseline` unless a step says otherwise) |
+
+The deployer kubeconfig holds the OCID it impersonates and the cluster endpoint.
+It is not part of the kept record: delete it at the end of the session
+(`rm -f "$RECORD/deployer.kubeconfig"`), and always before copying `$RECORD`
+anywhere.
 
 The `operations` CI job rehearses this runbook on kind with
 [scripts/demo/rehearsals/helmfile-runbook/exercise.py](../scripts/demo/rehearsals/helmfile-runbook/exercise.py).
-At run time it reads every block below marked `<!-- rehearse: <id> -->` (visible
-in the Markdown source) from this file and runs it verbatim with
-`bash -euo pipefail`, from the repository root, with only these variables set:
-as the fixture's manual deployer user, through a kubeconfig written by the
-operator shell step, and the administrator steps with the kind administrator
-kubeconfig. The fixture is the one of the Helmfile engine rehearsal: synthetic
-application charts under the real release names, the real `demo-resources` chart
-and sources, and an OpenSearch StatefulSet with a bound claim. It walks the
-ownership patches and first install of each namespace, the adoption apply and
-the no-op, a failed release and its recovery, a pending release refused and then
-recovered, a rollback to a recorded revision and the next apply that undoes it,
-the StatefulSet repair, and de-adoption, and after each step it checks what the
-step here promises. Blocks marked `not-rehearsed` need GitHub, OCI, the public
-demo or the real charts, and the marker says what the rehearsal does instead: a
-workflow dispatch becomes a call of `helmfile_deploy.reconcile` with the
-environment the dispatch gives the **Reconcile demo components** step (stub image
-lookup, health and trace checks), and the artifact download becomes a copy of
-that call's `deploy-record.json` to `$RECORD/runs/$RUN_ID`.
+At run time it reads every block below whose Markdown source carries a
+`<!-- rehearse: <id> -->` marker and runs its text verbatim with `bash` from the
+repository root, with the table's variables added to the CI job's environment
+and `umask 077`, as the session blocks set them. Every Cloud Shell block runs
+through the deployer kubeconfig that the rehearsed `operator-kubeconfig` block
+writes, as a fixture manual user bound to the committed role; the administrator
+blocks use the kind administrator kubeconfig. The fixture is the one of the
+Helmfile engine rehearsal: synthetic application charts under the real release
+names, the real `demo-resources` chart and sources, and an OpenSearch StatefulSet
+with a bound claim. It walks the ownership patches and first install of each
+namespace, a failed first install and its retry, the adoption apply and the
+no-op, a failed release and its recovery, a pending release refused and then
+recovered, a rollback to a recorded revision with both of its refusals and the
+next apply that undoes it, the StatefulSet repair, and de-adoption, and after each
+step it checks what the step here promises. A block marked `not-rehearsed` needs
+GitHub, OCI, the public demo or the real charts, and its marker says what the
+rehearsal does instead: a workflow dispatch becomes a call of
+`helmfile_deploy.reconcile` with the environment the dispatch gives the
+**Reconcile demo components** step (stub image lookup, health and trace checks),
+which writes the record to `$RECORD/runs/$RUN_ID` in place of the download and
+upload. A block marked `session` sets shell state only.
 [scripts/demo/runbook_blocks_test.py](../scripts/demo/runbook_blocks_test.py),
-part of `make test`, fails when a bash block of this section has no marker, when
-a rehearse id is duplicated or missing from the rehearsal's step list, and when a
-block names the retired plan or apply identity, deletes Secrets by selector or
-uninstalls a release. OKE authentication, Cloud Shell and the production
-bindings are not rehearsed.
+part of `make test`, fails when a bash block of this section has no marker or the
+wrong form, when a rehearse id is duplicated or missing from the rehearsal's step
+list, when a dispatch input or artifact name disagrees with the workflow, and when
+a block names the retired plan or apply identity, deletes Secrets by selector,
+deletes a PVC or a namespace, deletes with foreground or background cascading,
+forces a rollback or replacement, or uninstalls a release. OKE authentication,
+Cloud Shell, GitHub and the production bindings are not rehearsed.
 
 ### Operator shell
+
+On the maintainer's machine, with the GitHub CLI signed in, set the reviewed
+commit, and `ns` and `RUN_ID` when a step says so:
+
+<!-- session: shell state on the maintainer's machine -->
+```bash
+read -rp "Reviewed commit: " REVIEWED_COMMIT && export REVIEWED_COMMIT
+```
 
 The cluster administrator opens Cloud Shell in the tenancy of the demo cluster and
 creates its kubeconfig as the console's **Access Cluster** dialog shows
 (`oci ce cluster create-kubeconfig` with the public endpoint), so that its current
 context is the demo cluster. The administrator must be allowed to impersonate
-users, as a cluster administrator is. Then, with the reviewed commit at hand:
+users, as a cluster administrator is. Then clone the repository at the reviewed
+commit, create a virtual environment with PyYAML outside the checkout, and start
+the pinned shell. The repository's scripts do not use `PYTHONPATH`, so it is
+unset:
 
-<!-- not-rehearsed: Cloud Shell, the clone and the prompts for the two OCIDs; the rehearsal runs from the CI checkout with the kind administrator kubeconfig and fixture users -->
+<!-- session: Cloud Shell, the clone and the pinned shell; the rehearsal runs from the CI checkout under the pinned tools -->
 ```bash
 git clone https://github.com/jaegertracing/jaeger-demo.git && cd jaeger-demo
 read -rp "Reviewed commit: " REVIEWED_COMMIT && git checkout --detach "$REVIEWED_COMMIT"
 git status --porcelain --untracked-files=all   # must print nothing
-read -rp "demo-apply OCI user OCID: " MANUAL_USER_OCID
-read -rp "demo-scheduled OCI user OCID: " SCHEDULED_USER_OCID
-export REVIEWED_COMMIT MANUAL_USER_OCID SCHEDULED_USER_OCID
-ADMIN_KUBECONFIG="$HOME/.kube/config"
-ADMIN_CONTEXT=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" config current-context)
-RECORD="$HOME/helmfile-adoption-$(date -u +%Y%m%dT%H%M%SZ)"
-export ADMIN_KUBECONFIG ADMIN_CONTEXT RECORD
-python3 scripts/demo/helmfile_tools.py run -- bash
+python3 -m venv "$HOME/jaeger-demo-venv"
+"$HOME/jaeger-demo-venv/bin/python3" -m pip install -c scripts/demo/oci-cli-constraints.txt PyYAML
+unset PYTHONPATH
+"$HOME/jaeger-demo-venv/bin/python3" scripts/demo/helmfile_tools.py run -- bash
 ```
 
-The last command starts the pinned shell; every later step runs in it. Write the
-deployer kubeconfig, select it, and confirm whom the requests run as. The
-kubeconfig is created with mode 0600 and never overwritten:
+Every later Cloud Shell step runs in the pinned shell, from the checkout. Set the
+session in it now, and again whenever the shell is started again: the variables,
+the virtual environment's `python3` first on `PATH`, and `umask 077` so that every
+file of the record is private. On a restart, give the same record directory:
+
+<!-- session: shell state in the pinned shell; the rehearsal sets the same variables and umask for every block -->
+```bash
+unset PYTHONPATH
+export PATH="$HOME/jaeger-demo-venv/bin:$PATH"
+umask 077
+read -rp "Reviewed commit: " REVIEWED_COMMIT
+read -rp "demo-apply OCI user OCID: " MANUAL_USER_OCID
+read -rp "demo-scheduled OCI user OCID: " SCHEDULED_USER_OCID
+read -rp "Record directory: " -e -i "$HOME/helmfile-adoption-$(date -u +%Y%m%d)" RECORD
+ADMIN_KUBECONFIG="$HOME/.kube/config"
+ADMIN_CONTEXT=$(kubectl --kubeconfig "$ADMIN_KUBECONFIG" config current-context)
+export REVIEWED_COMMIT MANUAL_USER_OCID SCHEDULED_USER_OCID RECORD ADMIN_KUBECONFIG ADMIN_CONTEXT
+export KUBECONFIG="$RECORD/deployer.kubeconfig" CONTEXT="$ADMIN_CONTEXT"
+```
+
+Write the deployer kubeconfig unless it exists, and confirm whom the requests run
+as. The file is created with mode 0600 and never overwritten:
 
 <!-- rehearse: operator-kubeconfig -->
 ```bash
-umask 077
+bash -euo pipefail <<'EOF'
+: "${REVIEWED_COMMIT:?}" "${ADMIN_KUBECONFIG:?}" "${ADMIN_CONTEXT:?}" "${MANUAL_USER_OCID:?}" "${SCHEDULED_USER_OCID:?}"
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}"
+[[ "$REVIEWED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "Stop: REVIEWED_COMMIT is not a full commit SHA" >&2; exit 1; }
+[[ "$KUBECONFIG" == "$RECORD/deployer.kubeconfig" ]] || { echo "Stop: KUBECONFIG is not the deployer kubeconfig" >&2; exit 1; }
+[[ "$(umask)" == 0077 ]] || { echo "Stop: set umask 077 first" >&2; exit 1; }
 mkdir -p "$RECORD/runs"
-python3 scripts/demo/deployer_kubeconfig.py --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" \
-  --user "$MANUAL_USER_OCID" --output "$RECORD/deployer.kubeconfig"
-export KUBECONFIG="$RECORD/deployer.kubeconfig" CONTEXT="$ADMIN_CONTEXT"
-helm version --short
-if [[ "$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}')" == "$MANUAL_USER_OCID" ]]; then
-  echo "kubectl and Helm act as the manual deployer identity"
-else
-  echo "Stop: the deployer kubeconfig does not impersonate the manual identity" >&2
-  false
+if [[ ! -e "$KUBECONFIG" ]]; then
+  python3 scripts/demo/deployer_kubeconfig.py --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" \
+    --user "$MANUAL_USER_OCID" --output "$KUBECONFIG"
 fi
+helm version --short
+[[ "$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}')" == "$MANUAL_USER_OCID" ]] ||
+  { echo "Stop: the deployer kubeconfig does not impersonate the manual identity" >&2; exit 1; }
+echo "kubectl and Helm act as the manual deployer identity"
+EOF
 ```
 
 `helm version` must print v4.3.2. Check that the impersonated identity holds the
@@ -519,28 +574,31 @@ whole committed role:
 
 <!-- rehearse: impersonated-access -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${KUBECONFIG:?}"
 python3 scripts/demo/deployer_access.py check --identity manual --self
+EOF
 ```
 
-It must report `manual: 0 difference(s)`. If the shell ends, start the pinned
-shell again from the checkout and export `RECORD`, `KUBECONFIG` and `CONTEXT`
-again; the files are kept.
+It must report `manual: 0 difference(s)`.
 
 ### Read-only checks before adoption
 
 None of these writes to the cluster. Keep every output in `$RECORD`.
 
 1. The schedule is paused, Helmfile is not the scheduled engine, and no writer is
-   queued or running. Run this wherever the maintainer's GitHub CLI is signed in:
+   queued or running. On the maintainer's machine:
 
    <!-- not-rehearsed: GitHub repository variables and workflow runs -->
    ```bash
+   bash -euo pipefail <<'EOF'
    gh variable list --repo jaegertracing/jaeger-demo
    for workflow in ci-deploy-demo.yml ci-opensearch-reset.yml ci-opensearch-volume-expand.yml; do
      gh api --paginate \
        "repos/jaegertracing/jaeger-demo/actions/workflows/$workflow/runs?per_page=100" \
        --jq '.workflow_runs[] | select(.status != "completed") | {id, event, status, created_at, html_url}'
    done
+   EOF
    ```
 
    `DEMO_SCHEDULE_ENABLED` must be `false`, `DEMO_DEPLOY_ENGINE` must be absent and
@@ -556,6 +614,8 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
 
    <!-- rehearse: releases-before -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}"
    for namespace in default jaeger opensearch otel-demo; do
      helm list --namespace "$namespace" --max 0 -o json
    done | jq -s 'add' > "$RECORD/releases-before.json"
@@ -564,7 +624,10 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
      while read -r namespace name; do
        helm history "$name" --namespace "$namespace" --max 10 -o json > "$RECORD/history-before-$namespace-$name.json"
      done
-   jq -e 'length == 6 and all(.[]; .status == "deployed")' "$RECORD/releases-before.json"
+   jq -e '([.[] | .namespace + "/" + .name] | sort) == ["default/jaeger", "default/prometheus", "jaeger/jaeger",
+            "opensearch/opensearch", "opensearch/opensearch-dashboards", "otel-demo/otel-demo"]
+          and all(.[]; .status == "deployed")' "$RECORD/releases-before.json"
+   EOF
    ```
 
 3. The access of both identities against the committed role. This is an
@@ -572,8 +635,11 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
 
    <!-- rehearse: access-check -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${ADMIN_KUBECONFIG:?}" "${MANUAL_USER_OCID:?}" "${SCHEDULED_USER_OCID:?}"
    KUBECONFIG="$ADMIN_KUBECONFIG" python3 scripts/demo/deployer_access.py check --identity manual --user "$MANUAL_USER_OCID"
    KUBECONFIG="$ADMIN_KUBECONFIG" python3 scripts/demo/deployer_access.py check --identity scheduled --user "$SCHEDULED_USER_OCID"
+   EOF
    ```
 
    Each must report `0 difference(s)` ([deployer access](deployer-access.md#verify-the-live-access)).
@@ -583,9 +649,12 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
 
    <!-- not-rehearsed: renders the pinned public charts and reads the production objects; the kind fixture holds synthetic application releases -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}"
    python3 scripts/demo/live_drift.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
      --output "$RECORD/live-drift-before.json"
    jq '.summary' "$RECORD/live-drift-before.json"
+   EOF
    ```
 
    It must exit 0: nothing `unexplained` and nothing `missing`. Each companion
@@ -593,21 +662,31 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
    reason code against the table in that document.
 
 5. The Certificates of the OTel routes, each `Ready`, and, as the administrator,
-   those in `default`:
+   those in `default`, which must include `demo-jaeger-tls`:
 
    <!-- rehearse: certificates -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}"
    for namespace in jaeger opensearch otel-demo; do
      kubectl --namespace "$namespace" get certificates.cert-manager.io -o json |
-       jq -r --arg ns "$namespace" '.items[] | [$ns, .metadata.name,
+       jq -r --arg namespace "$namespace" '.items[] | [$namespace, .metadata.name,
          ([.status.conditions[]? | select(.type == "Ready") | .status][0] // "Unknown")] | @tsv'
    done | tee "$RECORD/certificates-before.tsv" | awk -F '\t' '$3 != "True" {bad = 1} END {exit bad || NR == 0}'
+   EOF
    ```
 
    <!-- rehearse: certificates-default -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${ADMIN_KUBECONFIG:?}" "${ADMIN_CONTEXT:?}"
    kubectl --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" --namespace default \
-     get certificates.cert-manager.io
+     get certificates.cert-manager.io -o json |
+     jq -r '.items[] | ["default", .metadata.name,
+       ([.status.conditions[]? | select(.type == "Ready") | .status][0] // "Unknown")] | @tsv' |
+     tee "$RECORD/certificates-default-before.tsv" |
+     awk -F '\t' '$3 != "True" {bad = 1} $2 == "demo-jaeger-tls" {found = 1} END {exit bad || !found}'
+   EOF
    ```
 
 6. Health of both stacks, and the functional baseline of
@@ -616,20 +695,26 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
 
    <!-- not-rehearsed: reaches the public demo endpoints -->
    ```bash
+   bash -euo pipefail <<'EOF'
    python3 scripts/demo/stack_health.py --stack oci
    python3 scripts/demo/stack_health.py --stack otel
+   EOF
    ```
 
 7. The identities that adoption must keep: the UID, selector and pod template of
-   every Deployment, DaemonSet and StatefulSet in the four namespaces, the UID,
-   ClusterIPs and selector of every Service, the pod-template hash of each active
-   ReplicaSet, and the UID, volume and phase of the OpenSearch data claim. Set
+   every Deployment and DaemonSet in the four namespaces and of the OpenSearch
+   StatefulSet, the UID, ClusterIPs and selector of every Service, the
+   pod-template hash of each active ReplicaSet, and the UID, volume and phase of
+   the OpenSearch data claim. The capture covers the kinds the deployer role
+   lists; the Prometheus and Alertmanager StatefulSets in `default`, which the
+   Prometheus operator creates and Helm does not own, are not in it. Export
    `STEP=baseline` for this first capture. The file holds pod templates, so it
    stays in the private record:
 
    <!-- rehearse: capture-identities -->
    ```bash
-   : "${STEP:?Name this capture, for example baseline}"
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${STEP:?Name this capture, for example baseline}"
    claim=$(kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json | jq -er '
      [.spec.containers[] | select(.name == "opensearch") | .volumeMounts[]
       | select(.mountPath == "/usr/share/opensearch/data") | .name] as $mounted
@@ -653,28 +738,38 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
        | select(.kind != "ReplicaSet" or .replicas > 0)] | sort_by(.kind, .namespace, .name)' \
      > "$RECORD/identities-$STEP.json"
    jq -e 'any(.[]; .kind == "PersistentVolumeClaim" and .phase == "Bound")' "$RECORD/identities-$STEP.json"
+   EOF
    ```
 
    Later steps take a capture with another `STEP` and compare it:
 
    <!-- rehearse: compare-identities -->
    ```bash
-   : "${FROM:=baseline}" "${STEP:?Name the capture to compare}"
-   diff -u "$RECORD/identities-$FROM.json" "$RECORD/identities-$STEP.json" && echo "Nothing changed since $FROM"
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${FROM:=baseline}" "${STEP:?Name the capture to compare}"
+   diff -u "$RECORD/identities-$FROM.json" "$RECORD/identities-$STEP.json"
+   echo "Nothing changed since $FROM"
+   EOF
    ```
 
 8. A read-only diff of the ten releases in live mode, which must show no
-   application change. `prepare` reaches only the public chart sources:
+   application change. `prepare` reaches only the public chart sources. The four
+   `<namespace>/demo-resources` lines print `error`, because a diff refuses a
+   release that is not installed, so the diff command itself exits 1 here and the
+   block checks the six application lines instead:
 
    <!-- not-rehearsed: renders the pinned public charts against the production releases; the rehearsal runs helmfile_deploy.diff on its fixture state -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}"
    python3 scripts/demo/helmfile_deploy.py prepare
-   python3 scripts/demo/helmfile_deploy.py diff | tee "$RECORD/diff-before.txt"
+   python3 scripts/demo/helmfile_deploy.py diff | tee "$RECORD/diff-before.txt" || true
+   for key in default/prometheus default/jaeger opensearch/opensearch opensearch/opensearch-dashboards \
+     jaeger/jaeger otel-demo/otel-demo; do
+     grep -qx "$key: no changes" "$RECORD/diff-before.txt" || { echo "Stop: $key would change" >&2; exit 1; }
+   done
+   EOF
    ```
-
-   The six application releases must print `no changes`. The four
-   `<namespace>/demo-resources` lines print `error`, because a diff refuses a
-   release that is not installed, so the command exits 1 at this point.
 
 Then review, with the maintainer, the adoption render at `$REVIEWED_COMMIT`, the
 allowlist, the live image references the diff read, the prior revisions in
@@ -687,19 +782,25 @@ Adopt one namespace at a time, in this order: `default`, then `otel-demo`,
 `opensearch` and `jaeger`. The OCI stack goes first so that its companion is
 installed and verified before any OTel change, as the migration plan requires;
 the OTel namespaces follow from the one that holds only an Ingress to the one
-with the trace generator. For each namespace, set `ns`, apply its patches here and
-install its companion with the [next step](#install-each-companion-release)
-before moving on.
+with the trace generator. For each namespace, `export ns=<namespace>` in Cloud
+Shell and on the maintainer's machine, apply its patches here and install its
+companion with the [next step](#install-each-companion-release) before moving on.
 
 The planner reads the allowlisted objects of `$ns` by name as the deployer. Each
 patch adds only the Helm ownership label, the two release annotations and the
-keep policy, and tests the UID and resource version it was planned for:
+keep policy, and tests the UID and resource version it was planned for. The block
+keeps an earlier plan of the namespace under a timestamped name:
 
 <!-- rehearse: ownership-plan -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}"
+plan="$RECORD/ownership-$ns.json"
+[[ ! -e "$plan" ]] || mv "$plan" "$RECORD/ownership-$ns.$(date -u +%Y%m%dT%H%M%SZ).json"
 python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  --namespace "$ns" > "$RECORD/ownership-$ns.json"
-jq -r '.[] | "\(.kind)/\(.name): \(.patch | length) operation(s)"' "$RECORD/ownership-$ns.json"
+  --namespace "$ns" > "$plan"
+jq -r '.[] | "\(.kind)/\(.name): \(.patch | length) operation(s)"' "$plan"
+EOF
 ```
 
 Review the plan. Then apply it, which needs only `patch` on the named objects, and
@@ -707,10 +808,13 @@ plan again; the second plan must hold only empty patches:
 
 <!-- rehearse: ownership-apply -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}"
 bash scripts/demo/apply-ownership-patches.sh "$RECORD/ownership-$ns.json" \
   "$KUBECONFIG" "$CONTEXT" "$RECORD/adopted.json"
 python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  --namespace "$ns" | jq -e 'all(.[]; .patch == [])'
+  --namespace "$ns" | jq -e 'length > 0 and all(.[]; .patch == [])'
+EOF
 ```
 
 The script appends each patch that succeeds to `adopted.json`. That file records
@@ -720,26 +824,32 @@ accepts. Never edit it, replace it or write it by hand.
 The script refuses a plan that contains anything other than guarded label and
 annotation changes on the four allowlisted kinds, and stops at the first failed
 patch. A patch fails without a write when its object changed after planning. To
-retry, plan again into a new file, review it and apply it with the same
-`adopted.json`. A fresh plan has an empty patch for each object that is already
-adopted, so its entry in the record stays as first written. The script refuses a
-plan that would patch an object the record already holds. If the script is
-interrupted, compare the planner output with the record before continuing: an
-object with an empty patch that the record does not list, and that was not owned
-before the first plan, was patched without being recorded.
+retry, run the plan block again, which keeps the failed plan under a timestamped
+name and writes a fresh one; review it and apply it with the same `adopted.json`.
+A fresh plan has an empty patch for each object that is already adopted, so its
+entry in the record stays as first written. The script refuses a plan that would
+patch an object the record already holds. If the script is interrupted, compare
+the planner output with the record before continuing: an object with an empty
+patch that the record does not list, and that was not owned before the first
+plan, was patched without being recorded.
 
 ### Install each companion release
 
 The first install of `$ns/demo-resources` is a manual dispatch of the deploy
-workflow for that namespace. `main` must still be at `$REVIEWED_COMMIT`, or the
-workflow's revision check stops the run before it starts. A `demo-apply` reviewer
-approves it:
+workflow for that namespace, from the maintainer's machine. A `demo-apply`
+reviewer approves it. The block refuses to dispatch unless `main` is still at
+`$REVIEWED_COMMIT`; the workflow's own revision check would stop it otherwise:
 
 <!-- not-rehearsed: a workflow dispatch with a demo-apply reviewer; the rehearsal calls helmfile_deploy.reconcile with HELMFILE_OPERATION=install-companion and COMPANION_NAMESPACE=$ns -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${REVIEWED_COMMIT:?}" "${ns:?}"
+main=$(git ls-remote https://github.com/jaegertracing/jaeger-demo.git refs/heads/main | cut -f1)
+[[ "$main" == "$REVIEWED_COMMIT" ]] || { echo "Stop: main is not at the reviewed commit" >&2; exit 1; }
 gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
   -f engine=helmfile -f expected_config_sha="$REVIEWED_COMMIT" \
   -f helmfile_operation=install-companion -f companion_namespace="$ns"
+EOF
 ```
 
 The engine refuses the install, with no write, unless every allowlisted object of
@@ -747,27 +857,56 @@ The engine refuses the install, with no write, unless every allowlisted object o
 namespaces is pending or in an unknown state, and the live drift classification
 of the companion's objects finds nothing but ownership. Then it runs a plain
 `helm install` without `--take-ownership` and restarts nothing
-([what a companion install checks](releases.md#helmfile-engine)). Find the run,
-wait for it, and copy its record into the private record. A re-run has another
-attempt number in the artifact name:
+([what a companion install checks](releases.md#helmfile-engine)). Find the run
+on the maintainer's machine and export its ID there and in Cloud Shell:
 
-<!-- not-rehearsed: GitHub runs and artifacts; the rehearsal copies the deploy-record.json of its reconcile call to $RECORD/runs/$RUN_ID -->
+<!-- not-rehearsed: GitHub workflow runs -->
 ```bash
-gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml --event workflow_dispatch \
-  --limit 3 --json databaseId,headSha,status,conclusion,url
-read -rp "Run ID: " RUN_ID && export RUN_ID
-gh run watch "$RUN_ID" --repo jaegertracing/jaeger-demo --exit-status
-gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo --name "deploy-record-$RUN_ID-1" \
-  --dir "$RECORD/runs/$RUN_ID"
+gh run list --repo jaegertracing/jaeger-demo --workflow ci-deploy-demo.yml --event workflow_dispatch --limit 3 --json databaseId,headSha,status,conclusion,url
 ```
 
-The record must show one plain install of an absent release to deployed
-revision 1, no generator restart and no fingerprint, both stacks verified where
-the namespace is an OTel one, and the planner must find nothing left to patch:
+<!-- session: shell state, on both machines -->
+```bash
+read -rp "Run ID: " RUN_ID && export RUN_ID
+```
+
+Wait for the run and download its record on the maintainer's machine. A re-run has
+another attempt number in the artifact name:
+
+<!-- not-rehearsed: GitHub runs and artifacts; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID -->
+```bash
+bash -euo pipefail <<'EOF'
+: "${RUN_ID:?}"
+gh run watch "$RUN_ID" --repo jaegertracing/jaeger-demo --exit-status || echo "The run did not succeed; keep its record"
+gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo --name "deploy-record-$RUN_ID-1" \
+  --dir "$HOME/helmfile-adoption-runs/$RUN_ID"
+EOF
+```
+
+Upload `$HOME/helmfile-adoption-runs/$RUN_ID/deploy-record.json` to Cloud Shell,
+which puts it in the home directory, and move it into the record there:
+
+<!-- not-rehearsed: a Cloud Shell upload; the rehearsal's reconcile call writes the record to $RECORD/runs/$RUN_ID -->
+```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${RUN_ID:?}"
+mkdir -p "$RECORD/runs/$RUN_ID"
+mv -n "$HOME/deploy-record.json" "$RECORD/runs/$RUN_ID/deploy-record.json"
+EOF
+```
+
+The record must be this run's, at the reviewed commit, and show one plain install
+of an absent release to deployed revision 1, no generator restart and no
+fingerprint, both stacks verified where the namespace is an OTel one, and the
+planner must find nothing left to patch:
 
 <!-- rehearse: install-check -->
 ```bash
-jq -e --arg ns "$ns" '.outcome == "succeeded" and .operation == "install-companion"
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}" "${RUN_ID:?}" "${REVIEWED_COMMIT:?}"
+jq -e --arg ns "$ns" --arg run "$RUN_ID" --arg commit "$REVIEWED_COMMIT" '
+  .run == $run and .configCommit == $commit and .event == "workflow_dispatch"
+  and .outcome == "succeeded" and .operation == "install-companion"
   and .companionNamespace == $ns and .generatorRestarts == [] and .fingerprints == []
   and .verifiedStacks == (if $ns == "default" then ["oci"] else ["oci", "otel"] end)
   and ([.releases[] | [.id, .statusBefore, .method, .revisionAfter, .statusAfter]]
@@ -776,7 +915,8 @@ jq -e --arg ns "$ns" '.outcome == "succeeded" and .operation == "install-compani
 helm history demo-resources --namespace "$ns" --max 1 -o json |
   jq -e '(.[0].revision | tostring) == "1" and .[0].status == "deployed"'
 python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-  --namespace "$ns" | jq -e 'all(.[]; .patch == [])'
+  --namespace "$ns" | jq -e 'length > 0 and all(.[]; .patch == [])'
+EOF
 ```
 
 Then capture the identities with `STEP=companion-$ns` and compare them with the
@@ -784,19 +924,26 @@ baseline: nothing may differ. Check the health of the stack. Only then move to t
 next namespace.
 
 If the install fails, it leaves revision 1 `failed` and changes no object's
-identity. Recover with step 1 of
-[De-adopt companion releases](#de-adopt-companion-releases), keep the ownership
-metadata, and dispatch the install again after the cause is fixed.
+identity, and the check above fails. Recover with step 1 of
+[De-adopt companion releases](#de-adopt-companion-releases) (list and delete the
+release records), keep the ownership metadata, and dispatch the install again
+after the cause is fixed.
 
 ### Adopt and verify the no-op
 
 With all four companions installed, dispatch an apply of the ten releases in
-live mode, and find and copy its record as for an install:
+live mode from the maintainer's machine, and find, download and move its record
+as for an install:
 
 <!-- not-rehearsed: a workflow dispatch with a demo-apply reviewer; the rehearsal calls helmfile_deploy.reconcile with HELMFILE_OPERATION=apply in live mode -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${REVIEWED_COMMIT:?}"
+main=$(git ls-remote https://github.com/jaegertracing/jaeger-demo.git refs/heads/main | cut -f1)
+[[ "$main" == "$REVIEWED_COMMIT" ]] || { echo "Stop: main is not at the reviewed commit" >&2; exit 1; }
 gh workflow run ci-deploy-demo.yml --repo jaegertracing/jaeger-demo --ref main \
   -f engine=helmfile -f expected_config_sha="$REVIEWED_COMMIT"
+EOF
 ```
 
 The engine reads the live Jaeger and HotROD references, runs a read-only diff of
@@ -807,12 +954,17 @@ that:
 
 <!-- rehearse: adoption-record -->
 ```bash
-jq -e '.outcome == "succeeded" and .operation == "apply" and .imageMode == "live"
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${RUN_ID:?}" "${REVIEWED_COMMIT:?}"
+jq -e --arg run "$RUN_ID" --arg commit "$REVIEWED_COMMIT" '
+  .run == $run and .configCommit == $commit and .event == "workflow_dispatch"
+  and .outcome == "succeeded" and .operation == "apply" and .imageMode == "live"
   and .compatibility == "live: not revalidated" and .verifiedStacks == ["oci", "otel"]
   and .generatorRestarts == [] and (.releases | length) == 10 and (.fingerprints | length) == 5
   and all(.releases[]; .statusBefore == "deployed" and .method == "apply" and .changed == false
           and .revisionAfter == .revisionBefore)' "$RECORD/runs/$RUN_ID/deploy-record.json"
 jq '.images' "$RECORD/runs/$RUN_ID/deploy-record.json"
+EOF
 ```
 
 The image references must be the ones running before adoption. Capture the
@@ -822,11 +974,17 @@ differ. Then dispatch the same apply a second time and repeat these checks with
 
 <!-- rehearse: releases-after -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}"
 for namespace in default jaeger opensearch otel-demo; do
   helm list --namespace "$namespace" --max 0 -o json
 done | jq -s 'add' > "$RECORD/releases-after.json"
 jq -r '.[] | [.namespace, .name, .revision, .status] | @tsv' "$RECORD/releases-after.json"
-jq -e 'length == 10 and all(.[]; .status == "deployed")' "$RECORD/releases-after.json"
+jq -e '([.[] | .namespace + "/" + .name] | sort) == ["default/demo-resources", "default/jaeger", "default/prometheus",
+         "jaeger/demo-resources", "jaeger/jaeger", "opensearch/demo-resources", "opensearch/opensearch",
+         "opensearch/opensearch-dashboards", "otel-demo/demo-resources", "otel-demo/otel-demo"]
+       and all(.[]; .status == "deployed")' "$RECORD/releases-after.json"
+EOF
 ```
 
 Run the drift report again and compare the Service allocations, which hash each
@@ -834,12 +992,15 @@ Service's UID and addresses, with the report from before:
 
 <!-- not-rehearsed: the drift report needs the real charts and objects, as in the checks before adoption -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}"
 python3 scripts/demo/live_drift.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
   --output "$RECORD/live-drift-after.json"
 diff <(jq -S '[.objects[] | select(.serviceAllocationSHA256) | {identity, serviceAllocationSHA256}]' \
          "$RECORD/live-drift-before.json") \
      <(jq -S '[.objects[] | select(.serviceAllocationSHA256) | {identity, serviceAllocationSHA256}]' \
          "$RECORD/live-drift-after.json")
+EOF
 ```
 
 It must exit 0 with no difference in the allocations, and no companion object may
@@ -852,18 +1013,23 @@ change and the engine switch of phase 7.
 ### Recover a failed release
 
 A release is `failed` when its last Helm transaction failed: the record's `error`
-names it and its `statusAfter` is `failed`. Diagnose before any retry. Set `ns`
+names it and its `statusAfter` is `failed`. Diagnose before any retry. Export `ns`
 and `release`, then read its history, the reason Helm stored and its Pods:
 
 <!-- rehearse: release-diagnostics -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${KUBECONFIG:?}" "${ns:?}" "${release:?}"
 helm history "$release" --namespace "$ns" --max 5
 helm status "$release" --namespace "$ns" -o json | jq -r '.info.status + ": " + .info.description'
 kubectl --namespace "$ns" get pods -o wide
+EOF
 ```
 
 <!-- rehearse: release-events -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${KUBECONFIG:?}" "${ADMIN_KUBECONFIG:?}" "${ADMIN_CONTEXT:?}" "${ns:?}"
 if [[ "$ns" == default ]]; then
   # The deployer role reads no events in default: this read is the administrator's.
   kubectl --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" --namespace "$ns" \
@@ -871,6 +1037,7 @@ if [[ "$ns" == default ]]; then
 else
   kubectl --namespace "$ns" get events --sort-by=.lastTimestamp
 fi
+EOF
 ```
 
 Read a failing Pod's log with `kubectl --namespace "$ns" logs <pod>`; in `default`
@@ -882,20 +1049,28 @@ is a reviewed commit on `main`, never a change made by hand.
   `failed` release even when its diff is empty.
 - **Image mode `live`** (during adoption): the engine refuses every apply while a
   release is not `deployed`, because Helmfile reports such a release as changed
-  and a live-mode apply must change nothing. Return the release to its last
-  deployed revision instead. This prints that revision, and stops unless the
-  latest revision is `failed` or pending and the one before it is `deployed`:
+  and a live-mode apply must change nothing. Return the release to the revision
+  this prints instead. It prints the last `deployed` revision when the latest is
+  `failed`, `pending-install` or `pending-upgrade` and the one before it is
+  `deployed`; for an interrupted `pending-rollback` it prints the revision that
+  rollback was returning to, its `rollback_revision`, so that the intended
+  rollback is redone. Otherwise it stops:
 
-  <!-- rehearse: last-deployed -->
+  <!-- rehearse: recovery-revision -->
   ```bash
+  bash -euo pipefail <<'EOF'
+  : "${KUBECONFIG:?}" "${ns:?}" "${release:?}"
   helm history "$release" --namespace "$ns" --max 2 -o json | jq -er '
-    if length == 2 and .[0].status == "deployed"
-       and (.[1].status == "failed" or (.[1].status | startswith("pending-")))
+    if length == 2 and .[1].status == "pending-rollback" and (.[1].rollback_revision // 0) > 0
+    then .[1].rollback_revision
+    elif length == 2 and .[0].status == "deployed"
+         and (.[1].status == "failed" or (.[1].status | startswith("pending-")))
     then .[0].revision
     else error("Stop: the latest revision is not failed or pending, or the one before it is not deployed") end'
+  EOF
   ```
 
-  Set `REVISION` to the printed number, roll back with
+  Export `REVISION` as the printed number, roll back with
   [Roll back to a recorded revision](#roll-back-to-a-recorded-revision), and then
   dispatch the live-mode apply again. Its record must show the no-op of the
   adoption step.
@@ -910,7 +1085,8 @@ OpenSearch upgrade that changed the engine version cannot be rolled back; see
 A `pending-install`, `pending-upgrade` or `pending-rollback` status means a Helm
 transaction started and has not recorded its end. While its writer runs that is
 normal. The engine refuses every run, before any write, while one of the ten
-releases is pending.
+releases is pending. A rollback run from Cloud Shell that the session cut off,
+for example after an idle timeout, also leaves `pending-rollback`.
 
 1. List the queued and running writers as in step 1 of
    [the read-only checks](#read-only-checks-before-adoption). If one is running,
@@ -918,24 +1094,26 @@ releases is pending.
    Helm transaction.
 2. Read the release's history and diagnostics as for
    [a failed release](#recover-a-failed-release). The `updated` time of the
-   pending revision, and the deploy record of the run that wrote it, show which
-   transaction it was.
-3. Recovering is safe only when all of these hold: no writer is queued or running;
-   the run that wrote the pending revision has ended, or the revision's `updated`
-   time is older than the deploy job's 330-minute limit; the latest revision is
-   the pending one and the revision before it is `deployed`; and in `opensearch`,
-   both revisions have the same application version. Then print the revision to
-   return to with the `last-deployed` command of
-   [a failed release](#recover-a-failed-release), set `REVISION` to it, and roll
-   back with [Roll back to a recorded revision](#roll-back-to-a-recorded-revision).
-   The rollback writes a new `deployed` revision on top of the pending one, and
-   the engine reads only the latest. Dispatch an apply again; in live mode its
-   record must show the no-op.
-4. Stop and escalate otherwise: a `pending-install` (there is no earlier revision;
-   for a companion, use de-adoption step 1), a revision before the pending one
-   that is not `deployed`, a writer that may still hold the release, or an
-   OpenSearch version change. Never edit or delete a release record to clear a
-   pending state.
+   pending revision, and the deploy record of the run that wrote it, or the
+   operator's own record of a rollback, show which transaction it was.
+3. Recovering is safe only when all of these hold: no writer is queued or running
+   and no rollback is still running in a Cloud Shell session; the run that wrote
+   the pending revision has ended, or the revision's `updated` time is older than
+   the deploy job's 330-minute limit; the latest revision is the pending one; the
+   revision before it is `deployed`, or the pending revision is a rollback whose
+   target is known; and in `opensearch`, the target has the same application
+   version. Then print the revision to return to with the `recovery-revision`
+   block of [a failed release](#recover-a-failed-release), export `REVISION` as
+   it, and roll back with
+   [Roll back to a recorded revision](#roll-back-to-a-recorded-revision). The
+   rollback writes a new `deployed` revision on top of the pending one, and the
+   engine reads only the latest. Dispatch an apply again; in live mode its record
+   must show the no-op.
+4. Stop and escalate otherwise: a `pending-install` of a release with no earlier
+   revision (for a companion, use de-adoption step 1), a revision before the
+   pending one that is not `deployed`, a writer that may still hold the release,
+   or an OpenSearch version change. Never edit or delete a release record to
+   clear a pending state.
 
 ### Roll back to a recorded revision
 
@@ -958,64 +1136,81 @@ before it:
 - **Revert the commit on `main`** in a reviewed pull request, so that the next
   apply finds an empty diff for the rolled-back release.
 
-Pause, let queued and running writers finish, and copy the record of the run to
-roll back (as after an install). List the releases it changed and their earlier
-revisions:
+Pause, let queued and running writers finish, and download and move the record of
+the run to roll back as after an install. List the releases it changed and their
+earlier revisions. A companion that the run installed has no earlier revision:
+remove it with [De-adopt companion releases](#de-adopt-companion-releases)
+instead:
 
 <!-- rehearse: recorded-revisions -->
 ```bash
-jq -r '.releases[] | select(.changed != false) | [.id, .revisionBefore, .revisionAfter, .statusAfter] | @tsv' \
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${RUN_ID:?}"
+jq -r '.releases[] | select(.changed != false)
+  | [.id, (.revisionBefore // "none: de-adopt this companion instead"), .revisionAfter, .statusAfter] | @tsv' \
   "$RECORD/runs/$RUN_ID/deploy-record.json"
+EOF
 ```
 
 Roll back each listed release in the reverse of the record's order, OTel before
-OCI. Set `ns`, `release` and `REVISION` (its `revisionBefore`) and run the
+OCI. Export `ns`, `release` and `REVISION` (its `revisionBefore`) and run the
 following. It refuses a revision that is not in the history, and in `opensearch`
-one with another application version, because that would be a downgrade:
+one with another application version, because that would be a downgrade. It waits
+up to 20 minutes for the rolled-back objects; keep the Cloud Shell tab active
+meanwhile, because a session cut off mid-rollback leaves the release
+`pending-rollback` (recover it as a [pending release](#recover-a-pending-release),
+which redoes this rollback). Success is a `deployed` latest revision that records
+this rollback's target; Helm records a failed rollback as `failed`:
 
 <!-- rehearse: rollback -->
 ```bash
-if [[ -n "${ns:-}" && -n "${release:-}" && -n "${REVISION:-}" ]] &&
-   helm history "$release" --namespace "$ns" -o json > "$RECORD/rollback-$ns-$release-history.json" &&
-   jq -e --arg rev "$REVISION" --arg ns "$ns" '
-     (map(select((.revision | tostring) == $rev)) | length) == 1 and
-     ($ns != "opensearch" or (map(select((.revision | tostring) == $rev))[0].app_version == last.app_version))' \
-     "$RECORD/rollback-$ns-$release-history.json" >/dev/null; then
-  helm rollback "$release" "$REVISION" --namespace "$ns" --wait=watcher --timeout 60m
-  diff <(helm get manifest "$release" --namespace "$ns" --revision "$REVISION") \
-       <(helm get manifest "$release" --namespace "$ns") && echo "Revision $REVISION is live again"
-else
-  echo "Stop: set ns, release and REVISION; the revision must be in the history, and in opensearch keep the version" >&2
-  false
-fi
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}" "${ns:?}" "${release:?}" "${REVISION:?}"
+history="$RECORD/rollback-$ns-$release-$(date -u +%Y%m%dT%H%M%SZ).json"
+helm history "$release" --namespace "$ns" -o json > "$history"
+jq -e --arg rev "$REVISION" --arg ns "$ns" '
+  (map(select((.revision | tostring) == $rev)) | length) == 1 and
+  ($ns != "opensearch" or (map(select((.revision | tostring) == $rev))[0].app_version == last.app_version))' \
+  "$history" >/dev/null ||
+  { echo "Stop: revision $REVISION is not in the history, or rolling back would change the OpenSearch version" >&2; exit 1; }
+helm rollback "$release" "$REVISION" --namespace "$ns" --wait=watcher --timeout 20m
+helm history "$release" --namespace "$ns" --max 1 -o json |
+  jq -e --arg rev "$REVISION" '.[0].status == "deployed" and ((.[0].rollback_revision | tostring) == $rev)'
+echo "Revision $REVISION is deployed again"
+EOF
 ```
 
-The release must be `deployed` at a new revision whose manifest is the one of
-`$REVISION`. Then verify the stack's health and compare the identities with a
-capture taken before the rollback. Restore supplemental objects and fingerprint
-keys only from reviewed captures. Record the rollback, its reason and how `main`
-was paired with it.
+Then verify the stack's health and compare the identities with a capture taken
+before the rollback. Restore supplemental objects and fingerprint keys only from
+reviewed captures. Record the rollback, its reason and how `main` was paired with
+it.
 
 ### Repair an immutable StatefulSet field
 
 An upgrade that changes a StatefulSet field Kubernetes does not allow to change,
-for example `podManagementPolicy`, `serviceName` or the selector, fails with a
-`Forbidden` error and leaves the release `failed`. No live-mode apply can reach
-this, because its diff must be empty; it comes from a digest-mode apply, for
-example of a chart bump. The repair removes the StatefulSet object only, keeps its
-Pod and claim, and lets Helmfile create it again with the new spec. Treat any
-change to the claim templates as a storage change that needs explicit approval
-([deployer access](deployer-access.md#what-it-does-not-grant)). The steps
-below are for `opensearch/opensearch-cluster-single`, the only StatefulSet of the
-ten releases. In `live` mode the engine refuses a failed release, and the refused
+for example `podManagementPolicy`, `serviceName`, the selector or the claim
+templates, fails and leaves the release `failed`. On Kubernetes 1.37 the error
+names the field and says `field is immutable`; clusters from 1.33 to 1.36 report
+one `Forbidden` error for the spec instead. No live-mode apply can reach this,
+because its diff must be empty; it comes from a digest-mode apply, for example of
+a chart bump. The repair removes the StatefulSet object only, keeps its Pod and
+claim, and lets Helmfile create it again with the new spec. Treat any change to
+the claim templates as a storage change that needs explicit approval
+([deployer access](deployer-access.md#what-it-does-not-grant)). The steps below are
+for `opensearch/opensearch-cluster-single`, the only StatefulSet of the ten
+releases. In `live` mode the engine refuses a failed release, and the refused
 change never reached the StatefulSet, which keeps its earlier spec: recover with
 [Recover a failed release](#recover-a-failed-release) instead of these steps.
 
-Confirm the cause:
+Pause the schedule and let queued and running writers finish first, as in
+[the read-only checks](#read-only-checks-before-adoption). Then confirm the cause:
 
 <!-- rehearse: statefulset-diagnose -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${KUBECONFIG:?}"
 helm status opensearch --namespace opensearch -o json | jq -r '.info.status + ": " + .info.description'
+EOF
 ```
 
 Record the data claim and the StatefulSet's claim retention. Deleting the object
@@ -1024,6 +1219,8 @@ for deletion is `Retain`, the default:
 
 <!-- rehearse: statefulset-claim -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}"
 claim=$(kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json | jq -er '
   [.spec.containers[] | select(.name == "opensearch") | .volumeMounts[]
    | select(.mountPath == "/usr/share/opensearch/data") | .name] as $mounted
@@ -1035,6 +1232,30 @@ kubectl --namespace opensearch get statefulset opensearch-cluster-single -o json
   jq '{uid: .metadata.uid, retention: (.spec.persistentVolumeClaimRetentionPolicy // {})}' \
   > "$RECORD/opensearch-statefulset-before.json"
 cat "$RECORD/opensearch-claim-before.json" "$RECORD/opensearch-statefulset-before.json"
+EOF
+```
+
+Compare the selector of the new render, which the failed revision stores, with
+the running Pod's labels. When it still matches, the new StatefulSet adopts the
+running Pod:
+
+<!-- rehearse: statefulset-selector -->
+```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}"
+helm get manifest opensearch --namespace opensearch | python3 -c '
+import json, sys, yaml
+sets = [d for d in yaml.safe_load_all(sys.stdin) if d and d.get("kind") == "StatefulSet"]
+print(json.dumps([d["spec"]["selector"].get("matchLabels", {}) for d in sets]))' > "$RECORD/opensearch-selector.json"
+kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json | jq '.metadata.labels' \
+  > "$RECORD/opensearch-pod-labels.json"
+if jq -e --slurpfile labels "$RECORD/opensearch-pod-labels.json" \
+     'length == 1 and (.[0] | to_entries | all(.value == $labels[0][.key]))' "$RECORD/opensearch-selector.json" >/dev/null; then
+  echo "The new selector matches the running Pod"
+else
+  echo "The new selector does not match the running Pod: the administrator deletes it before the dispatch"
+fi
+EOF
 ```
 
 Delete the StatefulSet with orphan propagation. The garbage collector removes the
@@ -1043,44 +1264,53 @@ grants this `delete`:
 
 <!-- rehearse: statefulset-orphan -->
 ```bash
-if jq -e '.phase == "Bound" and .owners == []' "$RECORD/opensearch-claim-before.json" >/dev/null &&
-   jq -e '(.retention.whenDeleted // "Retain") == "Retain"' "$RECORD/opensearch-statefulset-before.json" >/dev/null; then
-  kubectl --namespace opensearch delete statefulset opensearch-cluster-single --cascade=orphan --wait=true
-  kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json |
-    jq -e '(.metadata.ownerReferences // []) == [] and .status.phase == "Running"'
-else
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}"
+if ! jq -e '.phase == "Bound" and .owners == []' "$RECORD/opensearch-claim-before.json" >/dev/null ||
+   ! jq -e '(.retention.whenDeleted // "Retain") == "Retain"' "$RECORD/opensearch-statefulset-before.json" >/dev/null; then
   echo "Stop: the data claim is not Bound and unowned, or the StatefulSet would delete its claims" >&2
-  false
+  exit 1
 fi
+kubectl --namespace opensearch delete statefulset opensearch-cluster-single --cascade=orphan --wait=true
+kubectl --namespace opensearch get pod opensearch-cluster-single-0 -o json |
+  jq -e '(.metadata.ownerReferences // []) == [] and .status.phase == "Running"'
+EOF
 ```
 
-Recreate it through Helmfile: dispatch an apply, as in
-[Adopt and verify the no-op](#adopt-and-verify-the-no-op). In `digest` mode the
-engine syncs the failed release, and Helm creates the missing StatefulSet with the
-new spec. The new StatefulSet adopts the running Pod when its selector still
-matches the Pod's labels, and its rolling update replaces the Pod on the same
-claim if the pod template changed. If the new selector does not match, the Pod
-stays orphaned and the new StatefulSet cannot create a Pod of the same name: the
-administrator deletes the orphaned Pod, which the deployer role cannot, and the
-StatefulSet creates it again on the same claim:
+Only when the selector check said it does not match: the Pod would stay orphaned
+and the new StatefulSet could not create a Pod of the same name, so the
+administrator deletes the orphaned Pod now, before the dispatch, which the
+deployer role cannot. The claim stays, and the new StatefulSet creates the Pod on
+it again:
 
 <!-- not-rehearsed: the rehearsal's change keeps the selector, so its Pod is adopted and this branch does not occur -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${ADMIN_KUBECONFIG:?}" "${ADMIN_CONTEXT:?}"
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" --context "$ADMIN_CONTEXT" --namespace opensearch \
   delete pod opensearch-cluster-single-0
+EOF
 ```
 
-Then verify that the StatefulSet is ready, the release `deployed`, and the claim
-the same object bound to the same volume:
+Recreate the StatefulSet through Helmfile: dispatch an apply, as in
+[Adopt and verify the no-op](#adopt-and-verify-the-no-op). In `digest` mode the
+engine syncs the failed release, and Helm creates the missing StatefulSet with the
+new spec. Its rolling update replaces the Pod on the same claim if the pod
+template changed. Then verify that the StatefulSet is ready, the release
+`deployed`, and the claim the same object bound to the same volume:
 
 <!-- rehearse: statefulset-verify -->
 ```bash
+bash -euo pipefail <<'EOF'
+: "${RECORD:?}" "${KUBECONFIG:?}"
 kubectl --namespace opensearch rollout status statefulset/opensearch-cluster-single --timeout=10m
 helm history opensearch --namespace opensearch --max 1 -o json | jq -e '.[0].status == "deployed"'
 kubectl --namespace opensearch get persistentvolumeclaim "$(jq -r .name "$RECORD/opensearch-claim-before.json")" -o json |
   jq '{name: .metadata.name, uid: .metadata.uid, volume: .spec.volumeName, phase: .status.phase,
        owners: (.metadata.ownerReferences // [])}' > "$RECORD/opensearch-claim-after.json"
-diff "$RECORD/opensearch-claim-before.json" "$RECORD/opensearch-claim-after.json" && echo "The data claim is unchanged"
+diff "$RECORD/opensearch-claim-before.json" "$RECORD/opensearch-claim-after.json"
+echo "The data claim is unchanged"
+EOF
 ```
 
 Never delete the claim, and never use `--cascade=foreground` or `background`,
@@ -1091,19 +1321,22 @@ which delete the Pod.
 Use this to roll back companion ownership, and to recover from a first companion
 install that left failed revision 1. Pause the schedule first, as in
 [the read-only checks](#read-only-checks-before-adoption), and let queued and
-running writers finish. Repeat the steps for each namespace `$ns` to de-adopt, in
-the reverse of the adoption order. `$RECORD` holds `adopted.json`, written while
-the ownership patches were applied.
+running writers finish. Repeat the steps for each namespace to de-adopt, with
+`ns` exported, in the reverse of the adoption order. `$RECORD` holds
+`adopted.json`, written while the ownership patches were applied.
 
 1. Remove only the stored release records. List them first, by name and status,
    without their contents. The objects of the release are not touched:
 
    <!-- rehearse: deadopt-records -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${ns:?}"
    kubectl --namespace "$ns" get secret --selector owner=helm,name=demo-resources \
      --output custom-columns=NAME:.metadata.name,STATUS:.metadata.labels.status
    kubectl --namespace "$ns" get secret --selector owner=helm,name=demo-resources \
      --output jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' > "$RECORD/demo-resources-records-$ns.txt"
+   EOF
    ```
 
    Review the list, then delete each record by its exact name. The deployer role
@@ -1112,14 +1345,19 @@ the ownership patches were applied.
 
    <!-- rehearse: deadopt-delete -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${ns:?}"
    while IFS= read -r secret; do
-     if [[ "$secret" =~ ^sh\.helm\.release\.v1\.demo-resources\.v[0-9]+$ ]]; then
-       kubectl --namespace "$ns" delete secret "$secret"
-     else
-       echo "Skipped a name that is not a demo-resources release record: $secret" >&2
-     fi
+     [[ "$secret" =~ ^sh\.helm\.release\.v1\.demo-resources\.v[0-9]+$ ]] ||
+       { echo "Stop: $secret is not a demo-resources release record" >&2; exit 1; }
+     kubectl --namespace "$ns" delete secret "$secret"
    done < "$RECORD/demo-resources-records-$ns.txt"
-   helm history demo-resources --namespace "$ns" --max 1 2>&1 | grep 'release: not found'
+   if out=$(helm history demo-resources --namespace "$ns" --max 1 2>&1); then
+     echo "Stop: release records of demo-resources remain in $ns" >&2
+     exit 1
+   fi
+   grep 'release: not found' <<<"$out"
+   EOF
    ```
 
    For a failed first install, stop here when the ownership metadata should stay
@@ -1132,31 +1370,51 @@ the ownership patches were applied.
 
    <!-- rehearse: deadopt-plan -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}"
    python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
      --namespace "$ns" --de-adopt "$RECORD/adopted.json" > "$RECORD/de-adoption-$ns.json"
    jq -r '.[] | "\(.kind)/\(.name): \(.patch | length) operation(s)"' "$RECORD/de-adoption-$ns.json"
+   EOF
    ```
 
 3. Apply it. The planner must then print only empty patches:
 
    <!-- rehearse: deadopt-apply -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${CONTEXT:?}" "${ns:?}"
    bash scripts/demo/apply-ownership-patches.sh "$RECORD/de-adoption-$ns.json" "$KUBECONFIG" "$CONTEXT"
    python3 scripts/demo/companion_ownership.py --kubeconfig "$KUBECONFIG" --context "$CONTEXT" \
-     --namespace "$ns" --de-adopt "$RECORD/adopted.json" | jq -e 'all(.[]; .patch == [])'
+     --namespace "$ns" --de-adopt "$RECORD/adopted.json" | jq -e 'length > 0 and all(.[]; .patch == [])'
+   EOF
    ```
 
 4. Compare each object with its source at the recorded configuration commit, from
    a clean checkout of that commit. Adoption changes metadata only, so no
-   difference is expected:
+   difference is expected. A difference is printed for review; a failed
+   comparison stops the block:
 
    <!-- rehearse: deadopt-compare -->
    ```bash
+   bash -euo pipefail <<'EOF'
+   : "${RECORD:?}" "${KUBECONFIG:?}" "${ns:?}"
    python3 scripts/demo/companion_values.py > "$RECORD/sources.json"
-   jq -c --arg ns "$ns" '.companions[$ns].objects[]' "$RECORD/sources.json" |
-     while IFS= read -r object; do
-       kubectl --namespace "$ns" diff --filename - <<<"$object" || echo "Review the difference above"
-     done
+   count=0
+   while IFS= read -r object; do
+     count=$((count + 1))
+     status=0
+     kubectl --namespace "$ns" diff --filename - <<<"$object" || status=$?
+     if ((status == 1)); then
+       echo "Review the difference above"
+     elif ((status > 1)); then
+       echo "Stop: kubectl diff failed" >&2
+       exit 1
+     fi
+   done < <(jq -c --arg ns "$ns" '.companions[$ns].objects[]' "$RECORD/sources.json")
+   ((count > 0)) || { echo "Stop: no source object for $ns" >&2; exit 1; }
+   echo "Compared $count object(s)"
+   EOF
    ```
 
    Apply a source only after reviewing a reported difference:

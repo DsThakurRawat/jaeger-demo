@@ -91,25 +91,11 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   ([#152](https://github.com/jaegertracing/jaeger-demo/pull/152),
   fixes [#142](https://github.com/jaegertracing/jaeger-demo/issues/142))
 
-- The operator runbook for Helmfile adoption, in `docs/cutover.md`
-  ([Helmfile adoption](docs/cutover.md#helmfile-adoption)): the Cloud Shell
-  operator shell, the read-only checks before adoption, the ownership patches and
-  first companion install of each namespace (`default` first, then `otel-demo`,
-  `opensearch` and `jaeger`), the adoption apply and a second no-op apply with
-  identity comparisons, recovery of a failed or pending release, rollback to a
-  revision from the deploy record and how it pairs with the schedule, repair of an
-  immutable StatefulSet field that keeps the data claim, de-adoption, and
-  incidents and escalation. Its commands run as the manual deployer identity
-  through `scripts/demo/deployer_kubeconfig.py`, which writes a private copy of the
-  administrator's kubeconfig that impersonates that identity; the few steps the
-  deployer role cannot run are marked as the administrator's. The `operations` CI
-  job now also runs `scripts/demo/rehearsals/helmfile-runbook/exercise.py` on a
-  second kind cluster: it reads the runbook's marked commands at run time and runs
-  them verbatim as a user bound to the deployer role, with the workflow dispatches
-  replaced by the engine's reconcile. `scripts/demo/runbook_blocks_test.py` fails
-  when a bash block of the runbook has no marker, when a marked block and the
-  rehearsal's step list disagree, and when a block uses a retired identity, deletes
-  Secrets by selector or uninstalls a release.
+- An operator runbook for Helmfile adoption, recovery, rollback and de-adoption
+  ([Helmfile adoption](docs/cutover.md#helmfile-adoption)), whose commands run as
+  the manual deployer identity through `scripts/demo/deployer_kubeconfig.py`. The
+  `operations` CI job runs its marked commands verbatim on a second kind cluster,
+  and `scripts/demo/runbook_blocks_test.py` keeps them in step with that rehearsal.
   ([#TBD](https://github.com/jaegertracing/jaeger-demo/pull/TBD),
   refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74))
 

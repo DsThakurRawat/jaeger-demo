@@ -4,9 +4,16 @@
 """Read the bash blocks of the Helmfile adoption runbook in docs/cutover.md.
 
 Each bash block of the section carries a marker on the line before its opening fence:
-`<!-- rehearse: <id> -->` when the kind rehearsal (scripts/demo/rehearsals/helmfile-runbook)
-runs it verbatim, or `<!-- not-rehearsed: <reason> -->` when kind cannot run it. The rehearsal
-reads the blocks from the document at run time, so it holds no copy of them.
+
+- `<!-- rehearse: <id> -->`: the kind rehearsal (scripts/demo/rehearsals/helmfile-runbook) runs
+  it verbatim. It reads the blocks from the document at run time, so it holds no copy of them.
+- `<!-- not-rehearsed: <reason> -->`: kind cannot run it, for the reason given.
+- `<!-- session: <reason> -->`: it sets shell state (variables, umask, the pinned shell) in the
+  operator's own shell and touches no cluster.
+
+A block that does work is one `bash -euo pipefail <<'EOF'` command, so that it stops at its first
+failure even when pasted into an interactive shell. Its first lines guard every documented
+variable it reads with `: "${NAME:?}"`, so an empty one stops it before anything runs.
 """
 
 from collections import namedtuple
@@ -17,16 +24,33 @@ ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs/cutover.md"
 SECTION = "## Helmfile adoption"
 FENCE = re.compile(r"^(\s*)```(\S*)\s*$")
-MARKER = re.compile(r"^\s*<!-- (rehearse|not-rehearsed): (.*?) -->\s*$")
+MARKER = re.compile(r"^\s*<!-- (rehearse|not-rehearsed|session): (.*?) -->\s*$")
 IDENTIFIER = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+STRICT_OPEN, STRICT_CLOSE = "bash -euo pipefail <<'EOF'", "EOF"
+# The variables the runbook documents. A block reads no other variable of the operator's shell.
+VARIABLES = frozenset({"REVIEWED_COMMIT", "ADMIN_KUBECONFIG", "ADMIN_CONTEXT", "MANUAL_USER_OCID",
+                       "SCHEDULED_USER_OCID", "RECORD", "KUBECONFIG", "CONTEXT", "ns", "release", "REVISION",
+                       "RUN_ID", "STEP", "FROM"})
+GUARD = re.compile(r"\$\{(\w+):[?=]")
+REFERENCE = re.compile(r"\$\{?([A-Za-z_]\w*)")
+# A command that reaches the cluster through the current kubeconfig.
+CLUSTER = re.compile(r"(?:^|[|;&(]|\$\()\s*(kubectl|helm|helmfile)\s|companion_ownership\.py|deployer_access\.py check|"
+                     r"live_drift\.py|helmfile_deploy\.py diff|apply-ownership-patches\.sh")
 # What a block of this runbook must never run. The read-only plan identity and the separate apply
 # identity are retired; the deployer role cannot delete a collection of Secrets; a companion is
-# never uninstalled, because that deletes the objects it adopted.
+# never uninstalled, because that deletes the objects it adopted; claims and namespaces are
+# preserved; foreground or background cascading deletes a StatefulSet's Pod; a forced rollback
+# or replacement deletes and recreates objects.
 FORBIDDEN = (
     (re.compile(r"\bPLAN_(KUBECONFIG|CONTEXT)\b"), "uses the retired read-only plan identity"),
     (re.compile(r"\bAPPLY_(KUBECONFIG|CONTEXT)\b"), "uses the retired separate apply identity"),
     (re.compile(r"\bhelm\s+(\S+\s+)*(uninstall|delete|del|un)\b"), "uninstalls a Helm release"),
     (re.compile(r"\bhelmfile\s+(\S+\s+)*(destroy|delete)\b"), "deletes a Helmfile release"),
+    (re.compile(r"\bdelete\s+(--?\S+\s+([^-\s]\S*\s+)?)*(persistentvolumeclaims?|pvc|namespaces?|ns)(\b|/)"),
+     "deletes a PersistentVolumeClaim or a namespace"),
+    (re.compile(r"--cascade[=\s]+(foreground|background)\b"), "deletes with foreground or background cascading"),
+    (re.compile(r"\bhelm\s+(\S+\s+)*rollback\b.*\s--force"), "forces a Helm rollback"),
+    (re.compile(r"\breplace\b.*\s--force\b"), "replaces an object by force"),
 )
 SECRET_DELETE = re.compile(r"\bdelete\b.*\bsecrets?\b|\bsecrets?\b.*\bdelete\b")
 SELECTOR = re.compile(r"(--selector\b|\s-l(\s|=|$)|\s-l\S|--all\b|--field-selector\b)")
@@ -48,10 +72,10 @@ def section(text, heading=SECTION):
 def blocks(text, heading=SECTION):
     """Every fenced block of the section as Block(marker, key, code, line).
 
-    marker is "rehearse", "not-rehearsed" or None when the line before the fence is no marker;
-    key is the identifier or the reason; code is the block with its fence's indentation removed;
-    line is the 1-based line of the opening fence. Non-bash blocks have language in key and
-    marker "other".
+    marker is "rehearse", "not-rehearsed", "session" or None when the line before the fence is no
+    marker; key is the identifier or the reason; code is the block with its fence's indentation
+    removed; line is the 1-based line of the opening fence. Non-bash blocks have language in key
+    and marker "other".
     """
     offset, lines = section(text, heading)
     found, i = [], 0
@@ -79,7 +103,33 @@ def blocks(text, heading=SECTION):
 def logical_lines(code):
     """The block's commands, with backslash continuations joined and comments dropped."""
     joined = re.sub(r"\\\n\s*", " ", code)
-    return [line.split(" #", 1)[0] for line in joined.splitlines() if not line.lstrip().startswith("#")]
+    return [line.split(" #", 1)[0] for line in joined.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def strict_body(code):
+    """The script inside a `bash -euo pipefail <<'EOF'` block, or None when the block has another form."""
+    lines = code.rstrip("\n").split("\n")
+    if len(lines) < 3 or lines[0] != STRICT_OPEN or lines[-1] != STRICT_CLOSE or STRICT_CLOSE in lines[1:-1]:
+        return None
+    return lines[1:-1]
+
+
+def unguarded(body):
+    """Documented variables the script reads without a `: "${NAME:?}"` guard in its first lines."""
+    guards, count = [], 0
+    for line in body:
+        if not line.startswith(': "'):
+            break
+        guards += GUARD.findall(line)
+        count += 1
+    rest = body[count:]
+    used = {name for line in rest for name in REFERENCE.findall(line) if name in VARIABLES}
+    # kubectl, Helm and the repository's cluster tools read the deployer kubeconfig unless a line
+    # names the administrator's.
+    if any(CLUSTER.search(line.strip()) and "ADMIN_KUBECONFIG" not in line for line in logical_lines("\n".join(rest))):
+        used.add("KUBECONFIG")
+    return sorted(used - set(guards))
 
 
 def forbidden(code):
@@ -92,6 +142,25 @@ def forbidden(code):
         if SECRET_DELETE.search(line) and SELECTOR.search(line):
             problems.append("deletes Secrets by selector instead of by name")
     return problems
+
+
+def form(block):
+    """What is wrong with the shape of a block for its marker."""
+    body = strict_body(block.code)
+    if block.marker == "session":
+        found = ["is a session block but runs a strict script"] if body is not None else []
+        for line in logical_lines(block.code):
+            if (CLUSTER.search(line.strip()) and "config current-context" not in line) or re.search(r"\bgh\s", line):
+                found.append("is a session block but runs a cluster or GitHub command")
+        return found
+    if body is None:
+        if block.marker == "rehearse":
+            return [f"is not a single {STRICT_OPEN} command"]
+        if len(logical_lines(block.code)) != 1:
+            return [f"has more than one command and is not a single {STRICT_OPEN} command"]
+        return []
+    missing = unguarded(body)
+    return [f"reads {', '.join(missing)} without a guard in its first lines"] if missing else []
 
 
 def problems(text, steps, heading=SECTION):
@@ -109,15 +178,15 @@ def problems(text, steps, heading=SECTION):
         if block.marker == "other":
             continue
         if block.marker is None:
-            found.append(f"The bash block at {where} has no rehearse or not-rehearsed marker")
+            found.append(f"The bash block at {where} has no rehearse, not-rehearsed or session marker")
             continue
         if block.marker == "rehearse":
             if not IDENTIFIER.fullmatch(block.key):
                 found.append(f"The rehearse marker at {where} has an invalid id {block.key!r}")
             ids.append(block.key)
         elif not block.key.strip():
-            found.append(f"The not-rehearsed marker at {where} gives no reason")
-        found += [f"The bash block at {where} {why}" for why in forbidden(block.code)]
+            found.append(f"The {block.marker} marker at {where} gives no reason")
+        found += [f"The bash block at {where} {why}" for why in form(block) + forbidden(block.code)]
     for key in sorted({key for key in ids if ids.count(key) > 1}):
         found.append(f"The rehearse id {key} marks more than one block")
     for key in sorted(set(ids) - set(steps)):

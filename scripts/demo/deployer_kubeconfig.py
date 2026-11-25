@@ -10,7 +10,8 @@ step has exactly the access of ops/rbac/deployer.yaml. The output holds one cont
 one, as its current context, with its cluster and its user. The user entry keeps the
 administrator's credential and gains `as` (and `as-groups` when groups are given); the API server
 checks that the administrator may impersonate, then authorizes the request as the deployer.
-The file is created with mode 0600 and never overwritten.
+The file is created with mode 0600 and never overwritten. It names the impersonated OCID and the
+cluster endpoint, so keep it out of any record that is copied or kept, and delete it after use.
 """
 
 import argparse
@@ -79,9 +80,21 @@ def write(source, context, user, output, groups=()):
     source = Path(source)
     if os.pathsep in str(source):
         raise ValueError("Pass a single kubeconfig file")
-    config = impersonating(yaml.safe_load(source.read_text()), context, user, groups, base=source.resolve().parent)
-    with open(os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as stream:
-        yaml.safe_dump(config, stream, sort_keys=False)
+    try:
+        loaded = yaml.safe_load(source.read_text())
+    except yaml.YAMLError:
+        # The parser's message quotes the input, which holds credentials.
+        raise ValueError("The kubeconfig is not valid YAML") from None
+    config = impersonating(loaded, context, user, groups, base=source.resolve().parent)
+    text = yaml.safe_dump(config, sort_keys=False)
+    descriptor = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with open(descriptor, "w") as stream:
+            stream.write(text)
+    except BaseException:
+        # Leave no partial kubeconfig behind; the next run would refuse to overwrite it.
+        Path(output).unlink(missing_ok=True)
+        raise
     return Path(output)
 
 

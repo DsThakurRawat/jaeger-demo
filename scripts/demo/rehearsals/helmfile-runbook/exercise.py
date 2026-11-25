@@ -5,12 +5,13 @@
 """Rehearse the Helmfile adoption runbook of docs/cutover.md on disposable Kubernetes.
 
 The runbook's bash blocks marked `<!-- rehearse: <id> -->` are read from docs/cutover.md when
-this runs (scripts/demo/runbook_blocks.py) and run verbatim with `bash -euo pipefail` from the
-repository root. Only the variables the runbook documents are set. The operator shell block
-writes the deployer kubeconfig with scripts/demo/deployer_kubeconfig.py, impersonating a fixture
-manual user bound to the committed roles of ops/rbac/deployer.yaml, and every later block runs
-through it; the blocks the runbook marks as the administrator's pass the kind administrator
-kubeconfig themselves.
+this runs (scripts/demo/runbook_blocks.py) and their text runs verbatim with `bash` from the
+repository root. Each is a `bash -euo pipefail <<'EOF'` script, as an operator pastes it. The
+runbook's variables are added to the job's environment, with umask 077, as its session blocks
+set them. The operator shell block writes the deployer kubeconfig with
+scripts/demo/deployer_kubeconfig.py, impersonating a fixture manual user bound to the committed
+roles of ops/rbac/deployer.yaml, and every later block runs through it; the blocks the runbook
+marks as the administrator's pass the kind administrator kubeconfig themselves.
 
 The fixture is the Helmfile engine rehearsal's (rehearsals/helmfile-deploy): six synthetic
 application releases under the real names, in the four real namespaces, plus the real
@@ -21,11 +22,12 @@ environment the dispatch gives the Reconcile step; the artifact download by a co
 record it wrote. The registry lookup, the public health checks and the trace check are stubs.
 
 The walk: the operator shell and the read-only checks; for each namespace the ownership patches
-and the first companion install; the adoption apply and a second no-op apply with unchanged
-identities; a failed release refused in live mode and recovered by rollback; a pending release
-refused and recovered; a rollback to a revision recorded by a digest-mode apply, which the next
-apply undoes; an immutable StatefulSet field repaired by an orphan delete and a sync that keeps
-the claim; and de-adoption of every namespace.
+and the first companion install, with one failed install recovered and retried; the adoption
+apply and a second no-op apply with unchanged identities; a failed release refused in live mode
+and recovered by rollback; a pending release refused and recovered; a rollback to a revision
+recorded by a digest-mode apply, its two refusals, and the next apply that undoes it; an
+immutable StatefulSet field repaired by an orphan delete and a sync that keeps the Pod and the
+claim; and de-adoption of every namespace.
 """
 
 import argparse
@@ -86,11 +88,12 @@ BLOCKS = (
     "releases-after",
     "release-diagnostics",
     "release-events",
-    "last-deployed",
+    "recovery-revision",
     "recorded-revisions",
     "rollback",
     "statefulset-diagnose",
     "statefulset-claim",
+    "statefulset-selector",
     "statefulset-orphan",
     "statefulset-verify",
     "deadopt-records",
@@ -99,10 +102,8 @@ BLOCKS = (
     "deadopt-apply",
     "deadopt-compare",
 )
-# The variables the runbook documents. A block gets these and the inherited toolchain environment only.
-DOCUMENTED = frozenset({"REVIEWED_COMMIT", "ADMIN_KUBECONFIG", "ADMIN_CONTEXT", "MANUAL_USER_OCID",
-                        "SCHEDULED_USER_OCID", "RECORD", "KUBECONFIG", "CONTEXT", "ns", "release", "REVISION",
-                        "RUN_ID", "STEP", "FROM"})
+# The variables the runbook documents. A block gets these added to the job's own environment.
+DOCUMENTED = runbook_blocks.VARIABLES
 # The runbook's adoption order.
 ORDER = ("default", "otel-demo", "opensearch", "jaeger")
 APPLICATIONS = fixture.APPLICATIONS
@@ -193,7 +194,8 @@ def exercise(cfg, context):
     template = root / "fixture-charts/app/templates/statefulset.yaml"
     template.write_text(STATEFULSET)
     head = fixture.commit(root, "fixture StatefulSet")
-    for ns, name in helmfile_deploy.expected_certificates(root):
+    # The OTel Certificates the engine checks, and the OCI one only the administrator can read.
+    for ns, name in helmfile_deploy.expected_certificates(root) + [("default", "demo-jaeger-tls")]:
         admin("apply", "-f", "-", data=fixture.certificate(ns, name))
 
     # The six applications as production holds them before adoption: installed by an earlier writer
@@ -238,19 +240,25 @@ def exercise(cfg, context):
 
     # ------------------------------------------------------------ the runbook's blocks and dispatches
     record_dir = work / "record"
+    deployer = record_dir / "deployer.kubeconfig"
+    # What the runbook's session blocks set in the operator's shell.
     session = {"REVIEWED_COMMIT": head, "ADMIN_KUBECONFIG": str(cfg), "ADMIN_CONTEXT": context,
-               "MANUAL_USER_OCID": MANUAL, "SCHEDULED_USER_OCID": SCHEDULED, "RECORD": str(record_dir)}
+               "MANUAL_USER_OCID": MANUAL, "SCHEDULED_USER_OCID": SCHEDULED, "RECORD": str(record_dir),
+               "KUBECONFIG": str(deployer), "CONTEXT": context}
+    os.umask(0o077)
     ran = []
 
     def block(key, expect_failure=False, **variables):
-        """Run one block of the runbook, read from docs/cutover.md now, verbatim."""
+        """Run one block of the runbook, read from docs/cutover.md now, verbatim. Returns the result."""
         assert key in BLOCKS, key
         assert set(variables) <= DOCUMENTED, set(variables) - DOCUMENTED
         code = runbook_blocks.rehearsed()[key]
-        env = {name: value for name, value in os.environ.items() if name not in DOCUMENTED}
+        assert runbook_blocks.strict_body(code) is not None, f"{key} is not a strict script"
+        env = {name: value for name, value in os.environ.items() if name not in DOCUMENTED | {"PYTHONPATH"}}
         env.update(session)
         env.update(variables)
-        result = subprocess.run(["bash", "-euo", "pipefail", "-c", code], cwd=REPO, env=env, capture_output=True, text=True)
+        # The block's own text, as an operator pastes it into a shell without -e or pipefail.
+        result = subprocess.run(["bash", "-c", code], cwd=REPO, env=env, capture_output=True, text=True)
         label = " ".join(f"{name}={value}" for name, value in sorted(variables.items()))
         print(f"::group::runbook block {key} {label}".rstrip(), flush=True)
         print(result.stdout, end="", flush=True)
@@ -259,7 +267,7 @@ def exercise(cfg, context):
         if bool(result.returncode) != expect_failure:
             raise AssertionError(f"Runbook block {key} ({label}) exited {result.returncode}")
         ran.append(key)
-        return result.stdout
+        return result
 
     commands = []
 
@@ -327,18 +335,25 @@ def exercise(cfg, context):
     def latest():
         return {key: (history(key) or [None])[-1] for key in APPLICATIONS + COMPANIONS}
 
-    def interrupted(key, status):
+    def record_secret(key, revision):
+        ns, name = key.split("/")
+        return admin_json("-n", ns, "get", "secret", f"sh.helm.release.v1.{name}.v{revision}")
+
+    def interrupted(key, status, app_version=None):
         """What a transaction that never recorded its end leaves: a copy of the latest record, one higher.
 
-        Only the release records change, as in the engine rehearsal. Returns the revision it copied.
+        Only the release records change, as in the engine rehearsal. With app_version the copy also
+        names another application version. Returns the revision it copied.
         """
         ns, name = key.split("/")
         revision = history(key)[-1][0]
-        secret = admin_json("-n", ns, "get", "secret", f"sh.helm.release.v1.{name}.v{revision}")
+        secret = record_secret(key, revision)
         payload = release_record(secret)
         payload["version"] = revision + 1
         payload["info"]["status"] = status
         payload["info"]["description"] = f"Rehearsal: a transaction interrupted in {status}"
+        if app_version:
+            payload["chart"]["metadata"]["appVersion"] = app_version
         labels = dict(secret["metadata"]["labels"], status=status, version=str(revision + 1))
         admin("create", "-f", "-", data={"apiVersion": "v1", "kind": "Secret", "type": secret["type"],
                                          "metadata": {"name": f"sh.helm.release.v1.{name}.v{revision + 1}",
@@ -347,31 +362,49 @@ def exercise(cfg, context):
         assert history(key)[-2:] == [(revision, "deployed"), (revision + 1, status)], history(key)
         return revision
 
-    # 1. Operator shell.
-    out = block("operator-kubeconfig")
-    deployer = record_dir / "deployer.kubeconfig"
+    def mark(key, status):
+        """Set the status of the latest record in place, as a transaction that ended so leaves it."""
+        ns, name = key.split("/")
+        secret = record_secret(key, history(key)[-1][0])
+        payload = release_record(secret)
+        payload["info"]["status"] = status
+        secret["data"]["release"] = encoded(payload)
+        secret["metadata"]["labels"]["status"] = status
+        admin("-n", ns, "replace", "-f", "-", data=secret)
+
+    # 1. Operator shell. The session blocks' variables and umask are set above.
+    out = block("operator-kubeconfig").stdout
     assert "act as the manual deployer identity" in out, out
     assert stat.S_IMODE(record_dir.stat().st_mode) == 0o700 and stat.S_IMODE(deployer.stat().st_mode) == 0o600
     assert MANUAL not in out, "The deployer identity's OCID is printed only by kubectl, and not here"
-    session.update(KUBECONFIG=str(deployer), CONTEXT=context)
+    # Started again, the block keeps the kubeconfig it wrote.
+    written = deployer.read_bytes()
+    block("operator-kubeconfig")
+    assert deployer.read_bytes() == written
     # The in-process engine calls, like the workflow's, use the same deployer kubeconfig.
     os.environ["KUBECONFIG"] = str(deployer)
-    assert "manual: 0 difference(s)" in block("impersonated-access")
+    assert "manual: 0 difference(s)" in block("impersonated-access").stdout
 
     # 2. Read-only checks before adoption.
     block("releases-before")
     assert len(json.loads((record_dir / "releases-before.json").read_text())) == 6
     assert all((record_dir / f"history-before-{key.replace('/', '-')}.json").is_file() for key in APPLICATIONS)
-    out = block("access-check")
+    out = block("access-check").stdout
     assert "manual: 0 difference(s)" in out and "scheduled: 0 difference(s)" in out, out
-    out = block("certificates")
+    out = block("certificates").stdout
     assert len(out.strip().splitlines()) == 3 and all(line.endswith("\tTrue") for line in out.strip().splitlines()), out
-    block("certificates-default")
+    assert "default\tdemo-jaeger-tls\tTrue" in block("certificates-default").stdout
+    # The administrator's read fails on a Certificate that is not Ready, as the deployer's does.
+    admin("apply", "-f", "-", data=fixture.certificate("default", "demo-jaeger-tls", ready="False"))
+    block("certificates-default", expect_failure=True)
+    admin("apply", "-f", "-", data=fixture.certificate("default", "demo-jaeger-tls"))
     block("capture-identities", STEP="baseline")
     baseline = json.loads((record_dir / "identities-baseline.json").read_text())
     kinds = {entry["kind"] for entry in baseline}
     assert {"Deployment", "DaemonSet", "StatefulSet", "Service", "ReplicaSet", "PersistentVolumeClaim"} <= kinds, kinds
     claim, = [entry for entry in baseline if entry["kind"] == "PersistentVolumeClaim"]
+    # A block refuses to run without a variable it needs, before any command.
+    assert "STEP" in block("capture-identities", expect_failure=True, STEP="").stderr
     # The live-mode diff of the runbook, on this fixture's state: no application change, and the
     # companions refused because they are not installed yet.
     planned = helmfile_deploy.diff(base("diff"), root=root, run=run, live_images=live_images, verify_charts=charts)
@@ -388,7 +421,19 @@ def exercise(cfg, context):
         assert error is None, error
         install, = [c for c in commands if c[:2] == ["helm", "install"]]
         assert "--take-ownership" not in install and not [c for c in commands if "restart" in c]
-        block("install-check", ns=ns, RUN_ID=f"install-{ns}")
+        block("install-check", ns=ns, RUN_ID=f"install-{ns}", REVIEWED_COMMIT=state["head"])
+        # The check is bound to the run and the commit it names.
+        block("install-check", expect_failure=True, ns=ns, RUN_ID=f"install-{ns}", REVIEWED_COMMIT="f" * 40)
+        if ns == "opensearch":
+            # A first install that failed: the check fails, de-adoption step 1 removes only the
+            # release record, and the install is dispatched again with the ownership metadata kept.
+            mark(f"{ns}/{release_phases.COMPANION}", "failed")
+            block("install-check", expect_failure=True, ns=ns, RUN_ID=f"install-{ns}")
+            assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
+            assert "release: not found" in block("deadopt-delete", ns=ns).stdout
+            record, error = dispatch(f"install-{ns}-again", HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
+            assert error is None, error
+            block("install-check", ns=ns, RUN_ID=f"install-{ns}-again")
         block("capture-identities", STEP=f"companion-{ns}")
         block("compare-identities", STEP=f"companion-{ns}")
     adopted = json.loads((record_dir / "adopted.json").read_text())
@@ -402,6 +447,7 @@ def exercise(cfg, context):
         block("adoption-record", RUN_ID=run_id)
         block("capture-identities", STEP=run_id)
         block("compare-identities", STEP=run_id)
+    block("adoption-record", expect_failure=True, RUN_ID="no-op", REVIEWED_COMMIT="f" * 40)
     assert {key: entry[1] for key, entry in latest().items()} == dict.fromkeys(APPLICATIONS + COMPANIONS, "deployed")
     block("releases-after")
     adopted_revisions = latest()
@@ -413,27 +459,28 @@ def exercise(cfg, context):
     assert isinstance(error, ValueError) and "live-diff" in str(error), error
     assert record["adoptionGate"] == {"gate": "live-diff", "release": "otel-demo/otel-demo", "result": "changes"}, record
     assert not writes()
-    assert "failed" in block("release-diagnostics", ns="otel-demo", release="otel-demo")
+    assert "failed" in block("release-diagnostics", ns="otel-demo", release="otel-demo").stdout
     block("release-events", ns="otel-demo")
     block("release-events", ns="default")
-    revision = block("last-deployed", ns="otel-demo", release="otel-demo").strip()
+    revision = block("recovery-revision", ns="otel-demo", release="otel-demo").stdout.strip()
     assert revision == str(failed), revision
-    block("rollback", ns="otel-demo", release="otel-demo", REVISION=revision)
+    out = block("rollback", ns="otel-demo", release="otel-demo", REVISION=revision).stdout
+    assert f"Revision {revision} is deployed again" in out, out
     after = history("otel-demo/otel-demo")
     assert after[-1] == (failed + 2, "deployed") and "deployed" not in [s for _, s in after[:-1]], after
     record, error = dispatch("after-failed")
     assert error is None, error
     block("adoption-record", RUN_ID="after-failed")
     # The guard: with the release deployed again there is nothing to recover.
-    block("last-deployed", expect_failure=True, ns="otel-demo", release="otel-demo")
+    block("recovery-revision", expect_failure=True, ns="otel-demo", release="otel-demo")
 
     # 7. A pending release: refused before any write, then recovered once no writer holds it.
     pending = interrupted("jaeger/jaeger", "pending-upgrade")
     record, error = dispatch("pending")
     assert isinstance(error, ValueError) and "operator review" in str(error), error
     assert record["outcome"] == "refused" and not writes()
-    assert "pending-upgrade" in block("release-diagnostics", ns="jaeger", release="jaeger")
-    revision = block("last-deployed", ns="jaeger", release="jaeger").strip()
+    assert "pending-upgrade" in block("release-diagnostics", ns="jaeger", release="jaeger").stdout
+    revision = block("recovery-revision", ns="jaeger", release="jaeger").stdout.strip()
     assert revision == str(pending), revision
     block("rollback", ns="jaeger", release="jaeger", REVISION=revision)
     after = history("jaeger/jaeger")
@@ -444,15 +491,26 @@ def exercise(cfg, context):
     block("capture-identities", STEP="after-recovery")
     block("compare-identities", STEP="after-recovery")
 
-    # 8. A rollback to a revision a digest-mode apply recorded, and the next apply that undoes it.
+    # 8. Rollback refusals: a revision that is not in the history, and in opensearch a target with
+    # another application version, which would be a downgrade. Neither writes a revision.
+    held = history("opensearch/opensearch")
+    result = block("rollback", expect_failure=True, ns="opensearch", release="opensearch", REVISION="99")
+    assert "Stop: revision 99" in result.stderr, result.stderr
+    upgraded = interrupted("opensearch/opensearch", "deployed", app_version="rehearsal-2")
+    result = block("rollback", expect_failure=True, ns="opensearch", release="opensearch", REVISION=str(upgraded))
+    assert "OpenSearch version" in result.stderr, result.stderr
+    admin("-n", "opensearch", "delete", "secret", f"sh.helm.release.v1.opensearch.v{upgraded + 1}")
+    assert history("opensearch/opensearch") == held, history("opensearch/opensearch")
+
+    # A rollback to a revision a digest-mode apply recorded, and the next apply that undoes it.
     (root / "helmfile/images.yaml").write_text("mode: digest\n")
-    state["head"] = fixture.commit(root, "digest mode")
+    state["head"] = session["REVIEWED_COMMIT"] = fixture.commit(root, "digest mode")
     digest_images("2" * 40)
     record, error = dispatch("digest")
     assert error is None, error
     changed = {r["id"]: r["revisionBefore"] for r in record["releases"] if r["changed"]}
     assert set(changed) == {"default/jaeger", "jaeger/jaeger"}, changed
-    out = block("recorded-revisions", RUN_ID="digest")
+    out = block("recorded-revisions", RUN_ID="digest").stdout
     listed = [line.split("\t") for line in out.strip().splitlines()]
     assert {(key, int(before)) for key, before, _, _ in listed} == set(changed.items()), listed
     for key, before, _, _ in reversed(listed):
@@ -464,18 +522,22 @@ def exercise(cfg, context):
     assert undone == set(changed), f"The next apply must re-apply main to the rolled-back releases: {undone}"
 
     # 9. An immutable StatefulSet field: the upgrade fails, the object is deleted with orphan
-    # propagation, and the next apply syncs the failed release, which creates it again on the same claim.
+    # propagation, and the next apply syncs the failed release, which creates it again on the same
+    # claim and adopts the same Pod.
     before = admin_json("-n", "opensearch", "get", "statefulset", "opensearch-cluster-single")
+    pod_before = admin_json("-n", "opensearch", "get", "pod", "opensearch-cluster-single-0")
     template.write_text(STATEFULSET.replace("podManagementPolicy: OrderedReady", "podManagementPolicy: Parallel"))
-    state["head"] = fixture.commit(root, "an immutable StatefulSet change")
+    state["head"] = session["REVIEWED_COMMIT"] = fixture.commit(root, "an immutable StatefulSet change")
     digest_images("2" * 40)
     record, error = dispatch("statefulset")
     assert error is not None and record["outcome"] == "failed", record
     assert record["error"]["release"] == "opensearch/opensearch", record["error"]
     assert history("opensearch/opensearch")[-1][1] == "failed"
-    out = block("statefulset-diagnose").lower()
-    assert "failed" in out and "forbidden" in out, out
+    out = block("statefulset-diagnose").stdout.lower()
+    # Kubernetes 1.37 names the field as immutable; 1.33 to 1.36 report one Forbidden error.
+    assert "failed" in out and ("field is immutable" in out or "forbidden" in out), out
     block("statefulset-claim")
+    assert "The new selector matches the running Pod" in block("statefulset-selector").stdout
     block("statefulset-orphan")
     pod = admin_json("-n", "opensearch", "get", "pod", "opensearch-cluster-single-0")
     assert not pod["metadata"].get("ownerReferences"), pod["metadata"].get("ownerReferences")
@@ -489,23 +551,29 @@ def exercise(cfg, context):
     block("statefulset-verify")
     after = admin_json("-n", "opensearch", "get", "statefulset", "opensearch-cluster-single")
     assert after["metadata"]["uid"] != before["metadata"]["uid"] and after["spec"]["podManagementPolicy"] == "Parallel"
+    pod = admin_json("-n", "opensearch", "get", "pod", "opensearch-cluster-single-0")
+    assert pod["metadata"]["uid"] == pod_before["metadata"]["uid"], "The repair replaced the OpenSearch Pod"
+    owners = [ref["uid"] for ref in pod["metadata"].get("ownerReferences", [])]
+    assert owners == [after["metadata"]["uid"]], owners
     data = admin_json("-n", "opensearch", "get", "persistentvolumeclaim", claim["name"])
     assert (data["metadata"]["uid"], data["spec"]["volumeName"]) == (claim["uid"], claim["volume"]), data
 
     # 10. De-adoption of every namespace, in the reverse of the adoption order.
     block("capture-identities", STEP="before-de-adoption")
     for ns in reversed(ORDER):
-        assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns)
-        assert "release: not found" in block("deadopt-delete", ns=ns)
+        assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
+        assert "release: not found" in block("deadopt-delete", ns=ns).stdout
         block("deadopt-plan", ns=ns)
         block("deadopt-apply", ns=ns)
-        assert "Review the difference" not in block("deadopt-compare", ns=ns)
+        out = block("deadopt-compare", ns=ns).stdout
+        assert "Review the difference" not in out and "Compared" in out, out
     block("capture-identities", STEP="after-de-adoption")
     block("compare-identities", FROM="before-de-adoption", STEP="after-de-adoption")
     assert supplemental() == unadopted, "De-adoption must restore every label and annotation and keep every UID"
     for ns in ORDER:
         block("ownership-plan", ns=ns)
         assert all(item["patch"] for item in json.loads((record_dir / f"ownership-{ns}.json").read_text()))
+    assert list(record_dir.glob("ownership-*.*.json")), "The plan block keeps an earlier plan"
     assert all(latest()[key] is None for key in COMPANIONS) and all(latest()[key][1] == "deployed" for key in APPLICATIONS)
 
     missing = sorted(set(BLOCKS) - set(ran))
@@ -513,8 +581,9 @@ def exercise(cfg, context):
     print(json.dumps({"ranAsDeployer": True, "blocksRun": len(ran), "distinctBlocks": len(set(ran)),
                       "companionsAdopted": list(ORDER), "adoptionAndNoOpChangedNothing": True,
                       "adoptedRevisions": {key: value[0] for key, value in adopted_revisions.items()},
-                      "failedRefusedInLiveModeAndRolledBack": True, "pendingRefusedAndRolledBack": True,
-                      "rollbackUndoneByNextApply": True, "statefulSetRecreatedOnSameClaim": True,
+                      "failedFirstInstallRetried": True, "failedRefusedInLiveModeAndRolledBack": True,
+                      "pendingRefusedAndRolledBack": True, "rollbackRefusals": 2, "rollbackUndoneByNextApply": True,
+                      "statefulSetRecreatedOnSamePodAndClaim": True,
                       "deAdoptedAll": True}))
 
 

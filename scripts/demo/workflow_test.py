@@ -961,7 +961,9 @@ class WorkflowTests(unittest.TestCase):
         # The runbook rehearsal runs the documented commands, read from the runbook at run time.
         runbook_source = (ROOT / 'scripts/demo/rehearsals/helmfile-runbook/exercise.py').read_text()
         self.assertIn('runbook_blocks.rehearsed()', runbook_source)
-        self.assertIn('["bash", "-euo", "pipefail", "-c", code]', runbook_source)
+        # Each block's own text runs as an operator pastes it; the block itself is the strict script.
+        self.assertIn('["bash", "-c", code]', runbook_source)
+        self.assertIn('runbook_blocks.strict_body(code) is not None', runbook_source)
 
     def test_a_companion_install_skips_the_image_gate_step(self):
         steps = self.deploy_steps()

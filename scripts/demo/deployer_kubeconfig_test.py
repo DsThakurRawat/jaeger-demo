@@ -8,6 +8,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -110,6 +111,31 @@ class DeployerKubeconfigTest(unittest.TestCase):
     def test_refuses_a_kubeconfig_list(self):
         with self.assertRaisesRegex(ValueError, "single kubeconfig"):
             deployer_kubeconfig.write(f"{self.source}{os.pathsep}{self.source}", "demo-admin", USER, self.output)
+
+    def test_invalid_yaml_is_refused_without_echoing_it(self):
+        self.source.write_text("users: [ {token: secret-token-value\n")
+        with self.assertRaises(ValueError) as caught:
+            deployer_kubeconfig.write(self.source, "demo-admin", USER, self.output)
+        self.assertEqual("The kubeconfig is not valid YAML", str(caught.exception))
+        self.assertNotIn("secret-token-value", str(caught.exception))
+        self.assertFalse(self.output.exists())
+
+    def test_a_failed_write_leaves_no_partial_file(self):
+        real_open = open
+
+        def failing_open(file, *args, **kwargs):
+            stream = real_open(file, *args, **kwargs)
+            if isinstance(file, int):
+                stream.write = lambda text: (_ for _ in ()).throw(OSError("disk full"))
+            return stream
+
+        with mock.patch("builtins.open", failing_open):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                deployer_kubeconfig.write(self.source, "demo-admin", USER, self.output)
+        self.assertFalse(self.output.exists())
+        # The next run can write it.
+        deployer_kubeconfig.write(self.source, "demo-admin", USER, self.output)
+        self.assertTrue(self.output.exists())
 
     def test_does_not_change_its_input(self):
         before = yaml.safe_dump(ADMIN)
