@@ -118,14 +118,14 @@ def locked_state(root, dest, run=None):
     paths (relative to root) and the repositories block removed. Any refusal removes
     the previous derived state, so a stale file never survives a failed run.
     """
-    import yaml  # Only this command needs PyYAML; pull and dependencies stay standard library.
-
     root, dest = Path(root).resolve(), Path(dest).resolve()
     target = root / LOCKED_STATE
     temp = target.with_name(target.name + ".tmp")
     for path in (target, temp):
         path.unlink(missing_ok=True)
     try:
+        import yaml  # Only this command needs PyYAML; pull and dependencies stay standard library.
+
         source = (root / HELMFILE).read_text()
         try:
             state = yaml.safe_load(source)

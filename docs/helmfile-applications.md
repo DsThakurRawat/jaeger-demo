@@ -57,8 +57,11 @@ The first command prints all three release identities in dependency order. Both 
 ## Verify script equivalence
 
 ```bash
+helmfile -f helmfile.yaml repos
 python3 scripts/demo/rehearsals/helmfile-applications/equivalence.py
 ```
+
+The first command registers the repository aliases that the script-era reference renders use; the Helmfile render still uses only the locked state.
 
 This credential-free check uses the extracted scripts' chart versions and equivalent Helm arguments as its reference. It renders each release using Helm and Helmfile, compares full Kubernetes objects by identity including CRDs and hooks, checks both application's exact image references and pull policies, and compares the OTel application selection with Helmfile's native transitive rendering. A synthetic Grafana password makes its two offline renders deterministic. Production planning must compare against the current named Grafana Secret and preserve its UID and payload. Live equivalence, supplemental resource adoption, and rollout verification are separate operator checks. [Adoption contract](MIGRATION.md)
 

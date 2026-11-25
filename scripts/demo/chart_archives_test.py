@@ -322,8 +322,11 @@ class LockedStateTests(unittest.TestCase):
             fixture = Fixture(self.temp.name + "-x")
             self.addCleanup(shutil.rmtree, self.temp.name + "-x", True)
             self.assertEqual(b"reviewed chart", fixture.pull().read_bytes())
+            stale = self.root / chart_archives.LOCKED_STATE
+            stale.write_text("stale")
             with mock.patch.object(chart_archives, "ROOT", self.root), contextlib.redirect_stderr(io.StringIO()) as stderr:
                 self.assertEqual(1, chart_archives.main(["state", str(self.dest)]))
+            self.assertFalse(stale.exists())
             self.assertIn("error: ", stderr.getvalue())
 
 
