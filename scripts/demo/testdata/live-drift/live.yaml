@@ -571,6 +571,31 @@ objects:
       replicas: 1
   batch/v1:Job:default:prometheus-crds-upgrade: null
   batch/v1:Job:default:prometheus-kube-prometheus-admission-create: null
+  monitoring.coreos.com/v1:PrometheusRule:default:prometheus-kube-prometheus-general.rules:
+    apiVersion: monitoring.coreos.com/v1
+    kind: PrometheusRule
+    metadata:
+      annotations:
+        meta.helm.sh/release-name: prometheus
+        meta.helm.sh/release-namespace: default
+        prometheus-operator-validated: 'true'
+      creationTimestamp: '2026-11-01T00:00:00Z'
+      generation: 1
+      labels:
+        app.kubernetes.io/managed-by: Helm
+      managedFields:
+      - manager: helm
+        operation: Update
+      name: prometheus-kube-prometheus-general.rules
+      namespace: default
+      resourceVersion: '1001'
+      uid: 00000000-0000-4000-8000-000000000021
+    spec:
+      groups:
+      - name: general.rules
+        rules:
+        - alert: Watchdog
+          expr: vector(1)
   monitoring.coreos.com/v1:ServiceMonitor:default:prometheus-grafana:
     apiVersion: monitoring.coreos.com/v1
     kind: ServiceMonitor

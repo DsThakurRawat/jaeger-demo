@@ -73,8 +73,8 @@ class FixtureTests(unittest.TestCase):
         actual = {e["identity"]: {k: e[k] for k in ("class", "reasons", "unexplainedFields") if k in e}
                   for e in self.report["objects"]}
         self.assertEqual(actual, expected)
-        self.assertEqual(self.report["summary"], {"identical": 1, "explained": 13, "unexplained": 7, "missing": 2,
-                                                  "total": 23})
+        self.assertEqual(self.report["summary"], {"identical": 1, "explained": 14, "unexplained": 7, "missing": 2,
+                                                  "total": 24})
 
     def test_every_reason_code_is_exercised_and_every_used_code_is_in_the_table(self):
         used = {r for e in self.report["objects"] for r in e["reasons"]}
@@ -245,6 +245,24 @@ class ReasonTests(unittest.TestCase):
             "kubectl.kubernetes.io/last-applied-configuration": "{}"}))
         self.assertEqual(one("default/jaeger", render, live)["unexplainedFields"],
                          ["metadata.annotations.kubectl.kubernetes.io/last-applied-configuration"])
+
+    def test_the_operator_validation_annotation_is_explained_only_on_a_prometheus_rule_set_to_true(self):
+        release = "default/prometheus"
+
+        def rule(kind="PrometheusRule", value="true"):
+            render = {"apiVersion": "monitoring.coreos.com/v1", "kind": kind,
+                      "metadata": {"name": "r", "namespace": "default"}, "spec": {"groups": []}}
+            live = copy.deepcopy(render)
+            live["metadata"] = owned(render["metadata"], release)
+            live["metadata"]["annotations"]["prometheus-operator-validated"] = value
+            return one(release, render, live)
+
+        self.assertEqual(rule()["reasons"], ["helm-ownership", "prometheus-operator-validated"])
+        self.assertEqual(rule()["class"], "explained")
+        # Another value, or the same annotation on another kind, is drift, and its key is never printed.
+        for entry in (rule(value="false"), rule(kind="ServiceMonitor")):
+            self.assertEqual(entry["class"], "unexplained")
+            self.assertEqual(entry["unexplainedFields"], ["metadata.annotations.<live-only>"])
 
     def test_ownership_is_explained_only_for_the_expected_release(self):
         render = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c", "namespace": "default"}}
@@ -833,6 +851,8 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_a_missing_crd_makes_its_objects_missing_without_reading_them(self):
         rendered, _, live = fixture()
+        # The fixture renders no PrometheusRule CRD, so without discovery that kind is unknown, not missing.
+        rendered = [(release, obj) for release, obj in rendered if obj["kind"] != "PrometheusRule"]
         crds = [obj for _, obj in rendered if obj["kind"] == "CustomResourceDefinition"]
         self.assertTrue(crds)
         groups = {}
