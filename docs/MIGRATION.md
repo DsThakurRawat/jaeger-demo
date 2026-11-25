@@ -138,7 +138,7 @@ Exit criteria:
 
 ### 6. Manual helmfile adoption
 
-Status: in progress. The steps are the [Helmfile adoption](cutover.md#helmfile-adoption) runbook. On November 25, at configuration `b32f185`, the schedule was paused, the read-only baseline was taken, and all four namespaces were adopted: the ownership patches were applied and each `demo-resources` companion was installed at revision 1 ([November 25 adoption evidence](#current-evidence-and-unresolved-gates)). The adoption apply and a second no-op apply followed, each changing no application revision, with no change to any captured identity. The maintainer's verification of the result, which is the phase 6 exit, is pending, so no exit criterion is ticked yet.
+Status: done on November 25; the cluster administrator (`jkowall`) verified the adoption at 20:34 UTC. The steps are the [Helmfile adoption](cutover.md#helmfile-adoption) runbook. On November 25, at configuration `b32f185`, the schedule was paused, the read-only baseline was taken, and all four namespaces were adopted: the ownership patches were applied and each `demo-resources` companion was installed at revision 1 ([November 25 adoption evidence](#current-evidence-and-unresolved-gates)). The adoption apply and a second no-op apply followed, each changing no application revision, with no change to any captured identity. The cluster administrator verified the result, the phase 6 exit, on the evidence below.
 
 Requires: helmfile-conversion.
 
@@ -151,9 +151,9 @@ Deliverables:
 
 Exit criteria:
 
-- [ ] Initial manual adoption and no-op apply verified with unchanged supplemental UIDs/selectors/ClusterIPs/pod-template hashes
-- [ ] No unexplained application rollout or resource/storage/route drift
-- [ ] Human verification of successful adoption unlocks scheduled Helmfile operations
+- [x] Initial manual adoption and no-op apply verified with unchanged supplemental UIDs/selectors/ClusterIPs/pod-template hashes
+- [x] No unexplained application rollout or resource/storage/route drift
+- [x] Human verification of successful adoption unlocks scheduled Helmfile operations (November 25, 20:34 UTC, `jkowall`; scheduled Helmfile operations still wait for the phase 7 steps)
 
 ### 7. Promotion and acceptance
 
@@ -302,5 +302,5 @@ Exit criteria:
     | `jaeger` | 4, 20:06 | [run 45691800151](https://github.com/jaegertracing/jaeger-demo/actions/runs/45691800151), both stacks verified, data claim unchanged |
 
   - Adoption apply (P8) and second no-op apply (P9), each a manual dispatch with `engine=helmfile` in `live` image mode at `b32f185`, approved once in `demo-apply`: [run 45693247417](https://github.com/jaegertracing/jaeger-demo/actions/runs/45693247417) from 20:15 UTC and [run 45694815591](https://github.com/jaegertracing/jaeger-demo/actions/runs/45694815591) from 20:25 UTC. Each record passed the runbook's `adoption-record` check: all ten releases `deployed`, applied with `changed: false` and the same revision before and after, the five fingerprints written, no generator restart, compatibility `live: not revalidated`, OCI and then OTel verified (fresh trace, data claim unchanged, Certificates `Ready`). Both runs read the same live image references, the pre-adoption `d0b43f518b8ab45f03c3445a89c216be613752ec` tags. The identity captures after each run equalled the baseline and each other, the ten releases were all `deployed`, and the live drift report after P8 found 232 objects explained, none unadopted, and the same Service allocation hashes (UIDs and ClusterIPs) as the report before adoption. Both stacks were healthy at 20:30 UTC.
-  - Since the first companion install, the scripts engine must not run until phase 7 ([#158](https://github.com/jaegertracing/jaeger-demo/issues/158)). The schedule stays paused until the `mode: digest` change and the engine switch of phase 7. Not done: the maintainer's verification of the adoption (the phase 6 exit) and the maintainer walk-through of the runbook.
+  - Since the first companion install, the scripts engine must not run until phase 7 ([#158](https://github.com/jaegertracing/jaeger-demo/issues/158)). The schedule stays paused until the `mode: digest` change and the engine switch of phase 7. Phase 6 exit: the cluster administrator (`jkowall`) verified the adoption at 20:34 UTC on this evidence. Not done: the maintainer walk-through of the runbook that closes [#74](https://github.com/jaegertracing/jaeger-demo/issues/74), and phase 7.
 - Add delivering PR links, merged commits and evidence as phases complete. Do not mark planned work complete.
