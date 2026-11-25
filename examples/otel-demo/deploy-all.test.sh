@@ -554,6 +554,12 @@ testPinnedChartRendersReviewedApplicationShape() {
   assertContains "$rendered" "image: 'docker.io/library/postgres:18.4@sha256:"
   count=$(printf '%s\n' "$rendered" | grep -E 'image: .*busybox' | grep -c -v '@sha256:' || true)
   assertEquals "every busybox init container should be pinned by digest" 0 "$count"
+  # A digest needs no pull on every start. Left unset, the API server keeps whatever
+  # default an earlier image gave the live object, which the live drift report flags.
+  count=$(printf '%s\n' "$rendered" | grep -c -E 'image: .*busybox' || true)
+  assertEquals "seven init containers should use the pinned busybox" 7 "$count"
+  count=$(printf '%s\n' "$rendered" | grep -A1 -E 'image: .*busybox' | grep -c -E '^ +imagePullPolicy: IfNotPresent$' || true)
+  assertEquals "every busybox init container should set IfNotPresent" 7 "$count"
 
   # product-catalog emits no traces without the chart's SDK configuration file.
   assertContains "$rendered" "value: /otel-config.yml"
@@ -616,8 +622,11 @@ testPinnedChartRendersCheckoutMemoryHeadroom() {
   gomemlimit=$(printf '%s\n' "$checkout" | grep -A1 -- '- name: GOMEMLIMIT$' | tail -1)
   assertContains "$gomemlimit" "48MiB"
 
-  resources=$(printf '%s\n' "$checkout" | grep -A2 '^[[:space:]]*resources:$')
-  assertContains "$resources" "memory: 64Mi"
+  resources=$(printf '%s\n' "$checkout" | grep -A4 '^[[:space:]]*resources:$')
+  assertContains "$resources" "limits:"
+  assertContains "$resources" "requests:"
+  # The request equals the limit; neither may be left to a manual kubectl set.
+  assertEquals "checkout should request and limit 64Mi" 2 "$(printf '%s\n' "$resources" | grep -c 'memory: 64Mi$')"
 }
 
 testPinnedChartRendersHeadlessLoadGeneratorWithoutFlagdUi() {
