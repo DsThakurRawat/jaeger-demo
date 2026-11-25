@@ -118,8 +118,12 @@ deployment.
 - **Chart objects.** The deployer role is derived from the object inventory in
   `ops/rbac/chart-objects.json`. After a chart pin changes, run
   `python3 scripts/demo/helmfile_tools.py run -- python3 scripts/demo/chart_objects.py --check`.
-  It renders the six releases without cluster access and lists every object that has
-  no record. `--write` adds the records; review them, then update
+  Without cluster access it renders the six releases the way the scripts install them
+  and the ten Helmfile releases from the lock-verified `.helmfile-locked.yaml`, fails
+  when the two paths differ, and lists every object and Helmfile release that has no
+  record. It also fails when the inventory's `chartArchiveSHA256` differs from
+  `scripts/demo/chart-archives.lock.json`, so a chart bump runs `--write` too.
+  `--write` adds the records and copies the archive list; review them, then update
   `ops/rbac/deployer.yaml` until `deployer_access_test.py` passes
   ([deployer access](docs/deployer-access.md#changing-the-role)). Both modes
   also render the CRDs with `--include-crds` and fail when their names differ from
