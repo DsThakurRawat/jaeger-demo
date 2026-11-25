@@ -706,6 +706,85 @@ class WorkflowTests(unittest.TestCase):
             checked += 1
         self.assertEqual(3, checked)
 
+    def test_deployer_access_job_follows_adoption_with_a_limit_and_no_helm_action(self):
+        jobs = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']
+        names = list(jobs)
+        self.assertEqual(names.index('adoption') + 1, names.index('deployer-access'))
+        job = jobs['deployer-access']
+        self.assertIsInstance(job['timeout-minutes'], int)
+        for step in job['steps']:
+            with self.subTest(step=step.get('name', step.get('uses'))):
+                # Helm comes from the toolchain lock through helmfile_tools.py run.
+                self.assertFalse(str(step.get('uses', '')).startswith('azure/setup-helm'))
+                if 'uses' in step:
+                    self.assertIs(False, step['with']['persist-credentials'])
+                self.assertIsInstance(step.get('timeout-minutes'), int)
+        # Every step can use its whole limit and the job still ends inside its own.
+        self.assertLessEqual(sum(step['timeout-minutes'] for step in job['steps']), job['timeout-minutes'])
+        self.assertNotIn('cryptography', yaml.safe_dump(job))
+
+    def test_kind_and_its_node_image_have_one_pin_across_the_ci_jobs(self):
+        source = (WORKFLOWS / 'ci.yml').read_text()
+        jobs = yaml.safe_load(source)['jobs']
+        runs = {name: '\n'.join(step.get('run', '') for step in job['steps']) for name, job in jobs.items()}
+        versions = re.findall(r'kind/releases/download/(v\d+\.\d+\.\d+)/kind-linux-amd64', source)
+        digests = re.findall(r"echo '([0-9a-f]{64})  kind' \| sha256sum --check", source)
+        images = re.findall(r'kindest/node:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}', source)
+        # The adoption and deployer-access jobs each download kind; both change together.
+        self.assertEqual(2, len(versions))
+        self.assertEqual(len(versions), len(digests))
+        self.assertEqual(1, len(set(zip(versions, digests))))
+        self.assertEqual(1, len(set(images)))
+        for name in ('adoption', 'deployer-access'):
+            with self.subTest(job=name):
+                self.assertIn('kind-linux-amd64', runs[name])
+                self.assertIn(images[0], runs[name])
+
+    def test_deployer_access_job_uses_a_literal_kubectl_digest_and_the_audited_kind_config(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['deployer-access']
+        install, = [step for step in job['steps'] if '/bin/linux/amd64/kubectl' in step.get('run', '')]
+        self.assertRegex(install['run'], r"echo '[0-9a-f]{64}  bin/kubectl' \| sha256sum --check")
+        # A digest fetched beside the binary proves nothing about the binary.
+        self.assertNotIn('.sha256', install['run'])
+        create, = [step for step in job['steps'] if 'create cluster' in step.get('run', '')]
+        self.assertIn('--name jaeger-demo-deployer-fixture', create['run'])
+        self.assertIn('--config scripts/demo/rehearsals/deployer-access/kind.yaml', create['run'])
+        # kind resolves the policy's relative path against the repository root.
+        self.assertNotIn('working-directory', create)
+        rehearsal = ROOT / 'scripts/demo/rehearsals/deployer-access'
+        config = yaml.safe_load((rehearsal / 'kind.yaml').read_text())
+        mount, = config['nodes'][0]['extraMounts']
+        self.assertEqual('scripts/demo/rehearsals/deployer-access/audit-policy.yaml', mount['hostPath'])
+        self.assertTrue((ROOT / mount['hostPath']).is_file())
+        patch, = config['kubeadmConfigPatchesJSON6902']
+        arguments = {op['value']['name']: op['value']['value'] for op in yaml.safe_load(patch['patch'])
+                     if op['path'] == '/apiServer/extraArgs/-'}
+        self.assertEqual(mount['containerPath'], arguments['audit-policy-file'])
+        source = (rehearsal / 'exercise.py').read_text()
+        self.assertIn(f'AUDIT_LOG = "{arguments["audit-log-path"]}"', source)
+        policy = yaml.safe_load((ROOT / mount['hostPath']).read_text())
+        self.assertEqual('Policy', policy['kind'])
+        self.assertEqual({'level': 'Metadata'}, policy['rules'][-1])
+
+    def test_deployer_access_job_runs_the_rehearsal_on_its_fixed_context_seeded_from_the_base(self):
+        job = yaml.safe_load((WORKFLOWS / 'ci.yml').read_text())['jobs']['deployer-access']
+        runs = [step['run'] for step in job['steps'] if 'run' in step]
+        rehearsal, = [run for run in runs if 'rehearsals/deployer-access/exercise.py' in run]
+        self.assertIn('python3 scripts/demo/helmfile_tools.py run -- python3 '
+                      'scripts/demo/rehearsals/deployer-access/exercise.py', rehearsal)
+        self.assertIn('--context kind-jaeger-demo-deployer-fixture', rehearsal)
+        self.assertIn('base=(--base "$GITHUB_WORKSPACE/baseline")', rehearsal)
+        self.assertEqual(len(runs) - 1, runs.index(rehearsal))
+        step, = [step for step in job['steps'] if step.get('run') == rehearsal]
+        source = (ROOT / 'scripts/demo/rehearsals/deployer-access/exercise.py').read_text()
+        deadline = int(re.search(r'^DEADLINE_MINUTES = (\d+)$', source, re.MULTILINE)[1])
+        self.assertLess(deadline, step['timeout-minutes'])
+        self.assertIn('CONTEXT = "kind-jaeger-demo-deployer-fixture"', source)
+        self.assertIn('choices=(CONTEXT,)', source)
+        base, = [step for step in job['steps'] if step.get('with', {}).get('path') == 'baseline']
+        self.assertEqual("github.event_name == 'pull_request'", base['if'])
+        self.assertEqual('${{ github.event.pull_request.base.sha }}', base['with']['ref'])
+
 
 if __name__ == '__main__':
     unittest.main()
