@@ -247,7 +247,7 @@ def exercise(cfg, context):
         assert stored(ns) == [(1, "deployed")], f"First install did not store one deployed revision in {ns}"
         unchanged(snapshot, f"First install in {ns}")
         # A stored release cannot be installed again. Helmfile apply is then a no-op.
-        count += refused(ns, "Second install", install, [(1, "deployed")], ("cannot re-use a name",))
+        count += refused(ns, "Second install", install, [(1, "deployed")], ("cannot reuse a name", "cannot re-use a name"))
         succeeded(apply(ns), f"Apply after the first install in {ns}")
         assert stored(ns) == [(1, "deployed")], f"No-op apply added a revision in {ns}"
         unchanged(snapshot, f"No-op apply in {ns}")
@@ -310,7 +310,7 @@ def exercise(cfg, context):
     record["metadata"]["labels"]["status"] = "failed"
     kube(["-n", ns, "replace", "-f", "-"], json.dumps(record))
     refusals += refused(ns, "Install over failed revision 1", install, [(1, "failed")],
-                         ("cannot re-use a name",))
+                         ("cannot reuse a name", "cannot re-use a name"))
     snapshot = full_states()
     selector = "owner=helm,name=" + name
     kube(["-n", ns, "delete", "secret", "-l", selector])
