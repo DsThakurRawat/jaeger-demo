@@ -20,9 +20,12 @@ SERVER, CLIENT = 2, 3
 
 
 def trace(service, at, kind=None, *more):
-    """One trace of the service: a span at each (time, kind), as Jaeger's /api/v3/traces returns it."""
+    """One trace of the service: a span at each (time, kind) or (time, kind, status code), as
+    Jaeger's /api/v3/traces returns it. A span without an error has an empty status there."""
     spans = [{"traceId": "e1" * 16, "startTimeUnixNano": str(int(start.timestamp() * 1e9)),
-              **({} if span_kind is None else {"kind": span_kind})} for start, span_kind in ((at, kind), *more)]
+              **({} if span_kind is None else {"kind": span_kind}),
+              "status": {"code": code[0], "message": "failed to charge card"} if code else {}}
+             for start, span_kind, *code in ((at, kind), *more)]
     batch = {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": service}}]},
              "scopeSpans": [{"spans": spans}]}
     return json.dumps({"result": {"resourceSpans": [batch]}}).encode()
@@ -214,10 +217,50 @@ class StackHealthTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 body = trace("checkout", at, kind, (now - timedelta(seconds=300), SERVER))
                 self.assertAlmostEqual(stack_health.recent_spans(body, "checkout", now), 90)
-                with self.assertRaisesRegex(stack_health.TrafficPending, "server span started after the change"):
+                with self.assertRaisesRegex(stack_health.TrafficPending, "server span without an error started after the change"):
                     stack_health.recent_spans(body, "checkout", now, after)
         both = trace("checkout", at, CLIENT, (now - timedelta(seconds=100), SERVER))
         self.assertAlmostEqual(stack_health.recent_spans(both, "checkout", now, after), 100)
+
+    def test_a_failed_server_span_after_a_change_is_no_evidence(self):
+        # checkout answers Internal when a charge fails, which ends its PlaceOrder span with an error.
+        now = datetime.now(timezone.utc)
+        after, at = now - timedelta(seconds=120), now - timedelta(seconds=90)
+        for code in (2, "STATUS_CODE_ERROR"):
+            with self.subTest(code=code):
+                failed = trace("checkout", at, SERVER, (now - timedelta(seconds=30), SERVER, code))
+                self.assertAlmostEqual(stack_health.recent_spans(failed, "checkout", now, after), 90)
+                only_failed = trace("checkout", now - timedelta(seconds=300), SERVER,
+                                    (at, SERVER, code), (now - timedelta(seconds=30), SERVER, code))
+                # A routine check still counts the span; bound to a change it does not.
+                self.assertAlmostEqual(stack_health.recent_spans(only_failed, "checkout", now), 30)
+                with self.assertRaisesRegex(stack_health.TrafficPending, "without an error started after the change"):
+                    stack_health.recent_spans(only_failed, "checkout", now, after)
+        for code in (0, 1, "STATUS_CODE_UNSET", "STATUS_CODE_OK"):
+            with self.subTest(code=code):
+                ok = trace("checkout", now - timedelta(seconds=300), SERVER, (at, SERVER, code))
+                self.assertAlmostEqual(stack_health.recent_spans(ok, "checkout", now, after), 90)
+
+    def test_verification_after_a_change_fails_while_every_order_fails(self):
+        # Every order since the change ended with an error: calls are positive and latency is
+        # finite in buckets wholly after it, and still no order succeeded.
+        now = datetime.now(timezone.utc)
+        minute = now.replace(second=0, microsecond=0)
+        since = minute - timedelta(minutes=4)
+        attempts = [minute - timedelta(seconds=150), minute - timedelta(seconds=100), minute - timedelta(seconds=40)]
+
+        def metrics(name, query):
+            points = [{"timestamp": (minute - timedelta(minutes=n)).isoformat(),
+                       "gaugeValue": {"doubleValue": "0.02" if name == "calls" else "12.5"}} for n in (1, 2)]
+            return json.dumps({"metrics": [{"metricPoints": points}]}).encode()
+
+        failing = [(now - timedelta(seconds=5), CLIENT)] + [(at, SERVER, 2) for at in attempts]
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span without an error"):
+            stack_health.check("otel", public_stack("otel", failing, metrics), since=since)
+        # The same metrics pass once one order succeeds.
+        succeeded = failing + [(minute - timedelta(seconds=20), SERVER)]
+        result = stack_health.check("otel", public_stack("otel", succeeded, metrics), since=since)
+        self.assertEqual(result["finiteSPMBucketUTC"], (minute - timedelta(minutes=1)).isoformat())
 
     def test_buffered_span_metrics_do_not_pass_without_a_server_span_after_the_change(self):
         # The OCI stack's connector flushes its counters every 60 s and Prometheus scrapes them every
@@ -233,7 +276,7 @@ class StackHealthTests(unittest.TestCase):
 
         # frontend's own client calls continue; its last server span ended just before the change.
         stale = [(now - timedelta(seconds=10), CLIENT), (since - timedelta(seconds=20), SERVER)]
-        with self.assertRaisesRegex(stack_health.TrafficPending, "frontend server span started after the change"):
+        with self.assertRaisesRegex(stack_health.TrafficPending, "frontend server span without an error started after the change"):
             stack_health.check("oci", public_stack("oci", stale, metrics), since=since)
         fresh = stale + [(now - timedelta(seconds=30), SERVER)]
         result = stack_health.check("oci", public_stack("oci", fresh, metrics), since=since)
@@ -247,7 +290,7 @@ class StackHealthTests(unittest.TestCase):
         since = now - timedelta(seconds=20)
         read, asked = checkout_stack([since - timedelta(seconds=20 * n) for n in range(1, 45)], now)
         self.assertIsNone(stack_health.check("otel", read)["evidenceSinceUTC"])
-        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span started after the change"):
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span without an error started after the change"):
             stack_health.check("otel", read, since=since)
         # Ten-minute rates for the routine check. The bound one stopped at the missing server span.
         self.assertEqual(asked, [600, 600])
@@ -266,7 +309,7 @@ class StackHealthTests(unittest.TestCase):
         since = minute - timedelta(minutes=4)
         until_change = [since - timedelta(seconds=20 * n) for n in range(1, 45)]
         stalled, _ = checkout_stack(until_change, now)
-        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span started after the change"):
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span without an error started after the change"):
             stack_health.check("otel", stalled, since=since)
         resumed = [minute - timedelta(seconds=150), minute - timedelta(seconds=100), minute - timedelta(seconds=40)]
         recovered, _ = checkout_stack(until_change + resumed, now)

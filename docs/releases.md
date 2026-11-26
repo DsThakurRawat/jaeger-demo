@@ -676,12 +676,15 @@ the pinned tools for every Helm and Helmfile call:
    Each stack's `stack_health.py` evidence must be newer than the start of that
    stack's checks, which is after its last release and its generator restart
    ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)): a `frontend`
-   or `checkout` server span started after it, and the SPM bucket with positive
+   or `checkout` server span without an error status started after it, and the SPM bucket with positive
    server calls and finite latency is one whose whole two-minute rate window began
    after it. The server span is the proof that a request completed after the change,
    because a span is stored only once it has ended; for the OTel stack it is a
    `PlaceOrder` order. Another span of the service does not count: its client spans
-   keep arriving while its requests hang. The bucket alone would not be that proof
+   keep arriving while its requests hang. A server span that ended with an error
+   does not count either: `checkout` ends an order whose charge fails that way. One
+   such span is enough, so the check shows that requests can succeed, not how many
+   do. The bucket alone would not be that proof
    on the OCI stack, whose span metrics are flushed every 60 seconds and scraped
    every 15, so a window can count calls that ended up to about 75 seconds before
    it began. No bucket can qualify
@@ -750,9 +753,9 @@ deployer kubeconfig the runbook writes
   while waiting for all sync sources` after five seconds. The deployer role cannot
   delete a Pod. An administrator deletes the unready one, and its Deployment starts
   another.
-- **A stack's checks fail with no server span or no SPM bucket newer than the
-  change**: the application stopped completing requests after the run's writes, or
-  its traffic stopped. For the OTel stack, look at the newest `checkout` traces for
+- **A stack's checks fail with no server span without an error, or no SPM bucket,
+  newer than the change**: the application stopped completing requests after the
+  run's writes, every request since has failed, or its traffic stopped. For the OTel stack, look at the newest `checkout` traces for
   a `PlaceOrder` span that never ends and at the Pods of `payment` and `flagd`.
   The record's `evidenceSince` holds the time the failed checks were bound to; pass
   it as `--since` to `stack_health.py` to repeat them.

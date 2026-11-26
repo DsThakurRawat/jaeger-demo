@@ -39,7 +39,9 @@ PAGES = {
 # every 60 seconds and Prometheus scrapes it every 15, so a window that began after the
 # change can still count calls that ended up to about 75 seconds before it began. The
 # proof that a request completed after the change is therefore a server span of the
-# service that started after it: a span reaches storage only once it has ended.
+# service that started after it: a span reaches storage only once it has ended. A server
+# span with an error status ended too, but its request failed, so it is not that proof:
+# checkout answers Internal when a charge fails.
 ROUTINE_RATE_SECONDS = 600
 FRESH_RATE_SECONDS = 120
 STEP_SECONDS = 60
@@ -68,10 +70,11 @@ def fetch(url, *, timeout=15):
 
 
 SERVER_KINDS = (2, "SPAN_KIND_SERVER")
+ERROR_STATUSES = (2, "STATUS_CODE_ERROR")
 
 
 def recent_spans(payload, service, now, since=None):
-    """The age of the newest span of the service. With since, of its newest server span after it."""
+    """The age of the newest span of the service. With since, of its newest server span after it without an error."""
     minimum = (now - timedelta(minutes=10)).timestamp()
     if since is not None:
         minimum = max(minimum, since.timestamp())
@@ -89,14 +92,16 @@ def recent_spans(payload, service, now, since=None):
             for scope in batch.get("scopeSpans", []):
                 for span in scope.get("spans", []):
                     at = int(span["startTimeUnixNano"]) / 1e9
-                    if since is not None and span.get("kind") not in SERVER_KINDS:
-                        # Other spans of the service still arrive while its requests hang.
+                    if since is not None and (span.get("kind") not in SERVER_KINDS
+                                              or (span.get("status") or {}).get("code") in ERROR_STATUSES):
+                        # Other spans of the service still arrive while its requests hang, and a
+                        # server span with an error status is a request that failed.
                         continue
                     if minimum <= at <= now.timestamp() and span.get("traceId"):
                         latest = max(at, latest or 0)
     if latest is None:
         if since is not None:
-            raise TrafficPending(f"No {service} server span started after the change")
+            raise TrafficPending(f"No {service} server span without an error started after the change")
         raise TrafficPending(f"No recent matching spans for {service}")
     return round(now.timestamp() - latest, 3)
 
@@ -137,7 +142,7 @@ def check_metrics(calls, latency, now, since=None):
 
 
 def check(stack, read=fetch, *, tracking=None, since=None):
-    """Check one stack. With since, a server span and the SPM bucket must be newer than that time."""
+    """Check one stack. With since, a server span without an error and the SPM bucket must be newer than that time."""
     base, service = STACKS[stack]
     if since is not None and (since.tzinfo is None or since > datetime.now(timezone.utc)):
         raise ValueError("since must be a past time with a UTC offset")
