@@ -755,8 +755,12 @@ deployer kubeconfig the runbook writes
   another.
 - **A stack's checks fail with no server span without an error, or no SPM bucket,
   newer than the change**: the application stopped completing requests after the
-  run's writes, every request since has failed, or its traffic stopped. For the OTel stack, look at the newest `checkout` traces for
-  a `PlaceOrder` span that never ends and at the Pods of `payment` and `flagd`.
+  run's writes, every request since has failed, or its traffic stopped. For the
+  OTel stack, open the newest `checkout` traces. An order that hangs has no
+  `PlaceOrder` span at all, because a span is stored only once it has ended: its
+  trace shows `checkout`'s client spans, such as `oteldemo.CartService/GetCart`,
+  without their parent. An order that failed has a `PlaceOrder` span with an
+  error. Then look at the Pods of `payment` and `flagd`.
   The record's `evidenceSince` holds the time the failed checks were bound to; pass
   it as `--since` to `stack_health.py` to repeat them.
   The releases are `deployed`, so the next run applies nothing new to them and
