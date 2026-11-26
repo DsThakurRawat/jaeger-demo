@@ -19,7 +19,7 @@ and reconciler in its own environment, `demo-scheduled`, behind the
 `DEMO_SCHEDULE_ENABLED` switch. The same job can run the
 [Helmfile engine](#helmfile-engine) instead of the scripts. It is off by default:
 scheduled runs take the scripts until `DEMO_DEPLOY_ENGINE` is `helmfile`, and once a
-companion release is installed the scripts must not run at all
+companion release is installed the scripts refuse to run
 ([the engine switch](#the-engine-switch),
 [Helmfile conversion](https://github.com/jaegertracing/jaeger-demo/issues/1)). The
 generated bundle and read-only `plan` operation of the earlier design are retired
@@ -35,7 +35,7 @@ The current workflow supports these inputs:
 | `jaeger_image_tag` | Explicit Jaeger snapshot tag |
 | `hotrod_image_tag` | Explicit HotROD snapshot tag |
 | `image_tag` | Shared fallback when an independent tag is omitted |
-| `engine` | `scripts` (default) or `helmfile` |
+| `engine` | `scripts` (default) or `helmfile`. `scripts` is refused while a `demo-resources` companion release is installed ([the engine switch](#the-engine-switch)) |
 | `helmfile_operation` | Helmfile only: `apply` (default) or `install-companion` |
 | `companion_namespace` | Helmfile `install-companion` only: `default`, `jaeger`, `opensearch` or `otel-demo`; otherwise `none` |
 
@@ -615,13 +615,54 @@ reviewed change that sets [helmfile/images.yaml](../helmfile/images.yaml) to
 `mode: digest`: a scheduled run refuses `live` mode, so with `live` every scheduled
 run would stop at **Resolve and validate images**.
 
-Going back to the scripts is not a switch flip once a companion is installed. The
-scripts `kubectl apply` the supplemental objects that the companion releases then
-own. First pause the schedule and let every queued or running writer finish
+The scripts engine refuses to run while Helm holds a `demo-resources` companion
+release in any of the four release namespaces
+([#158](https://github.com/jaegertracing/jaeger-demo/issues/158)). The companions
+own the supplemental ingresses, Services and trace generators, and the scripts
+would `kubectl apply` those objects and restart the generators.
+`deploy.py` checks before its first write, on every route it has: a scheduled
+run, a manual dispatch, the reviewed handover and a clean reinstall.
+
+- **What it reads.** `helm list -n <namespace> --max 0 -o json` for `default`,
+  `jaeger`, `opensearch` and `otel-demo`, one namespace at a time, because the
+  deployer role cannot list releases across namespaces. A listing can omit a
+  release, so a companion that it omits is read by name with
+  `helm history demo-resources -n <namespace> --max 1 -o json`, and only Helm's
+  own `release: not found` counts as absent. Both identities already hold this
+  access ([deployer access](deployer-access.md#helmfile-path)).
+- **What counts.** A companion release in any status, a failed first install
+  included. The ownership labels and annotations on the objects do not count:
+  the guard reads release records only.
+- **What a refused run looks like.** **Reconcile demo components** fails with an
+  error annotation that names each namespace holding a companion release and its
+  status, and says that the Helmfile engine is required. The run has read the
+  releases and written nothing: no `kubectl apply`, no `helm upgrade`, no
+  generator restart and no fingerprint. Dispatch again with `engine=helmfile`
+  and `expected_config_sha`, as below. A release read that fails, for example on
+  a denied request, stops the run the same way and is never taken as an absent
+  release.
+- **Where it runs.** In `deploy.py` itself, not in a workflow step, so a run of
+  `scripts/demo/deploy.py` from a shell meets it too. It reads the cluster that
+  `kubectl` writes to and Helm's Secret storage: it ignores `HELM_DRIVER`,
+  `HELM_NAMESPACE` and the `HELM_KUBE*` variables, which could point Helm at
+  another cluster or storage driver where no companion exists.
+- **What it does not cover.** A stack script run directly
+  (`examples/oci/deploy-all.sh` or `examples/otel-demo/deploy-all.sh`), which no
+  workflow does and only an administrator does from a shell
+  ([deployer access](deployer-access.md)), does not pass through `deploy.py`.
+  On a cluster with a companion release, do not run one.
+
+So on an adopted cluster a manual dispatch that leaves `engine` at its default is
+refused, and so is a scheduled run while `DEMO_DEPLOY_ENGINE` is not `helmfile`.
+
+Going back to the scripts is therefore not a switch flip once a companion is
+installed. First pause the schedule and let every queued or running writer finish
 ([failure handling](#failure-handling)), then complete
 [De-adopt companion releases](cutover.md#de-adopt-companion-releases) for each
 adopted namespace, and only then unset `DEMO_DEPLOY_ENGINE` or dispatch with
-`engine=scripts`. A verified Helmfile apply patches the five component
+`engine=scripts`. Step 1 of de-adoption deletes the release records, which is
+what lifts the refusal; complete the remaining steps as well, because the guard
+does not check that the ownership metadata was removed. A verified Helmfile apply patches the five component
 fingerprints in `default/jaeger-demo-deployment-revisions` one key at a time, as
 `deploy.py` does, so the first script run after that does not select components
 only because Helmfile deployed them.

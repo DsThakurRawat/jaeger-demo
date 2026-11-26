@@ -18,6 +18,11 @@ class DeploymentTests(unittest.TestCase):
     def setUp(self):
         self.desired = {name: deploy.fingerprint(name) for name in deploy.COMPONENTS}
         self.env = {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main"}
+        # These tests model a cluster without a companion release, where the scripts engine runs.
+        # CompanionGuardTests below covers the reads of the guard and its refusal.
+        guard = patch("deploy.companion_releases", return_value={})
+        guard.start()
+        self.addCleanup(guard.stop)
 
     def test_command_failures_propagate(self):
         result = deploy.run([sys.executable, "-c", "print('ready')"], capture_output=True)
@@ -521,6 +526,219 @@ class DeploymentTests(unittest.TestCase):
             deploy.reconcile(self.handover_env())
         component.assert_not_called()
         self.assertEqual(1, run.call_count)
+
+
+class CompanionGuardTests(unittest.TestCase):
+    """The scripts engine refuses to run while Helm holds a demo-resources companion release (#158)."""
+
+    NAMESPACES = ("default", "jaeger", "opensearch", "otel-demo")
+    APPLICATIONS = {"default": ("jaeger", "prometheus"), "jaeger": ("jaeger",),
+                    "opensearch": ("opensearch", "opensearch-dashboards"), "otel-demo": ("otel-demo",)}
+    # Every route of reconcile that passes input validation, with what it would go on to write.
+    ROUTES = {
+        "scheduled": {"GITHUB_EVENT_NAME": "schedule"},
+        "push": {"GITHUB_EVENT_NAME": "push"},
+        "manual with the default inputs": {"GITHUB_EVENT_NAME": "workflow_dispatch"},
+        "manual, every component": {"GITHUB_EVENT_NAME": "workflow_dispatch", "JAEGER_DEMO_STACK": "all",
+                                    "JAEGER_OTEL_DEMO_DEPLOY_SCOPE": "all"},
+        "handover": {"GITHUB_EVENT_NAME": "workflow_dispatch", "EXPECTED_CONFIG_SHA": "a" * 40, "GITHUB_SHA": "a" * 40,
+                     "JAEGER_DEMO_STACK": "otel", "JAEGER_OTEL_DEMO_DEPLOY_SCOPE": "jaeger",
+                     "JAEGER_DEMO_JAEGER_IMAGE_TAG": "b" * 40, "JAEGER_DEMO_HOTROD_IMAGE_TAG": "c" * 40},
+        "clean from an administrator's shell": {"GITHUB_EVENT_NAME": "workflow_dispatch", "JAEGER_DEMO_STACK": "all",
+                                                "JAEGER_DEMO_DEPLOY_MODE": "clean"},
+    }
+
+    def setUp(self):
+        self.desired = {name: deploy.fingerprint(name) for name in deploy.COMPONENTS}
+        self.calls = []
+        for name in ("deploy_component", "resolve_snapshots", "handover.preflight"):
+            patcher = patch("deploy." + name)
+            setattr(self, name.split(".")[-1], patcher.start())
+            self.addCleanup(patcher.stop)
+        # The scheduled route reads the kubeconfig's namespace before the guard.
+        patcher = patch("deploy.handover.read", return_value="default")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def cluster(self, companions=None, unlisted=None, denied=()):
+        """A fake `deploy.run` for a cluster whose namespaces hold these companion statuses.
+
+        companions maps a namespace to the status `helm list` shows. unlisted maps a namespace to
+        a status that only the named read shows. denied names namespaces whose named read fails.
+        """
+        companions, unlisted = companions or {}, unlisted or {}
+
+        def run(args, **kwargs):
+            self.calls.append((list(args), kwargs))
+            if args[:2] == ["helm", "list"]:
+                namespace = args[args.index("-n") + 1]
+                names = self.APPLICATIONS[namespace] + (("demo-resources",) if namespace in companions else ())
+                listing = [{"name": name, "namespace": namespace, "revision": "1",
+                            "status": companions.get(namespace, "deployed") if name == "demo-resources" else "deployed"}
+                           for name in names]
+                return subprocess.CompletedProcess(args, 0, stdout=json.dumps(listing))
+            if args[:2] == ["helm", "history"]:
+                namespace = args[args.index("-n") + 1]
+                if namespace in denied:
+                    raise subprocess.CalledProcessError(1, args, stderr="Error: secrets is forbidden")
+                if namespace in unlisted:
+                    return subprocess.CompletedProcess(args, 0, stdout=json.dumps(
+                        [{"revision": 1, "status": unlisted[namespace]}]))
+                raise subprocess.CalledProcessError(1, args, stderr="Error: release: not found")
+            if args[:1] == ["kubectl"] and "get" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": self.desired}))
+            return subprocess.CompletedProcess(args, 0, stdout="")
+
+        return patch("deploy.run", side_effect=run)
+
+    def commands(self):
+        return [args for args, _ in self.calls]
+
+    def env(self, route):
+        return dict({"GITHUB_REF": "refs/heads/main"}, **self.ROUTES[route])
+
+    def assert_only_release_reads(self):
+        # Nothing but the per-namespace listing and the named history read: no kubectl at all,
+        # no helm upgrade, no stack script, no snapshot resolution and no handover preflight.
+        self.assertTrue(self.commands())
+        for args in self.commands():
+            self.assertEqual("helm", args[0], args)
+            self.assertIn(args[1], ("list", "history"), args)
+            self.assertNotIn("-A", args)
+            self.assertNotIn("--all-namespaces", args)
+        self.deploy_component.assert_not_called()
+        self.resolve_snapshots.assert_not_called()
+        self.preflight.assert_not_called()
+
+    def test_a_companion_release_refuses_every_route_before_any_write(self):
+        for route in self.ROUTES:
+            for namespace in self.NAMESPACES:
+                for status in ("deployed", "failed", "pending-install", "superseded", "uninstalling"):
+                    with self.subTest(route=route, namespace=namespace, status=status):
+                        self.calls.clear()
+                        with self.cluster({namespace: status}), self.assertRaises(deploy.CompanionReleaseError) as error:
+                            deploy.reconcile(self.env(route))
+                        message = str(error.exception)
+                        self.assertIn(f"demo-resources companion release in {namespace} ({status}).", message)
+                        self.assertIn("The Helmfile engine is required", message)
+                        self.assertIn("de-adoption", message)
+                        self.assert_only_release_reads()
+
+    def test_the_refusal_names_every_namespace_that_holds_a_companion(self):
+        adopted = {"default": "deployed", "jaeger": "deployed", "opensearch": "failed", "otel-demo": "deployed"}
+        with self.cluster(adopted), self.assertRaises(deploy.CompanionReleaseError) as error:
+            deploy.reconcile(self.env("manual with the default inputs"))
+        self.assertIn("in default (deployed), jaeger (deployed), opensearch (failed), otel-demo (deployed).",
+                      str(error.exception))
+        self.assert_only_release_reads()
+        with self.cluster({"jaeger": "deployed"}), self.assertRaises(deploy.CompanionReleaseError) as error:
+            deploy.reconcile(self.env("manual with the default inputs"))
+        for namespace in ("default", "opensearch", "otel-demo"):
+            self.assertNotIn(namespace + " (", str(error.exception))
+
+    def test_the_refusal_is_a_workflow_error_annotation(self):
+        with self.cluster({"otel-demo": "deployed"}), patch("builtins.print") as printed:
+            with self.assertRaises(deploy.CompanionReleaseError) as error:
+                deploy.reconcile(self.env("scheduled"))
+        self.assertEqual([(("::error::" + str(error.exception),), {"flush": True})],
+                         [(call.args, call.kwargs) for call in printed.call_args_list])
+
+    def test_each_namespace_is_listed_on_its_own_with_the_helmfile_path_command(self):
+        with self.cluster():
+            self.assertEqual({}, deploy.companion_releases({"PATH": "/bin"}))
+        lists = [args for args in self.commands() if args[1] == "list"]
+        self.assertEqual([["helm", *deploy.release_phases.list_args(namespace)] for namespace in self.NAMESPACES], lists)
+        self.assertEqual([["helm", "list", "-n", namespace, "--max", "0", "-o", "json"] for namespace in self.NAMESPACES],
+                         lists)
+        # A listing that omits the companion proves nothing, so each is then read by name.
+        self.assertEqual([["helm", "history", "demo-resources", "-n", namespace, "--max", "1", "-o", "json"]
+                          for namespace in self.NAMESPACES], self.commands()[len(lists):])
+
+    def test_a_companion_that_the_listing_omits_is_found_by_name(self):
+        # Helm's default listing omits a release whose status is unknown.
+        with self.cluster(unlisted={"opensearch": "unknown"}), self.assertRaises(deploy.CompanionReleaseError) as error:
+            deploy.reconcile(self.env("manual with the default inputs"))
+        self.assertIn("in opensearch (unknown).", str(error.exception))
+        self.assert_only_release_reads()
+
+    def test_a_read_that_fails_stops_the_run_and_is_not_an_absent_release(self):
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                self.calls.clear()
+                with self.cluster(denied=("jaeger",)), patch("builtins.print") as printed:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        deploy.reconcile(self.env(route))
+                self.assert_only_release_reads()
+                self.assertEqual([("Error: secrets is forbidden",)], [call.args for call in printed.call_args_list])
+
+        def refused_listing(args, **kwargs):
+            self.calls.append((list(args), kwargs))
+            raise subprocess.CalledProcessError(1, args, stderr="Error: release: not found")
+
+        # Only the named read may report "not found". A listing that fails stops the run whatever it says.
+        self.calls.clear()
+        with patch("deploy.run", side_effect=refused_listing), patch("builtins.print"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                deploy.reconcile(self.env("manual with the default inputs"))
+        self.assertEqual([["helm", "list", "-n", "default", "--max", "0", "-o", "json"]], self.commands())
+
+    def test_the_reads_use_the_cluster_and_storage_that_kubectl_and_the_records_use(self):
+        # Helm's own settings could point the check at another cluster, identity or storage driver,
+        # where it would find no companion. The stack scripts' kubectl ignores all of them.
+        overrides = {"HELM_DRIVER": "memory", "HELM_NAMESPACE": "other", "HELM_KUBECONTEXT": "another-cluster",
+                     "HELM_KUBEAPISERVER": "https://example.test", "HELM_KUBETOKEN": "token",
+                     "HELM_KUBEASUSER": "someone", "HELM_KUBECAFILE": "/tmp/ca"}
+        kept = {"PATH": "/bin", "KUBECONFIG": "/tmp/kubeconfig", "HELM_CACHE_HOME": "/tmp/cache"}
+        with self.cluster({"default": "deployed"}), self.assertRaises(deploy.CompanionReleaseError):
+            deploy.reconcile(dict(self.env("manual with the default inputs"), **overrides, **kept))
+        self.assertTrue(self.calls)
+        for args, kwargs in self.calls:
+            self.assertTrue(kwargs["capture_output"])
+            self.assertEqual(kept, {key: value for key, value in kwargs["env"].items() if key in kept})
+            self.assertEqual([], [key for key in kwargs["env"] if key in overrides])
+
+    def test_invalid_inputs_are_still_refused_without_reading_the_cluster(self):
+        for overrides in ({"GITHUB_REF": "refs/heads/other", "GITHUB_EVENT_NAME": "schedule"},
+                          {"JAEGER_DEMO_STACK": "invalid"}, {"GITHUB_EVENT_NAME": "pull_request"},
+                          {"JAEGER_DEMO_DEPLOY_MODE": "clean", "GITHUB_ACTIONS": "true"}):
+            with self.subTest(overrides=overrides), self.cluster({"default": "deployed"}):
+                with self.assertRaises(ValueError) as error:
+                    deploy.reconcile(dict(self.env("manual with the default inputs"), **overrides))
+                self.assertNotIsInstance(error.exception, deploy.CompanionReleaseError)
+                self.assertEqual([], self.calls)
+
+    def test_without_a_companion_release_the_engine_runs_unchanged(self):
+        # The cluster before adoption and after de-adoption, which removes the release records.
+        expected = {
+            "scheduled": ["otel-jaeger", "oci-jaeger"],
+            "push": [],
+            "manual with the default inputs": ["oci-jaeger"],
+            "manual, every component": list(deploy.COMPONENTS),
+            "handover": ["otel-jaeger"],
+        }
+        for route, components in expected.items():
+            with self.subTest(route=route):
+                self.calls.clear()
+                self.deploy_component.reset_mock()
+                with self.cluster():
+                    self.assertEqual(0, deploy.reconcile(self.env(route)))
+                self.assertEqual(components, [call.args[0] for call in self.deploy_component.call_args_list])
+                commands = self.commands()
+                # The eight release reads come first, then exactly what the engine ran before the guard.
+                self.assertEqual([("helm", "list")] * 4 + [("helm", "history")] * 4,
+                                 [tuple(args[:2]) for args in commands[:8]])
+                rest = commands[8:]
+                self.assertEqual(["kubectl", "-n", "default", "get", "configmap", deploy.STATE,
+                                  "--ignore-not-found", "-o", "json"], rest[0])
+                self.assertEqual([["kubectl", "-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p",
+                                   json.dumps({"data": {name: self.desired[name]}})] for name in components], rest[1:])
+        # The administrator's clean reinstall runs each stack script once, as before.
+        self.calls.clear()
+        with self.cluster():
+            self.assertEqual(0, deploy.reconcile(self.env("clean from an administrator's shell")))
+        self.assertEqual([["bash", str(deploy.ROOT / "examples" / directory / "deploy-all.sh"), "clean"]
+                          for directory in ("oci", "otel-demo")], self.commands()[8:])
+
 
 if __name__ == "__main__":
     unittest.main()

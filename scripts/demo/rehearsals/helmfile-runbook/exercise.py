@@ -28,12 +28,19 @@ and recovered by rollback; a pending release refused and recovered; a rollback t
 recorded by a digest-mode apply, its two refusals, and the next apply that undoes it; an
 immutable StatefulSet field repaired by an orphan delete and a sync that keeps the Pod and the
 claim; and de-adoption of every namespace.
+
+The scripts engine's guard runs on the same cluster as the same user (#158): deploy.reconcile
+refuses, after its release reads and before any write, once the first companion is installed,
+while one is failed and while all four are adopted, and runs again after de-adoption. Its stack
+script is a stub, because the scripts install the real charts.
 """
 
 import argparse
 import base64
+import contextlib
 import gzip
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -43,6 +50,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest import mock
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve()
@@ -421,6 +429,52 @@ def exercise(cfg, context):
         secret["metadata"]["labels"]["status"] = status
         admin("-n", ns, "replace", "-f", "-", data=secret)
 
+    def scripts_engine(event="workflow_dispatch"):
+        """What the Reconcile step runs with engine=scripts, as the deployer: deploy.reconcile.
+
+        A manual run selects the OCI monitoring component, which resolves no image; a scheduled
+        run uses the workflow's defaults. The stack script is a stub. Returns the error or None,
+        the commands deploy.py ran, the components it deployed and what it printed. Its output is
+        kept out of the job log, where its workflow commands would annotate this rehearsal.
+        """
+        ran_commands, deployed, printed = [], [], io.StringIO()
+
+        def recorded(args, **kwargs):
+            ran_commands.append([str(a) for a in args])
+            return real_run(args, **kwargs)
+
+        real_run = deploy.run
+        env = {name: value for name, value in os.environ.items()
+               if name not in ("EXPECTED_CONFIG_SHA", "JAEGER_DEMO_DEPLOY_MODE")}
+        env.update(GITHUB_EVENT_NAME=event, GITHUB_REF="refs/heads/main",
+                   GITHUB_STEP_SUMMARY=str(work / "scripts-summary.md"),
+                   JAEGER_DEMO_STACK="oci", JAEGER_OTEL_DEMO_DEPLOY_SCOPE="jaeger" if event == "schedule" else "monitoring")
+        error = None
+        with mock.patch.object(deploy, "run", recorded), contextlib.redirect_stdout(printed), \
+                mock.patch.object(deploy, "deploy_component", lambda name, _: deployed.append(name)):
+            try:
+                deploy.reconcile(env)
+            except (ValueError, subprocess.CalledProcessError) as caught:
+                error = caught
+        print(f"scripts engine, {event}: {'ran ' + str(deployed) if error is None else error}", flush=True)
+        return error, ran_commands, deployed, printed.getvalue()
+
+    def fingerprints():
+        record = admin_json("-n", "default", "get", "configmap", deploy.STATE)
+        return record["metadata"]["resourceVersion"], record["data"]
+
+    def scripts_engine_refused(holding, event="workflow_dispatch"):
+        """The scripts engine stops after its release reads, naming exactly the namespaces in `holding`."""
+        before = fingerprints()
+        error, ran_commands, deployed, printed = scripts_engine(event)
+        assert isinstance(error, deploy.CompanionReleaseError), error
+        assert printed == f"::error::{error}\n", printed
+        where = ", ".join(f"{ns} ({status})" for ns, status in holding.items())
+        assert f"{release_phases.COMPANION} companion release in {where}." in str(error), error
+        assert "The Helmfile engine is required" in str(error), error
+        assert ran_commands and all(c[:2] in (["helm", "list"], ["helm", "history"]) for c in ran_commands), ran_commands
+        assert not deployed and fingerprints() == before, "A refused scripts-engine run wrote"
+
     # 1. Operator shell. The session blocks' variables and umask are set above.
     out = block("operator-kubeconfig").stdout
     assert "act as the manual deployer identity" in out, out
@@ -459,13 +513,25 @@ def exercise(cfg, context):
     planned = helmfile_deploy.diff(base("diff"), root=root, run=run, live_images=live_images, verify_charts=charts)
     assert planned == {key: "error" if key in COMPANIONS else "no changes" for key in APPLICATIONS + COMPANIONS}, planned
     assert not writes()
+    # Before adoption the scripts engine runs, as the deployer: it reads the releases, finds no
+    # companion, deploys the selected component and records its fingerprint.
+    error, ran_commands, deployed, _ = scripts_engine()
+    assert error is None and deployed == ["oci-monitoring"], (error, deployed)
+    assert [c[:2] for c in ran_commands[:8]] == [["helm", "list"]] * 4 + [["helm", "history"]] * 4, ran_commands
+    assert fingerprints()[1]["oci-monitoring"] == deploy.fingerprint("oci-monitoring")
 
     # 3 and 4. Ownership patches and the first companion install, one namespace at a time.
+    # The namespaces that hold a companion release, with its status, in the order deploy.py names them.
+    companions_held = {}
     for ns in ORDER:
         block("ownership-plan", ns=ns)
         plan = json.loads((record_dir / f"ownership-{ns}.json").read_text())
         assert plan and all(item["patch"] for item in plan), plan
         block("ownership-apply", ns=ns)
+        # The ownership metadata alone is not a release: the scripts engine is refused only for
+        # the namespaces that hold a companion release so far.
+        if ns == ORDER[1]:
+            scripts_engine_refused(companions_held)
         record, error = dispatch(f"install-{ns}", HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
         assert error is None, error
         install, = [c for c in commands if c[:2] == ["helm", "install"]]
@@ -478,6 +544,9 @@ def exercise(cfg, context):
             # release record, and the install is dispatched again with the ownership metadata kept.
             mark(f"{ns}/{release_phases.COMPANION}", "failed")
             block("install-check", expect_failure=True, ns=ns, RUN_ID=f"install-{ns}")
+            # A failed first install is a companion release too.
+            scripts_engine_refused({name: "failed" if name == ns else "deployed"
+                                    for name in release_phases.NAMESPACES if name in companions_held or name == ns})
             assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
             assert "release: not found" in block("deadopt-delete", ns=ns).stdout
             record, error = dispatch(f"install-{ns}-again", HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
@@ -485,6 +554,10 @@ def exercise(cfg, context):
             block("install-check", ns=ns, RUN_ID=f"install-{ns}-again")
         block("capture-identities", STEP=f"companion-{ns}")
         block("compare-identities", STEP=f"companion-{ns}")
+        companions_held = {name: "deployed" for name in release_phases.NAMESPACES if name in companions_held or name == ns}
+        if ns == ORDER[0]:
+            # From the first companion install on, a manual run with the default engine is refused.
+            scripts_engine_refused(companions_held)
     adopted = json.loads((record_dir / "adopted.json").read_text())
     assert len(adopted) == sum(len(sources[ns]["objects"]) for ns in ORDER) == 12, adopted
 
@@ -500,6 +573,10 @@ def exercise(cfg, context):
     assert {key: entry[1] for key, entry in latest().items()} == dict.fromkeys(APPLICATIONS + COMPANIONS, "deployed")
     block("releases-after")
     adopted_revisions = latest()
+    # With all four adopted, a manual and a scheduled scripts-engine run are both refused.
+    assert list(companions_held) == list(release_phases.NAMESPACES), companions_held
+    for event in ("workflow_dispatch", "schedule"):
+        scripts_engine_refused(companions_held, event)
 
     # 6. A failed release, in live mode: the engine refuses it, and a rollback to the last deployed
     # revision recovers it.
@@ -622,8 +699,11 @@ def exercise(cfg, context):
     settle_generators(generator)
     block("capture-identities", STEP="before-de-adoption")
     for ns in reversed(ORDER):
+        # Each namespace that still holds its release records keeps the scripts engine refused.
+        scripts_engine_refused(companions_held)
         assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
         assert "release: not found" in block("deadopt-delete", ns=ns).stdout
+        del companions_held[ns]
         block("deadopt-plan", ns=ns)
         block("deadopt-apply", ns=ns)
         out = block("deadopt-compare", ns=ns).stdout
@@ -636,6 +716,17 @@ def exercise(cfg, context):
         assert all(item["patch"] for item in json.loads((record_dir / f"ownership-{ns}.json").read_text()))
     assert list(record_dir.glob("ownership-*.*.json")), "The plan block keeps an earlier plan"
     assert all(latest()[key] is None for key in COMPANIONS) and all(latest()[key][1] == "deployed" for key in APPLICATIONS)
+    # De-adoption re-enables the scripts engine, the runbook's fallback: it runs as before adoption.
+    assert not companions_held, companions_held
+    admin("-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p",
+          json.dumps({"data": {"oci-monitoring": "stale"}}))
+    error, ran_commands, deployed, _ = scripts_engine()
+    assert error is None and deployed == ["oci-monitoring"], (error, deployed)
+    assert [c[:2] for c in ran_commands[:8]] == [["helm", "list"]] * 4 + [["helm", "history"]] * 4, ran_commands
+    assert [c[:6] for c in ran_commands[8:]] == [
+        ["kubectl", "-n", "default", "get", "configmap", deploy.STATE],
+        ["kubectl", "-n", "default", "patch", "configmap", deploy.STATE]], ran_commands
+    assert fingerprints()[1]["oci-monitoring"] == deploy.fingerprint("oci-monitoring")
 
     missing = sorted(set(BLOCKS) - set(ran))
     assert not missing, f"Blocks the walk never ran: {missing}"
@@ -645,6 +736,7 @@ def exercise(cfg, context):
                       "failedFirstInstallRetried": True, "failedRefusedInLiveModeAndRolledBack": True,
                       "pendingRefusedAndRolledBack": True, "rollbackRefusals": 2, "rollbackUndoneByNextApply": True,
                       "statefulSetRecreatedOnSamePodAndClaim": True,
+                      "scriptsEngineRefusedWhileACompanionExists": True, "scriptsEngineRanAfterDeAdoption": True,
                       "deAdoptedAll": True}))
 
 

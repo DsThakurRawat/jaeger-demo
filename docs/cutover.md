@@ -414,12 +414,15 @@ The invariants hold throughout:
   objects: use [De-adopt companion releases](#de-adopt-companion-releases). An
   OpenSearch or Dashboards downgrade is not a rollback. The scripts can be a
   fallback only after de-adoption.
-- From the first companion install until the schedule switches to Helmfile, the
-  schedule stays paused and no run uses `engine=scripts`: the scripts
-  `kubectl apply` the supplemental objects that the companions then own
-  ([the engine switch](releases.md#the-engine-switch)). Nothing enforces this; it
-  is the operator's rule. Plan the `mode: digest` pull request to follow adoption
-  closely, because there is no daily refresh in between.
+- From the first companion install on, the scripts engine refuses to run: the
+  scripts `kubectl apply` the supplemental objects that the companions then own.
+  `deploy.py` reads the releases of the four namespaces before its first write
+  and stops, naming each namespace that holds a `demo-resources` release, on a
+  manual dispatch that leaves `engine` at its default and on a scheduled run
+  alike ([the engine switch](releases.md#the-engine-switch)). Until the schedule
+  switches to Helmfile, keep it paused: a scheduled run would only be refused.
+  Plan the `mode: digest` pull request to follow adoption closely, because there
+  is no daily refresh in between.
 
 ### How the commands run and how they are rehearsed
 
@@ -491,7 +494,14 @@ namespace, a failed first install and its retry, the adoption apply and the
 no-op, a failed release and its recovery, a pending release refused and then
 recovered, a rollback to a recorded revision with both of its refusals and the
 next apply that undoes it, the StatefulSet repair, and de-adoption, and after each
-step it checks what the step here promises. A block marked `not-rehearsed` needs
+step it checks what the step here promises. It also runs the scripts engine's
+reconcile (`deploy.reconcile`, with the stack script replaced by a stub, because
+the scripts install the real charts) as the same user: before adoption it runs;
+from the first companion install on, with a failed first install, with all four
+adopted (as a manual and as a scheduled run) and before each namespace's
+de-adoption it is refused after its release reads, naming exactly the namespaces
+that hold a companion release, with nothing written; and after the last
+namespace's de-adoption it runs again. A block marked `not-rehearsed` needs
 GitHub, OCI, the public demo or the real charts, and its marker says what the
 rehearsal does instead: a workflow dispatch becomes a call of
 `helmfile_deploy.reconcile` with the environment the dispatch gives the
@@ -1446,8 +1456,16 @@ running writers finish. Repeat the steps for each namespace to de-adopt, with
 Step 1 needs `list` and `delete` on Secrets in the namespace, which the deployer
 role grants without `deletecollection`. Kubernetes cannot limit a list to Helm
 records, so that access covers every Secret in the namespace. Steps 2 to 4 need
-named `get` and `patch` on the allowlisted objects. Only after every adopted
-namespace is de-adopted may a run use `engine=scripts` again.
+named `get` and `patch` on the allowlisted objects.
+
+The scripts engine stays refused while any namespace still holds a
+`demo-resources` release record, and its error names those namespaces
+([the engine switch](releases.md#the-engine-switch)). Deleting the records in
+step 1 is what lifts the refusal for a namespace, so the scripts are the fallback
+only once step 1 is done in every adopted namespace. The guard reads release
+records only: finish steps 2 to 4 in each namespace before a run uses
+`engine=scripts`, so that no object keeps ownership metadata of a release that
+no longer exists.
 
 ### Incidents and escalation
 
