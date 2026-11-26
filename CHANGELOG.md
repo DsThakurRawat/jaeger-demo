@@ -40,6 +40,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 - `docs/MIGRATION.md` records the first scheduled run through the Helmfile
   engine ([#165](https://github.com/jaegertracing/jaeger-demo/pull/165),
   refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+- The daily component updates in `docs/releases.md` say which engine a scheduled
+  run takes and describe the Helmfile engine's selection, order, checks and record
+  beside the scripts engine's. A first scheduled Helmfile run is accepted on its
+  deployment record and all ten releases, and `docs/cutover.md` marks the
+  fingerprint selection review as scripts-only
+  ([#168](https://github.com/jaegertracing/jaeger-demo/pull/168),
+  fixes [#164](https://github.com/jaegertracing/jaeger-demo/issues/164)).
 
 ### Fixed
 
