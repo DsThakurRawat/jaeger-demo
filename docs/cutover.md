@@ -235,6 +235,15 @@ and the live version and trace checks remain part of every upgrade
 
 ## Review scheduled scope
 
+This section was written for a schedule on the scripts engine. The schedule
+switch, the environment and identity review, the activation in step 3 and the smoke
+check are the same under both engines. The fingerprint selection and the release
+and fingerprint comparison of step 4 are not: while the repository variable
+`DEMO_DEPLOY_ENGINE` is `helmfile`, a scheduled run applies all ten releases and
+selects nothing by fingerprint
+([daily component updates](releases.md#with-the-helmfile-engine)). The inspection
+below then shows only what a return to the scripts would select.
+
 The reconciler fingerprints the whole deployment script for each component in its
 stack. The handover guard changes therefore also change the OpenSearch, OTel Demo
 and monitoring fingerprints. Two successful manual Jaeger runs update only their
@@ -281,7 +290,8 @@ approval is not approval to broaden permissions or remove the environment review
 
 The maintainers selected all five components for the 13:00 UTC job. The
 scheduled run is the same `deploy` job of `ci-deploy-demo.yml` as a manual run,
-in the `demo-scheduled` environment, and runs `scripts/demo/deploy.py` directly.
+in the `demo-scheduled` environment. On the scripts engine it runs
+`scripts/demo/deploy.py` directly.
 Keep the repository Actions variable `DEMO_SCHEDULE_ENABLED` set to `false` until
 the steps below are complete. Confirm the effective value if the organization
 defines the same name. A skipped scheduled job receives no deployment environment
@@ -325,7 +335,9 @@ or runner. Manual runs continue to use `demo-apply`.
 4. Find the scheduled run, check its event, configuration SHA, environment,
    access check and component summary, and compare all six live release
    histories and fingerprint keys with the pre-run record. A skipped job does
-   not satisfy the stage exit.
+   not satisfy the stage exit. A run on the Helmfile engine is accepted on its
+   deployment record and all ten releases instead
+   ([accepting the first scheduled run](releases.md#accepting-the-first-scheduled-run)).
    Verify the [per-component checks](releases.md#daily-component-updates) and
    the public health checks on both demos. Record the run URL, versions, trace
    ID, and PVC binding before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
