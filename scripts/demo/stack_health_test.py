@@ -364,3 +364,40 @@ class StackHealthTests(unittest.TestCase):
         values = (stack_health.ROOT / "examples/oci/jaeger-values.yaml").read_text()
         self.assertIn("--basepath=/hotrod", values)
         self.assertTrue(stack_health.FUNCTIONAL["oci"][0].startswith("https://demo.jaegertracing.io/hotrod/dispatch?"))
+
+    def test_evidence_after_a_change_comes_from_the_newest_traces_only(self):
+        # Issue #160 developed this way: orders completed for some minutes after the change, then
+        # every later one hung. Jaeger returns the newest traces first, and the search depth is
+        # kept, so an early success behind that many newer hanging orders does not pass.
+        now = datetime.now(timezone.utc)
+        minute = now.replace(second=0, microsecond=0)
+        since = minute - timedelta(minutes=8)
+        base, service = stack_health.STACKS["otel"]
+        early = [(since + timedelta(seconds=10), SERVER)]
+        hanging = [(now - timedelta(seconds=10 * n), CLIENT) for n in range(1, stack_health.SEARCH_DEPTH + 1)]
+        depths = []
+
+        def metrics(name, query):
+            return json.dumps(metric(minute - timedelta(minutes=1), 0.02 if name == "calls" else 12.5)).encode()
+
+        def newest_first(orders):
+            inner = public_stack("otel", orders, metrics)
+
+            def read(url):
+                parts = urlsplit(url)
+                if not parts.path.endswith("/api/v3/traces"):
+                    return inner(url)
+                depth = int(parse_qs(parts.query)["query.search_depth"][0])
+                depths.append(depth)
+                # One trace per order, the newest first, cut at the requested depth.
+                kept = sorted(orders, key=lambda order: order[0], reverse=True)[:depth]
+                return b"\n".join(trace(service, *order) for order in kept)
+            return read
+
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span without an error"):
+            stack_health.check("otel", newest_first(early + hanging), since=since)
+        self.assertEqual([stack_health.SEARCH_DEPTH], depths)
+        # With one hanging order fewer, the early success is among the newest traces and counts.
+        self.assertEqual(stack_health.check("otel", newest_first(early + hanging[1:]), since=since)["evidenceSinceUTC"],
+                         since.isoformat())
+

@@ -825,7 +825,9 @@ the pinned tools for every Helm and Helmfile call:
    keep arriving while its requests hang. A server span that ended with an error
    does not count either: `checkout` ends an order whose charge fails that way. One
    such span is enough, so the check shows that requests can succeed, not how many
-   do. The bucket alone would not be that proof
+   do. It is looked for in the service's 20 newest traces only, so a request that
+   succeeded just after the change and was followed by 20 failed or hanging ones
+   does not pass: the stack does not work now. The bucket alone would not be that proof
    on the OCI stack, whose span metrics are flushed every 60 seconds and scraped
    every 15, so a window can count calls that ended up to about 75 seconds before
    it began. On the OCI stack even the server span can be a probe: the kubelet's

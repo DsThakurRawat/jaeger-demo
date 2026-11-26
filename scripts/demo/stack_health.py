@@ -75,6 +75,7 @@ def fetch(url, *, timeout=15):
         return raw
 
 
+SEARCH_DEPTH = 20
 SERVER_KINDS = (2, "SPAN_KIND_SERVER")
 ERROR_STATUSES = (2, "STATUS_CODE_ERROR")
 
@@ -183,8 +184,12 @@ def check(stack, read=fetch, *, tracking=None, since=None):
     earliest = now - timedelta(minutes=10)
     if since is not None:
         earliest = max(earliest, since)
+    # Jaeger returns the newest traces first, so the evidence comes from the service's newest
+    # SEARCH_DEPTH traces only. That is intended for a check bound to a change: a request that
+    # succeeded just after the change and was followed by that many failed or hanging ones is
+    # not evidence that the stack works now, which is how the outage of #160 developed.
     criteria = {"query.service_name": service, "query.start_time_min": earliest.isoformat(),
-                "query.start_time_max": now.isoformat(), "query.search_depth": "20"}
+                "query.start_time_max": now.isoformat(), "query.search_depth": str(SEARCH_DEPTH)}
     latest = recent_spans(read(base + "/api/v3/traces?" + urllib.parse.urlencode(criteria)), service, now, since)
     rate = ROUTINE_RATE_SECONDS if since is None else FRESH_RATE_SECONDS
     opts = {"service": service, "spanKind": "server", "lookback": "600000", "step": str(STEP_SECONDS * 1000),
