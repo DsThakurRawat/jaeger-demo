@@ -3,6 +3,7 @@
 
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -119,13 +120,26 @@ class ScriptsEngineGuardTest(unittest.TestCase):
         order = [walk.index(text) for text in (
             "# Before adoption the scripts engine runs",
             "if ns == ORDER[0]:\n            # From the first companion install on",
-            "for event in (\"workflow_dispatch\", \"schedule\"):\n        scripts_engine_refused(held, event)",
+            "for event in (\"workflow_dispatch\", \"schedule\"):\n        scripts_engine_refused(companions_held, event)",
             "for ns in reversed(ORDER):\n        # Each namespace that still holds its release records",
             "# De-adoption re-enables the scripts engine",
             '"scriptsEngineRefusedWhileACompanionExists": True, "scriptsEngineRanAfterDeAdoption": True')]
         self.assertEqual(order, sorted(order))
         self.assertIn("# A failed first install is a companion release too.\n            scripts_engine_refused(", walk)
         self.assertEqual(walk.count("error is None and deployed == [\"oci-monitoring\"]"), 2)
+
+    def test_the_companion_mapping_is_never_rebound_to_something_else(self):
+        # The walk is long and reuses short names. A later step that rebinds this one to another
+        # value breaks the refusals before de-adoption, and only a kind run would show it.
+        source = Path(exercise.__file__).read_text()
+        walk = source[source.index("def exercise("):]
+        bound = re.findall(r"^ +(?:for )?[\w, ]*\bcompanions_held\b[\w, ]*(?: = | in )(.*)$", walk, re.MULTILINE)
+        self.assertEqual(bound, ["{}", '{name: "deployed" for name in release_phases.NAMESPACES '
+                                       "if name in companions_held or name == ns}"])
+        # Every refusal check names the mapping or a mapping literal, never another variable.
+        calls = re.findall(r"scripts_engine_refused\(([^,)\n]*)", walk[walk.index("# 1. Operator shell."):])
+        self.assertEqual(sorted(set(calls)), ["companions_held", "{name: \"failed\" if name == ns else \"deployed\""])
+        self.assertEqual(calls.count("companions_held"), 4)
 
 
 if __name__ == "__main__":

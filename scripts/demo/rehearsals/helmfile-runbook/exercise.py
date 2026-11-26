@@ -521,7 +521,8 @@ def exercise(cfg, context):
     assert fingerprints()[1]["oci-monitoring"] == deploy.fingerprint("oci-monitoring")
 
     # 3 and 4. Ownership patches and the first companion install, one namespace at a time.
-    held = {}
+    # The namespaces that hold a companion release, with its status, in the order deploy.py names them.
+    companions_held = {}
     for ns in ORDER:
         block("ownership-plan", ns=ns)
         plan = json.loads((record_dir / f"ownership-{ns}.json").read_text())
@@ -530,7 +531,7 @@ def exercise(cfg, context):
         # The ownership metadata alone is not a release: the scripts engine is refused only for
         # the namespaces that hold a companion release so far.
         if ns == ORDER[1]:
-            scripts_engine_refused(held)
+            scripts_engine_refused(companions_held)
         record, error = dispatch(f"install-{ns}", HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
         assert error is None, error
         install, = [c for c in commands if c[:2] == ["helm", "install"]]
@@ -545,7 +546,7 @@ def exercise(cfg, context):
             block("install-check", expect_failure=True, ns=ns, RUN_ID=f"install-{ns}")
             # A failed first install is a companion release too.
             scripts_engine_refused({name: "failed" if name == ns else "deployed"
-                                    for name in release_phases.NAMESPACES if name in held or name == ns})
+                                    for name in release_phases.NAMESPACES if name in companions_held or name == ns})
             assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
             assert "release: not found" in block("deadopt-delete", ns=ns).stdout
             record, error = dispatch(f"install-{ns}-again", HELMFILE_OPERATION="install-companion", COMPANION_NAMESPACE=ns)
@@ -553,10 +554,10 @@ def exercise(cfg, context):
             block("install-check", ns=ns, RUN_ID=f"install-{ns}-again")
         block("capture-identities", STEP=f"companion-{ns}")
         block("compare-identities", STEP=f"companion-{ns}")
-        held = {name: "deployed" for name in release_phases.NAMESPACES if name in held or name == ns}
+        companions_held = {name: "deployed" for name in release_phases.NAMESPACES if name in companions_held or name == ns}
         if ns == ORDER[0]:
             # From the first companion install on, a manual run with the default engine is refused.
-            scripts_engine_refused(held)
+            scripts_engine_refused(companions_held)
     adopted = json.loads((record_dir / "adopted.json").read_text())
     assert len(adopted) == sum(len(sources[ns]["objects"]) for ns in ORDER) == 12, adopted
 
@@ -573,9 +574,9 @@ def exercise(cfg, context):
     block("releases-after")
     adopted_revisions = latest()
     # With all four adopted, a manual and a scheduled scripts-engine run are both refused.
-    assert list(held) == list(release_phases.NAMESPACES), held
+    assert list(companions_held) == list(release_phases.NAMESPACES), companions_held
     for event in ("workflow_dispatch", "schedule"):
-        scripts_engine_refused(held, event)
+        scripts_engine_refused(companions_held, event)
 
     # 6. A failed release, in live mode: the engine refuses it, and a rollback to the last deployed
     # revision recovers it.
@@ -699,10 +700,10 @@ def exercise(cfg, context):
     block("capture-identities", STEP="before-de-adoption")
     for ns in reversed(ORDER):
         # Each namespace that still holds its release records keeps the scripts engine refused.
-        scripts_engine_refused(held)
+        scripts_engine_refused(companions_held)
         assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
         assert "release: not found" in block("deadopt-delete", ns=ns).stdout
-        del held[ns]
+        del companions_held[ns]
         block("deadopt-plan", ns=ns)
         block("deadopt-apply", ns=ns)
         out = block("deadopt-compare", ns=ns).stdout
@@ -716,7 +717,7 @@ def exercise(cfg, context):
     assert list(record_dir.glob("ownership-*.*.json")), "The plan block keeps an earlier plan"
     assert all(latest()[key] is None for key in COMPANIONS) and all(latest()[key][1] == "deployed" for key in APPLICATIONS)
     # De-adoption re-enables the scripts engine, the runbook's fallback: it runs as before adoption.
-    assert not held, held
+    assert not companions_held, companions_held
     admin("-n", "default", "patch", "configmap", deploy.STATE, "--type=merge", "-p",
           json.dumps({"data": {"oci-monitoring": "stale"}}))
     error, ran_commands, deployed, _ = scripts_engine()
