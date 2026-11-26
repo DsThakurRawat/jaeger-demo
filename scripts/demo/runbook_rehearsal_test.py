@@ -3,6 +3,7 @@
 
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -96,6 +97,49 @@ class SettleGeneratorsTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "Reading the jaeger trace generator passed the 30s settle limit"):
             exercise.settle_generators(read, timeout=30, clock=clock, sleep=clock.sleep)
         self.assertEqual(budgets, [30, 23])
+
+
+class ScriptsEngineGuardTest(unittest.TestCase):
+    """The walk keeps its kind demonstration of the scripts engine's companion guard (#158)."""
+
+    def test_the_walk_runs_the_scripts_engine_around_adoption_and_de_adoption(self):
+        source = Path(exercise.__file__).read_text()
+        walk = source[source.index("def exercise("):]
+        # It calls the engine's own entry point and replaces only the stack script.
+        self.assertIn("deploy.reconcile(env)", walk)
+        self.assertIn('mock.patch.object(deploy, "deploy_component"', walk)
+        self.assertNotIn('mock.patch.object(deploy, "companion_releases"', walk)
+        self.assertNotIn('mock.patch.object(deploy, "refuse_companion_releases"', walk)
+        # A refusal is the guard's own error, after release reads only and with the record unchanged.
+        refused = walk[walk.index("def scripts_engine_refused("):walk.index("# 1. Operator shell.")]
+        for text in ("isinstance(error, deploy.CompanionReleaseError)", '["helm", "list"], ["helm", "history"]',
+                     "not deployed and fingerprints() == before"):
+            self.assertIn(text, refused)
+        # Before adoption, after the first install, with a failed install, with all four adopted on
+        # both events, before each namespace's de-adoption, and after the last one.
+        order = [walk.index(text) for text in (
+            "# Before adoption the scripts engine runs",
+            "if ns == ORDER[0]:\n            # From the first companion install on",
+            "for event in (\"workflow_dispatch\", \"schedule\"):\n        scripts_engine_refused(companions_held, event)",
+            "for ns in reversed(ORDER):\n        # Each namespace that still holds its release records",
+            "# De-adoption re-enables the scripts engine",
+            '"scriptsEngineRefusedWhileACompanionExists": True, "scriptsEngineRanAfterDeAdoption": True')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("# A failed first install is a companion release too.\n            scripts_engine_refused(", walk)
+        self.assertEqual(walk.count("error is None and deployed == [\"oci-monitoring\"]"), 2)
+
+    def test_the_companion_mapping_is_never_rebound_to_something_else(self):
+        # The walk is long and reuses short names. A later step that rebinds this one to another
+        # value breaks the refusals before de-adoption, and only a kind run would show it.
+        source = Path(exercise.__file__).read_text()
+        walk = source[source.index("def exercise("):]
+        bound = re.findall(r"^ +(?:for )?[\w, ]*\bcompanions_held\b[\w, ]*(?: = | in )(.*)$", walk, re.MULTILINE)
+        self.assertEqual(bound, ["{}", '{name: "deployed" for name in release_phases.NAMESPACES '
+                                       "if name in companions_held or name == ns}"])
+        # Every refusal check names the mapping or a mapping literal, never another variable.
+        calls = re.findall(r"scripts_engine_refused\(([^,)\n]*)", walk[walk.index("# 1. Operator shell."):])
+        self.assertEqual(sorted(set(calls)), ["companions_held", "{name: \"failed\" if name == ns else \"deployed\""])
+        self.assertEqual(calls.count("companions_held"), 4)
 
 
 if __name__ == "__main__":

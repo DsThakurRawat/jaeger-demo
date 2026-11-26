@@ -30,14 +30,21 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   the start of that stack's checks, so a run fails when the application stops
   completing requests after a change, or when every request since has failed. The
   OCI stack's check also completes one HotROD dispatch, which its probes cannot
-  stand in for. A
-  healthy run takes three to four minutes longer per stack, and
+  stand in for. A healthy run takes three to four minutes longer per stack, and
   `deploy-record.json` records the time as `evidenceSince`, also when the checks
-  fail.
-  `stack_health.py --since <time>` applies the same bound by hand; the smoke check
-  is unchanged
+  fail. `stack_health.py --since <time>` applies the same bound by hand; the
+  smoke check is unchanged
   ([#170](https://github.com/jaegertracing/jaeger-demo/pull/170),
   refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
+- The scripts engine (`scripts/demo/deploy.py`) refuses to run while Helm holds a
+  `demo-resources` companion release in any of the four release namespaces. It
+  reads the releases before its first write and names each namespace that holds
+  one, so a manual dispatch that leaves `engine` at its default, or a scheduled
+  run on the scripts, can no longer re-apply objects the Helmfile engine owns.
+  De-adoption removes the release records and re-enables the scripts. The
+  `operations` CI job rehearses the refusal and the run after de-adoption on kind
+  ([#169](https://github.com/jaegertracing/jaeger-demo/pull/169),
+  fixes [#158](https://github.com/jaegertracing/jaeger-demo/issues/158)).
 - `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
   and the switch of the daily schedule to that engine
   ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),
@@ -45,6 +52,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 - `docs/MIGRATION.md` records the first scheduled run through the Helmfile
   engine ([#165](https://github.com/jaegertracing/jaeger-demo/pull/165),
   refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+- The daily component updates in `docs/releases.md` say which engine a scheduled
+  run takes and describe the Helmfile engine's selection, order, checks and record
+  beside the scripts engine's. A first scheduled Helmfile run is accepted on its
+  deployment record and all ten releases, and `docs/cutover.md` marks the
+  fingerprint selection review as scripts-only
+  ([#168](https://github.com/jaegertracing/jaeger-demo/pull/168),
+  fixes [#164](https://github.com/jaegertracing/jaeger-demo/issues/164)).
 
 ### Fixed
 

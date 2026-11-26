@@ -6,7 +6,9 @@
 """Reconcile independently deployed demo components.
 
 The workflows that change the cluster share one concurrency group, so one
-reconciliation runs at a time.
+reconciliation runs at a time. Once the Helmfile engine owns a namespace's
+supplemental objects through a demo-resources companion release, this engine
+refuses to run (docs/releases.md, "The engine switch").
 """
 
 import hashlib
@@ -18,6 +20,7 @@ import subprocess
 import tempfile
 
 import handover
+import release_phases
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,6 +92,57 @@ def resolve_snapshots(env):
 
 class ScheduledReleaseError(RuntimeError):
     """A selected release cannot be upgraded in place."""
+
+
+class CompanionReleaseError(ValueError):
+    """A demo-resources companion release owns the supplemental objects, so the scripts must not run."""
+
+
+def companion_releases(env):
+    """Return {namespace: status} for each release namespace whose demo-resources release Helm holds.
+
+    A companion release owns the supplemental ingresses, Services and trace generators of its
+    namespace. The stack scripts `kubectl apply` those objects and restart the generators, so
+    they must not run while one exists in any status. Each namespace is listed on its own, which
+    is all the deployer role allows. A listing can omit a release, so a companion it omits is
+    read by name, and only Helm's own "not found" counts as absent. Any other failed read raises.
+    """
+    # Read the cluster that kubectl writes to, and the Secret storage that holds the records:
+    # Helm's own connection and storage settings must not point this check somewhere else.
+    helm_env = {key: value for key, value in env.items()
+                if key not in ("HELM_DRIVER", "HELM_NAMESPACE") and not key.startswith("HELM_KUBE")}
+
+    def read(args):
+        try:
+            return run(["helm", *args], capture_output=True, env=helm_env)
+        except subprocess.CalledProcessError as error:
+            if args[0] != "history" or "release: not found" not in (error.stderr or ""):
+                # Say why: a denied or failed read must stop the run, not pass as an absent release.
+                print((error.stderr or "").strip()[-500:], flush=True)
+                raise
+            return None
+
+    def read_status(key):
+        namespace, name = key.split("/")
+        result = read(["history", name, "-n", namespace, "--max", "1", "-o", "json"])
+        return None if result is None else json.loads(result.stdout)[0]["status"]
+
+    listings = {ns: json.loads(read(release_phases.list_args(ns)).stdout or "[]") for ns in release_phases.NAMESPACES}
+    rows = [{"id": ns + "/" + release_phases.COMPANION} for ns in release_phases.NAMESPACES]
+    statuses = release_phases.selected_statuses(rows, listings, read_status)
+    return {key.split("/")[0]: status for key, status in statuses.items() if status != release_phases.ABSENT}
+
+
+def refuse_companion_releases(env):
+    """Stop, before any write, while a companion release exists. De-adoption removes its records."""
+    found = companion_releases(env)
+    if found:
+        where = ", ".join(f"{namespace} ({status})" for namespace, status in found.items())
+        message = (f"The scripts engine is refused: Helm holds a {release_phases.COMPANION} companion release in "
+                   f"{where}. The Helmfile engine is required (engine=helmfile). The scripts can run again only "
+                   "after de-adoption removes the companion release records (docs/cutover.md)")
+        print(f"::error::{message}", flush=True)
+        raise CompanionReleaseError(message)
 
 
 def check_scheduled_releases(component):
@@ -176,6 +230,8 @@ def reconcile(env, root=ROOT):
         raise ValueError("Automatic demo deployments must use upgrade mode")
     if event == "schedule":
         handover.check_helm_context(env)
+    # Every route below writes: the clean reinstall, each stack script and the revision record.
+    refuse_companion_releases(env)
     if event == "workflow_dispatch" and mode == "clean":
         # Clean is an explicit whole-stack operation, not a per-component loop.
         resolve_snapshots(env)

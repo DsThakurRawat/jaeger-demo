@@ -235,6 +235,15 @@ and the live version and trace checks remain part of every upgrade
 
 ## Review scheduled scope
 
+This section was written for a schedule on the scripts engine. The schedule
+switch, the environment and identity review, the activation in step 3 and the smoke
+check are the same under both engines. The fingerprint selection and the release
+and fingerprint comparison of step 4 are not: while the repository variable
+`DEMO_DEPLOY_ENGINE` is `helmfile`, a scheduled run applies all ten releases and
+selects nothing by fingerprint
+([daily component updates](releases.md#with-the-helmfile-engine)). The inspection
+below then shows only what a return to the scripts would select.
+
 The reconciler fingerprints the whole deployment script for each component in its
 stack. The handover guard changes therefore also change the OpenSearch, OTel Demo
 and monitoring fingerprints. Two successful manual Jaeger runs update only their
@@ -281,7 +290,8 @@ approval is not approval to broaden permissions or remove the environment review
 
 The maintainers selected all five components for the 13:00 UTC job. The
 scheduled run is the same `deploy` job of `ci-deploy-demo.yml` as a manual run,
-in the `demo-scheduled` environment, and runs `scripts/demo/deploy.py` directly.
+in the `demo-scheduled` environment. On the scripts engine it runs
+`scripts/demo/deploy.py` directly.
 Keep the repository Actions variable `DEMO_SCHEDULE_ENABLED` set to `false` until
 the steps below are complete. Confirm the effective value if the organization
 defines the same name. A skipped scheduled job receives no deployment environment
@@ -325,7 +335,9 @@ or runner. Manual runs continue to use `demo-apply`.
 4. Find the scheduled run, check its event, configuration SHA, environment,
    access check and component summary, and compare all six live release
    histories and fingerprint keys with the pre-run record. A skipped job does
-   not satisfy the stage exit.
+   not satisfy the stage exit. A run on the Helmfile engine is accepted on its
+   deployment record and all ten releases instead
+   ([accepting the first scheduled run](releases.md#accepting-the-first-scheduled-run)).
    Verify the [per-component checks](releases.md#daily-component-updates) and
    the public health checks on both demos. Record the run URL, versions, trace
    ID, and PVC binding before closing [core handover](https://github.com/jaegertracing/jaeger/issues/10189).
@@ -402,12 +414,15 @@ The invariants hold throughout:
   objects: use [De-adopt companion releases](#de-adopt-companion-releases). An
   OpenSearch or Dashboards downgrade is not a rollback. The scripts can be a
   fallback only after de-adoption.
-- From the first companion install until the schedule switches to Helmfile, the
-  schedule stays paused and no run uses `engine=scripts`: the scripts
-  `kubectl apply` the supplemental objects that the companions then own
-  ([the engine switch](releases.md#the-engine-switch)). Nothing enforces this; it
-  is the operator's rule. Plan the `mode: digest` pull request to follow adoption
-  closely, because there is no daily refresh in between.
+- From the first companion install on, the scripts engine refuses to run: the
+  scripts `kubectl apply` the supplemental objects that the companions then own.
+  `deploy.py` reads the releases of the four namespaces before its first write
+  and stops, naming each namespace that holds a `demo-resources` release, on a
+  manual dispatch that leaves `engine` at its default and on a scheduled run
+  alike ([the engine switch](releases.md#the-engine-switch)). Until the schedule
+  switches to Helmfile, keep it paused: a scheduled run would only be refused.
+  Plan the `mode: digest` pull request to follow adoption closely, because there
+  is no daily refresh in between.
 
 ### How the commands run and how they are rehearsed
 
@@ -479,7 +494,14 @@ namespace, a failed first install and its retry, the adoption apply and the
 no-op, a failed release and its recovery, a pending release refused and then
 recovered, a rollback to a recorded revision with both of its refusals and the
 next apply that undoes it, the StatefulSet repair, and de-adoption, and after each
-step it checks what the step here promises. A block marked `not-rehearsed` needs
+step it checks what the step here promises. It also runs the scripts engine's
+reconcile (`deploy.reconcile`, with the stack script replaced by a stub, because
+the scripts install the real charts) as the same user: before adoption it runs;
+from the first companion install on, with a failed first install, with all four
+adopted (as a manual and as a scheduled run) and before each namespace's
+de-adoption it is refused after its release reads, naming exactly the namespaces
+that hold a companion release, with nothing written; and after the last
+namespace's de-adoption it runs again. A block marked `not-rehearsed` needs
 GitHub, OCI, the public demo or the real charts, and its marker says what the
 rehearsal does instead: a workflow dispatch becomes a call of
 `helmfile_deploy.reconcile` with the environment the dispatch gives the
@@ -1441,8 +1463,16 @@ running writers finish. Repeat the steps for each namespace to de-adopt, with
 Step 1 needs `list` and `delete` on Secrets in the namespace, which the deployer
 role grants without `deletecollection`. Kubernetes cannot limit a list to Helm
 records, so that access covers every Secret in the namespace. Steps 2 to 4 need
-named `get` and `patch` on the allowlisted objects. Only after every adopted
-namespace is de-adopted may a run use `engine=scripts` again.
+named `get` and `patch` on the allowlisted objects.
+
+The scripts engine stays refused while any namespace still holds a
+`demo-resources` release record, and its error names those namespaces
+([the engine switch](releases.md#the-engine-switch)). Deleting the records in
+step 1 is what lifts the refusal for a namespace, so the scripts are the fallback
+only once step 1 is done in every adopted namespace. The guard reads release
+records only: finish steps 2 to 4 in each namespace before a run uses
+`engine=scripts`, so that no object keeps ownership metadata of a release that
+no longer exists.
 
 ### Incidents and escalation
 

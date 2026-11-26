@@ -172,6 +172,9 @@ def script_requests(identity):
         # helm --wait follows a workload to the ReplicaSets and Pods it creates.
         requests += each(namespace, "", "pods", ["get", "list", "watch"])
         requests += each(namespace, "apps", "replicasets", ["get", "list", "watch"])
+        # deploy.py companion guard: helm list -n <namespace> and helm history demo-resources read
+        # the namespace's release records by label, before the scripts engine writes anything.
+        requests += each(namespace, "", "secrets", ["list"])
     requests += each("opensearch", "", "persistentvolumeclaims", ["get"])  # deploy.py binding check
     # verify_trace.py. opensearch_reset.py uses the same two and the Jaeger Deployment patch of the chart.
     requests += each("opensearch", "", "pods/exec", ["get", "create"], OPENSEARCH_POD)

@@ -42,7 +42,11 @@ run also refreshes Jaeger and HotROD snapshots in both demos. A missing componen
 existing revision ConfigMap and existing Helm releases, upgrade in place only,
 and refuse a release in a `pending-*` state. A partial failure does
 not prevent independent components from deploying, but OpenSearch failure blocks
-the dependent OTel Jaeger and application updates in that run.
+the dependent OTel Jaeger and application updates in that run. Before any write,
+on every event, `deploy.py` lists the releases of each of the four release
+namespaces and refuses to run while one holds a `demo-resources` companion
+release, whose objects the Helmfile engine owns; the error names the namespace
+([the engine switch](../../docs/releases.md#the-engine-switch)).
 
 `helmfile_deploy.py` is the Helmfile engine of the same `deploy` job, off by
 default. A scheduled run uses it only while the repository variable

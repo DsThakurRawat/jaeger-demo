@@ -34,7 +34,7 @@ watch by name.
 
 | Scope | Access | Needed by |
 | --- | --- | --- |
-| `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks, the [Helmfile path](#helmfile-path) |
+| `default`, `jaeger`, `opensearch`, `otel-demo` | Create, read, patch and delete the kinds the charts render there. Read, create, update and delete Secrets. Read Pods and ReplicaSets. | `helm upgrade --wait`, `kubectl apply`, rollout checks, the [Helmfile path](#helmfile-path), the release reads of `deploy.py` before the scripts engine writes |
 | `default` | Roles and RoleBindings, monitoring custom resources, hook Jobs | `default/prometheus` and its hooks |
 | `jaeger` | `pods/portforward` | `verify_trace.py` writes and reads one trace |
 | `opensearch` | `pods/exec` on `opensearch-cluster-single-0`, read the data PersistentVolumeClaim | `verify_trace.py` version check, `deploy.py` binding check, `opensearch_reset.py` |
@@ -68,6 +68,15 @@ so both identities need every row except the first companion install, which is a
 manual dispatch only: the deploy driver of [#73](https://github.com/jaegertracing/jaeger-demo/issues/73) refuses it on a schedule, so `check`
 requires it of the manual identity alone. The scheduled identity's other rows
 already need the same Secret verbs, so this changes no rule.
+
+The scripts engine runs the first two rows as well. Before its first write,
+`deploy.py` lists each release namespace with `release_phases.list_args` and reads
+a `demo-resources` release that a listing omits with `helm history`, and it
+refuses to run while one exists
+([the engine switch](releases.md#the-engine-switch)). The module's table of script
+commands holds that Secret `list` for both identities, in each of the four
+namespaces and never across them, so `check` requires it on the script path too.
+It is access the role already grants: no rule changes.
 
 | Command | Code that builds or runs it | Identities | Secret verbs | Why |
 | --- | --- | --- | --- | --- |
@@ -434,8 +443,10 @@ resource and namespace, and the release history must not change. This shows that
 the role does not let Helm start such a change. It does not run one.
 
 The rehearsal runs `deploy-all.sh`, not `deploy.py`. What `deploy.py` itself
-calls, such as its `helm status` checks and the revision ConfigMap, is covered
-only by the access reviews of `check`. This job does not run `helmfile apply` or
+calls, such as its `helm status` checks, is covered only by the access reviews of
+`check`, except for its release reads and its revision ConfigMap read and patch,
+which the runbook rehearsal of the `operations` job runs as the deployer (below).
+This job does not run `helmfile apply` or
 `sync` or the first companion install. The release phase and companion adoption
 rehearsals in the `Helmfile render and adoption rehearsal` job run them as a user
 bound to the committed roles, on fixture releases, and fail on a refusal that
@@ -455,7 +466,11 @@ kubeconfig that impersonates a fixture manual user bound to this role
 (`scripts/demo/deployer_kubeconfig.py`): the ownership planner and patches,
 `check --self`, `helm rollback` of a failed and of a pending release, the
 delete of the OpenSearch StatefulSet with orphan propagation, and the release
-record deletes of de-adoption, one Secret at a time by name. These need no rule
+record deletes of de-adoption, one Secret at a time by name. As that user it also
+runs `deploy.reconcile`, the scripts engine, with the stack script replaced by a
+stub: the `helm list` and `helm history` reads of its companion guard, its
+refusal while a companion release exists, and after de-adoption the revision
+ConfigMap read and patch. These need no rule
 beyond the ones above; `HELMFILE_COMMANDS` does not list them because no workflow
 runs them. The runbook's administrator steps that it runs (`check --user`, and
 reading events and Certificates in `default`) use the administrator's kubeconfig

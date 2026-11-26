@@ -13,7 +13,8 @@ the OTel sample application, and OCI monitoring. It runs the same workflow job
 and [deploy.py](scripts/demo/deploy.py) as a manual deployment, without a
 reviewer, and only while the `DEMO_SCHEDULE_ENABLED` repository variable is
 `true`. It runs the Helmfile engine instead only while the `DEMO_DEPLOY_ENGINE`
-repository variable is `helmfile`. For current migration status and handover evidence, see
+repository variable is `helmfile`, and `deploy.py` refuses to run once a
+`demo-resources` companion release is installed. For current migration status and handover evidence, see
 [docs/MIGRATION.md](docs/MIGRATION.md). Schedule activation is tracked in the
 [handover runbook](docs/cutover.md#review-scheduled-scope).
 
@@ -133,7 +134,10 @@ the Helmfile engine, [scripts/demo/helmfile_deploy.py](scripts/demo/helmfile_dep
 which reconciles all ten Helmfile releases, OCI before OTel. It is off by default: a
 scheduled run selects it only while the `DEMO_DEPLOY_ENGINE` repository variable is
 `helmfile`, and a manual run only through its `engine` input
-([Helmfile engine](docs/releases.md#helmfile-engine)). The snapshot resolver
+([Helmfile engine](docs/releases.md#helmfile-engine)). Once Helmfile owns a
+namespace's supplemental objects through a `demo-resources` companion release,
+`deploy.py` refuses to run, before any write, and names the namespace
+([the engine switch](docs/releases.md#the-engine-switch)). The snapshot resolver
 selects Jaeger and HotROD images independently from upstream core commits. This
 repository's commit identifies configuration, never a product image.
 
@@ -161,7 +165,9 @@ flowchart TB
         apply_env --> access["deployer_access.py check --self<br/>against ops/rbac/deployer.yaml"]
         scheduled_env --> access
         access -- "role complete" --> engine{"DEPLOY_ENGINE"}
-        engine -- "scripts (default)" --> reconcile["deploy.py selects components<br/>and runs the stack scripts"]
+        engine -- "scripts (default)" --> guard{"deploy.py: helm list per namespace<br/>is a demo-resources release installed?"}
+        guard -- "yes, in any namespace" --> refused["Refused before any write<br/>the error names the namespace"]
+        guard -- "no" --> reconcile["deploy.py selects components<br/>and runs the stack scripts"]
         reconcile --> otel["OTel: opensearch, opensearch-dashboards,<br/>jaeger/jaeger, otel-demo<br/>(an OpenSearch failure blocks the other two)"]
         otel -- "then, not gated on OTel" --> oci["OCI: default/jaeger, default/prometheus"]
         engine -- "helmfile" --> helmfile["helmfile_deploy.py reconcile<br/>helmfile.yaml and helmfile-resources.yaml.gotmpl"]

@@ -357,7 +357,8 @@ class DeployerAccessTests(unittest.TestCase):
             # The trace reset needs nothing beyond what the deployment already holds.
             "scripts/demo/opensearch_reset.py": ['"exec", POD', '"get", "pod", POD', '"rollout", "restart"',
                                                  '"rollout", "status"', '"port-forward"'],
-            "scripts/demo/deploy.py": ['"get", kind, name', '"pvc"'],
+            "scripts/demo/deploy.py": ['"get", kind, name', '"pvc"', "release_phases.list_args(ns)",
+                                       '"history", name, "-n", namespace, "--max", "1", "-o", "json"'],
             "examples/otel-demo/opensearch-expand-volume.sh": ["patch pvc", "get storageclass", "get pv ",
                                                                'STORAGE_CLASS="oci-bv"'],
             # The drift report reads every rendered object, the CRDs included, by name.
@@ -367,6 +368,21 @@ class DeployerAccessTests(unittest.TestCase):
             for command in commands:
                 with self.subTest(path=path, command=command):
                     self.assertIn(command, text)
+
+    def test_the_scripts_engine_guard_reads_release_records_one_namespace_at_a_time(self):
+        """deploy.py lists each release namespace's records before it writes (#158)."""
+        import release_phases
+        self.assertEqual(d.RELEASE_NAMESPACES, release_phases.NAMESPACES)
+        for identity in d.IDENTITIES:
+            guard = {R(namespace, "", "secrets", "list", "") for namespace in d.RELEASE_NAMESPACES}
+            with self.subTest(identity=identity):
+                self.assertLessEqual(guard, set(d.script_requests(identity)))
+                self.assertEqual([r for r in guard if not d.allowed(identity, r, ROLES)], [])
+                # The Helmfile path's listing already asks for the same verb, so the role is unchanged.
+                self.assertLessEqual(guard, set(d.helmfile_requests(identity)[d.HELMFILE_COMMANDS[0].command]))
+                # A listing of every namespace at once stays denied.
+                self.assertIn(R("", "", "secrets", "list", ""), d.denied(identity))
+                self.assertFalse(d.allowed(identity, R("", "", "secrets", "list", ""), ROLES))
 
     def test_the_drift_report_reads_the_monitoring_crds_by_name_only(self):
         import live_drift
