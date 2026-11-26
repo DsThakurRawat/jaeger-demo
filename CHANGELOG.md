@@ -36,7 +36,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   beside the scripts engine's. A first scheduled Helmfile run is accepted on its
   deployment record and all ten releases, and `docs/cutover.md` marks the
   fingerprint selection review as scripts-only
-  (fixes [#164](https://github.com/jaegertracing/jaeger-demo/issues/164)).
+  ([#168](https://github.com/jaegertracing/jaeger-demo/pull/168),
+  fixes [#164](https://github.com/jaegertracing/jaeger-demo/issues/164)).
 
 ### Fixed
 
