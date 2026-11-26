@@ -32,7 +32,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   `deploy-record.json` records the time as `evidenceSinceUTC`.
   `stack_health.py --since <time>` applies the same bound by hand; the smoke check
   is unchanged
-  (refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
+  ([#170](https://github.com/jaegertracing/jaeger-demo/pull/170),
+  refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
   and the switch of the daily schedule to that engine
   ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),
@@ -48,7 +49,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   its flag file is no longer Ready: it stays out of the Service, the previous Pod
   keeps serving, and the `otel-demo` upgrade fails at Helm's wait instead of
   passing. The next OTel demo upgrade restarts `flagd` once, and no other workload
-  (refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
+  ([#170](https://github.com/jaegertracing/jaeger-demo/pull/170),
+  refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - The Helmfile runbook rehearsal in the `operations` CI job waits for the trace
   generators' old Pods to finish terminating before it plans the de-adoption.
   A plan read while one was terminating went stale and failed the job. The wait
