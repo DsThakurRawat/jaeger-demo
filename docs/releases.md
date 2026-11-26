@@ -687,7 +687,13 @@ the pinned tools for every Helm and Helmfile call:
    do. The bucket alone would not be that proof
    on the OCI stack, whose span metrics are flushed every 60 seconds and scraped
    every 15, so a window can count calls that ended up to about 75 seconds before
-   it began. No bucket can qualify
+   it began. On the OCI stack even the server span can be a probe: the kubelet's
+   liveness and readiness probes request HotROD's `/hotrod`, and each is a
+   `frontend` server span, so the span and the bucket stay healthy while dispatches
+   hang. The OCI check therefore also completes one dispatch itself
+   (`/hotrod/dispatch?customer=123` must name a driver), as the deploy scripts did.
+   The OTel stack needs no such request: nothing probes `checkout`, and an order
+   that hangs leaves no server span. No bucket can qualify
    until three to four minutes after the start, so the engine waits once for the
    first one and then tries up to ten times, 30 seconds apart. A healthy run
    therefore takes three to four minutes longer per stack than the checks
@@ -755,7 +761,10 @@ deployer kubeconfig the runbook writes
   another.
 - **A stack's checks fail with no server span without an error, or no SPM bucket,
   newer than the change**: the application stopped completing requests after the
-  run's writes, every request since has failed, or its traffic stopped. For the
+  run's writes, every request since has failed, or its traffic stopped. On the OCI
+  stack the check's own dispatch can also fail or time out while the routes and
+  spans look healthy; request `https://demo.jaegertracing.io/hotrod/dispatch?customer=123`
+  and read the newest `frontend` traces of `GET /hotrod/dispatch`. For the
   OTel stack, open the newest `checkout` traces. An order that hangs has no
   `PlaceOrder` span at all, because a span is stored only once it has ended: its
   trace shows `checkout`'s client spans, such as `oteldemo.CartService/GetCart`,

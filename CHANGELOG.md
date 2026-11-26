@@ -28,7 +28,9 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   from before the run's changes. Each stack needs a server span without an error
   and an SPM bucket with positive calls and finite latency that are newer than
   the start of that stack's checks, so a run fails when the application stops
-  completing requests after a change, or when every request since has failed. A
+  completing requests after a change, or when every request since has failed. The
+  OCI stack's check also completes one HotROD dispatch, which its probes cannot
+  stand in for. A
   healthy run takes three to four minutes longer per stack, and
   `deploy-record.json` records the time as `evidenceSince`, also when the checks
   fail.

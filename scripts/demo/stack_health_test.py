@@ -31,8 +31,12 @@ def trace(service, at, kind=None, *more):
     return json.dumps({"result": {"resourceSpans": [batch]}}).encode()
 
 
-def public_stack(stack, spans, metrics):
-    """A read() for one stack: spans are the service's (time, kind) pairs, metrics answers the SPM queries."""
+DISPATCHED = b'{"Driver":"T727756C","ETA":120000000000}'
+
+
+def public_stack(stack, spans, metrics, functional=DISPATCHED):
+    """A read() for one stack: spans are the service's (time, kind) pairs, metrics answers the SPM
+    queries, and functional is the body of the stack's functional request or the error it raises."""
     base, service = stack_health.STACKS[stack]
     tracking = json.loads((stack_health.ROOT / "examples/oci/ui-config.json").read_text())
     ui = ("Jaeger UI; const JAEGER_CONFIG = " + json.dumps(tracking) + ";").encode()
@@ -43,6 +47,10 @@ def public_stack(stack, spans, metrics):
             return ui
         if url in stack_health.PAGES[stack]:
             return stack_health.PAGES[stack][url][0].encode()
+        if stack in stack_health.FUNCTIONAL and url == stack_health.FUNCTIONAL[stack][0]:
+            if isinstance(functional, Exception):
+                raise functional
+            return functional
         if parts.path.endswith("/api/health"):
             return b'{"database":"ok"}'
         if parts.path.endswith("/api/status"):
@@ -330,3 +338,29 @@ class StackHealthTests(unittest.TestCase):
                          datetime(2026, 11, 25, 16, 37, tzinfo=timezone.utc))
         with self.assertRaises(argparse.ArgumentTypeError):
             stack_health.parse_time("2026-11-25T16:37:00")
+
+    def test_oci_verification_after_a_change_needs_a_completed_dispatch(self):
+        # The kubelet probes HotROD at /hotrod, and each probe is a frontend server span. With
+        # dispatches hanging, the probes alone keep a fresh server span without an error and a
+        # positive, finite SPM bucket wholly after the change.
+        now = datetime.now(timezone.utc)
+        minute = now.replace(second=0, microsecond=0)
+        since = minute - timedelta(minutes=4)
+        probes = [(now - timedelta(seconds=5), CLIENT)] + [(now - timedelta(seconds=10 * n), SERVER) for n in range(1, 20)]
+
+        def metrics(name, query):
+            return json.dumps(metric(minute - timedelta(minutes=1), 0.1 if name == "calls" else 3)).encode()
+
+        for hanging in (TimeoutError("timed out"), b'{"error":"redis timeout"}', b""):
+            with self.subTest(hanging=hanging), self.assertRaises((ValueError, OSError)):
+                stack_health.check("oci", public_stack("oci", probes, metrics, hanging), since=since)
+        result = stack_health.check("oci", public_stack("oci", probes, metrics), since=since)
+        self.assertTrue(result["functionalRequestCompleted"])
+        # The routine check makes no dispatch, and the OTel stack has no functional request:
+        # a hung PlaceOrder leaves no checkout server span, and nothing probes checkout.
+        routine = stack_health.check("oci", public_stack("oci", probes, metrics, AssertionError("no dispatch")))
+        self.assertIsNone(routine["functionalRequestCompleted"])
+        self.assertEqual(["oci"], list(stack_health.FUNCTIONAL))
+        values = (stack_health.ROOT / "examples/oci/jaeger-values.yaml").read_text()
+        self.assertIn("--basepath=/hotrod", values)
+        self.assertTrue(stack_health.FUNCTIONAL["oci"][0].startswith("https://demo.jaegertracing.io/hotrod/dispatch?"))
