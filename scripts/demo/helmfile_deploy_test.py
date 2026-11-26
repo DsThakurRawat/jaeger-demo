@@ -3,6 +3,7 @@
 
 import contextlib
 import copy
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -20,6 +21,7 @@ import companion_values
 import deploy
 import helmfile_deploy as hd
 import release_phases
+import stack_health
 
 ROOT = Path(__file__).resolve().parents[2]
 HEAD = "c" * 40
@@ -128,14 +130,15 @@ class Cluster:
 
 class Checks:
     def __init__(self, fail=(), log=None):
-        self.fail, self.calls, self.log, self.images = set(fail), [], log, None
+        self.fail, self.calls, self.log, self.images, self.since = set(fail), [], log, None, {}
 
     def prepare(self, stacks, images=None):
         self.calls.append(("prepare", tuple(sorted(stacks))))
         self.images = images
 
-    def verify(self, stack):
+    def verify(self, stack, since=None):
         self.calls.append(("verify", stack))
+        self.since[stack] = since
         if self.log is not None:
             self.log.append(["verify", stack])
         if stack in self.fail:
@@ -510,6 +513,12 @@ class DriverTest(unittest.TestCase):
         record = self.record()
         self.assertEqual("failed", record["outcome"])
         self.assertEqual([], record["verifiedStacks"])
+        # The failed stack keeps the bound its checks ran against, which is the one they were given;
+        # OTel never started, so it has none.
+        self.assertEqual(["oci"], list(record["evidenceSince"]))
+        self.assertEqual(self.checks.since["oci"].isoformat(), record["evidenceSince"]["oci"])
+        self.assertEqual({}, record["checks"])
+        self.assertIn(f"- Health evidence newer than: oci {record['evidenceSince']['oci']}", hd.summary(record))
         self.assertEqual([(5, "apply"), (None, None)], [(r["revisionAfter"], r["method"]) for r in record["releases"]
                                                         if r["id"] in ("default/jaeger", "jaeger/jaeger")])
 
@@ -521,6 +530,11 @@ class DriverTest(unittest.TestCase):
         self.assertEqual([{"data": {name: deploy.fingerprint(name, self.root)}} for name in ("oci-jaeger", "oci-monitoring")],
                          patches)
         self.assertEqual(["oci-jaeger", "oci-monitoring"], self.record()["fingerprints"])
+        # Each stack's bound is taken when its own checks start, OCI before OTel, and is kept on failure.
+        bounds = self.record()["evidenceSince"]
+        self.assertEqual(["oci", "otel"], list(bounds))
+        self.assertEqual({stack: at.isoformat() for stack, at in self.checks.since.items()}, bounds)
+        self.assertLessEqual(self.checks.since["oci"], self.checks.since["otel"])
         cluster = Cluster()
         self.reconcile(cluster)
         patched = [list(json.loads(c[-1])["data"]) for c in cluster.calls if c[:4] == ["kubectl", "-n", "default", "patch"]]
@@ -812,7 +826,7 @@ class DriverTest(unittest.TestCase):
             calls.append([str(a) for a in args])
             return done(args, json.dumps(certificates.get(args[2], {"items": []})))
 
-        checks = hd.ProductionChecks(ROOT, run, health=lambda stack: {"stack": stack},
+        checks = hd.ProductionChecks(ROOT, run, health=lambda stack, since=None: {"stack": stack},
                                      trace=lambda *versions: calls.append(["trace", *versions]),
                                      binding=lambda: next(bindings), sleep=lambda s: None)
         checks.prepare({"oci", "otel"})
@@ -822,13 +836,13 @@ class DriverTest(unittest.TestCase):
         self.assertEqual(len(hd.OTEL_ROLLOUTS), len([c for c in calls if "rollout" in c]))
         self.assertTrue(evidence["openSearchDataBindingUnchanged"])
         bindings = iter([("claim", "uid", "pv"), ("claim", "uid", "other-pv")])
-        checks = hd.ProductionChecks(ROOT, run, health=lambda stack: {}, trace=lambda *v: None,
+        checks = hd.ProductionChecks(ROOT, run, health=lambda stack, since=None: {}, trace=lambda *v: None,
                                      binding=lambda: next(bindings), sleep=lambda s: None)
         checks.prepare({"otel"})
         with self.assertRaisesRegex(RuntimeError, "data claim or its bound volume changed"):
             checks.verify("otel")
         certificates["opensearch"]["items"][0]["status"]["conditions"][0]["status"] = "False"
-        checks = hd.ProductionChecks(ROOT, run, health=lambda stack: {}, trace=lambda *v: None,
+        checks = hd.ProductionChecks(ROOT, run, health=lambda stack, since=None: {}, trace=lambda *v: None,
                                      binding=lambda: ("c", "u", "p"), sleep=lambda s: None)
         checks.prepare({"otel"})
         with self.assertRaisesRegex(RuntimeError, "opensearch/opensearch-demo-tls is not Ready"):
@@ -838,11 +852,73 @@ class DriverTest(unittest.TestCase):
         certificates["otel-demo"]["items"][0]["metadata"]["name"] = "another-tls"
         with self.assertRaisesRegex(RuntimeError, "otel-demo/otel-demo-tls is missing"):
             checks.certificates()
-        oci = hd.ProductionChecks(ROOT, run, health=lambda stack: {"stack": stack}, sleep=lambda s: None)
+        oci = hd.ProductionChecks(ROOT, run, health=lambda stack, since=None: {"stack": stack}, sleep=lambda s: None)
         calls.clear()
         self.assertEqual({"stack": "oci"}, oci.verify("oci")["health"])
         self.assertEqual([["kubectl", "-n", "default", "rollout", "status", f"deployment/{name}", "--timeout=5m"]
                           for name in ("jaeger", "jaeger-hotrod", "trace-generator", "prometheus-grafana")], calls)
+
+    def test_health_must_be_newer_than_the_start_of_the_stack_checks(self):
+        # Issue #160: a bucket from before the stack's writes must not pass its verification.
+        utc = timezone.utc
+        started = datetime(2026, 11, 25, 16, 37, 10, tzinfo=utc)
+        now, slept, asked = [started], [], []
+
+        def sleep(seconds):
+            slept.append(seconds)
+            now[0] += timedelta(seconds=seconds)
+
+        def health(stack, since=None):
+            asked.append((stack, since, now[0]))
+            if now[0] < datetime(2026, 11, 25, 16, 42, tzinfo=utc):
+                raise stack_health.TrafficPending("No recent completed SPM bucket with positive calls")
+            return {"stack": stack}
+
+        def run(args, **kwargs):
+            # The rollouts take time too; the wait covers only what is left.
+            now[0] += timedelta(seconds=5)
+            return done(args)
+
+        checks = hd.ProductionChecks(ROOT, run, health=health, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual({"stack": "oci"}, checks.verify("oci")["health"])
+        # One wait up to the first bucket that can lie wholly after the start, then the retries.
+        ready = stack_health.evidence_ready_at(started)
+        self.assertEqual(datetime(2026, 11, 25, 16, 41, tzinfo=utc), ready)
+        self.assertEqual([(ready - started).total_seconds() - 5 * len(hd.OCI_ROLLOUTS), 30, 30], slept)
+        self.assertEqual([("oci", started, ready), ("oci", started, ready + timedelta(seconds=30)),
+                          ("oci", started, ready + timedelta(seconds=60))], asked)
+
+        # No orders after the change: the run fails after the bounded retries, never on older buckets.
+        slept.clear()
+        asked.clear()
+        now[0] = started
+
+        def stalled(stack, since=None):
+            asked.append(since)
+            raise stack_health.TrafficPending("No recent completed SPM bucket with positive calls")
+
+        checks = hd.ProductionChecks(ROOT, run, health=stalled, sleep=sleep, clock=lambda: now[0])
+        with self.assertRaises(stack_health.TrafficPending):
+            checks.verify("oci")
+        self.assertEqual([started] * hd.HEALTH_ATTEMPTS, asked)
+        self.assertEqual(1 + (hd.HEALTH_ATTEMPTS - 1), len(slept))
+        self.assertLessEqual(sum(slept), 4 * 60 + (hd.HEALTH_ATTEMPTS - 1) * hd.HEALTH_DELAY)
+
+        # Checks that already took longer than the wait add none.
+        slept.clear()
+        now[0] = started
+
+        def slow(args, **kwargs):
+            now[0] += timedelta(minutes=2)
+            return done(args)
+
+        checks = hd.ProductionChecks(ROOT, slow, health=lambda stack, since=None: {"since": since}, sleep=sleep,
+                                     clock=lambda: now[0])
+        self.assertEqual({"since": started}, checks.verify("oci")["health"])
+        self.assertEqual([], slept)
+        # reconcile passes the bound it recorded; the checks use that one, not their own clock.
+        recorded = started - timedelta(minutes=10)
+        self.assertEqual({"since": recorded}, checks.verify("oci", recorded)["health"])
 
     # ------------------------------------------------------------ second review
 

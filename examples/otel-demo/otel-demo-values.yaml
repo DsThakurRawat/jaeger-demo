@@ -101,6 +101,23 @@ components:
     # without authentication and can edit the fault-injection flags. flagd keeps
     # reading the reviewed demo.flagd.json that the init container copies below.
     sidecarContainers: []
+    # The chart gives flagd no probe, so its Pod is Ready as soon as the process
+    # starts, whether or not it has read the flag file (#160). /readyz on flagd's
+    # management port (8014 by default, which the chart's command does not change)
+    # answers 200 only after the file source has delivered its first read, and 412
+    # until then. A new Pod that never gets there stays out of the Service, and the
+    # rollout keeps the previous Pod serving and fails the upgrade's wait. The
+    # chart's schema allows only httpGet probes and flagd evaluates flags only on
+    # POST, so no probe can evaluate a flag; the checkout evidence after a change
+    # (scripts/demo/stack_health.py) covers that. Recheck the port and path when
+    # the chart changes the flagd image or its command.
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 8014
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
     initContainers:
       - name: init-config
         image: docker.io/busybox:1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4

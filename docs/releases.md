@@ -151,7 +151,11 @@ payloads.
    remains failed even if unrelated components succeed.
 5. Verify fresh trace write/read, current generated traffic, UI and public routes,
    finite SPM calls and latency under load, Grafana, TLS and the configured analytics
-   behavior on both demos. Compare namespace/release names, Service addresses and
+   behavior on both demos. The traffic and SPM evidence must be newer than the
+   change: a span or a bucket from before it says nothing about it. The Helmfile engine binds
+   its checks to the change itself; after a change made another way, pass its time,
+   as in `python3 scripts/demo/stack_health.py --stack otel --since 2026-11-25T16:37:00Z`.
+   Compare namespace/release names, Service addresses and
    PVC bindings against the pre-run record.
 6. Record the result. Diagnose failures before retrying or rolling back; do not
    promote an unverified result to last-known-good state.
@@ -249,7 +253,9 @@ scripts:
 - **Checks.** Each stack is verified even when nothing changed, after its trace
   generator was restarted. The three OTel Certificates must be present and Ready,
   which the scripts only log, and each Jaeger and HotROD workload must run the
-  image the run validated.
+  image the run validated. The traffic and SPM evidence of each stack must be
+  newer than the start of its checks, which adds three to four minutes per stack
+  ([what a Helmfile run does](#what-a-helmfile-run-does), step 5).
 - **Record.** Every reconcile, also a refused or failed one, and every image gate
   rejection writes `deploy-record.json`, and the job uploads it. A run that fails
   in an earlier step, such as the toolchain or chart preparation or the access
@@ -806,8 +812,39 @@ the pinned tools for every Helm and Helmfile call:
    in the companion sources. This is stricter than the scripts, which only log
    Certificate readiness: a missing or unready one fails the run. The `default`
    Certificate is not checked, because the deployer role lists Certificates only in
-   the OTel namespaces. The health checks are retried up to ten times, 30 seconds
-   apart. OTel never starts when OCI fails.
+   the OTel namespaces. OTel never starts when OCI fails.
+
+   Each stack's `stack_health.py` evidence must be newer than the start of that
+   stack's checks, which is after its last release and its generator restart
+   ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)): a `frontend`
+   or `checkout` server span without an error status started after it, and the SPM bucket with positive
+   server calls and finite latency is one whose whole two-minute rate window began
+   after it. The server span is the proof that a request completed after the change,
+   because a span is stored only once it has ended; for the OTel stack it is a
+   `PlaceOrder` order. Another span of the service does not count: its client spans
+   keep arriving while its requests hang. A server span that ended with an error
+   does not count either: `checkout` ends an order whose charge fails that way. One
+   such span is enough, so the check shows that requests can succeed, not how many
+   do. It is looked for in the service's 20 newest traces only, so a request that
+   succeeded just after the change and was followed by 20 failed or hanging ones
+   does not pass: the stack does not work now. The bucket alone would not be that proof
+   on the OCI stack, whose span metrics are flushed every 60 seconds and scraped
+   every 15, so a window can count calls that ended up to about 75 seconds before
+   it began. On the OCI stack even the server span can be a probe: the kubelet's
+   liveness and readiness probes request HotROD's `/hotrod`, and each is a
+   `frontend` server span, so the span and the bucket stay healthy while dispatches
+   hang. The OCI check therefore also completes one dispatch itself
+   (`/hotrod/dispatch?customer=123` must name a driver), as the deploy scripts did.
+   The OTel stack needs no such request: nothing probes `checkout`, and an order
+   that hangs leaves no server span. No bucket can qualify
+   until three to four minutes after the start, so the engine waits once for the
+   first one and then tries up to ten times, 30 seconds apart. A healthy run
+   therefore takes three to four minutes longer per stack than the checks
+   themselves, and a stack with no such bucket fails about eight and a half minutes
+   after its checks began, plus the time of the requests. The check proves that
+   orders completed in the minutes after the change. It cannot see a fault that
+   develops later; the [smoke check](../scripts/demo/README.md#scheduled-smoke-check)
+   covers that.
 6. On an apply, after a stack's checks pass, patches that stack's component
    fingerprints.
 
@@ -854,6 +891,32 @@ deployer kubeconfig the runbook writes
   An upgrade that fails on an immutable StatefulSet field needs
   [its own repair](cutover.md#repair-an-immutable-statefulset-field).
   Fingerprints are patched only for a stack that passed its checks.
+- **`otel-demo/otel-demo` fails at Helm's wait and a new `flagd` Pod is not Ready**:
+  its readiness probe reads `/readyz` on flagd's management port, which answers 200
+  only once the flag file is read, so a `flagd` that starts without syncing never
+  joins the Service ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
+  The previous `flagd` Pod keeps serving while the new one is unready, so the shop
+  keeps working; the release is `failed` and the next `digest` run syncs it again.
+  Read the unready Pod's log first: after `starting sync from` a healthy flagd
+  logs nothing more, and one whose file never reaches its store warns `timeout
+  while waiting for all sync sources` after five seconds. The deployer role cannot
+  delete a Pod. An administrator deletes the unready one, and its Deployment starts
+  another.
+- **A stack's checks fail with no server span without an error, or no SPM bucket,
+  newer than the change**: the application stopped completing requests after the
+  run's writes, every request since has failed, or its traffic stopped. On the OCI
+  stack the check's own dispatch can also fail or time out while the routes and
+  spans look healthy; request `https://demo.jaegertracing.io/hotrod/dispatch?customer=123`
+  and read the newest `frontend` traces of `GET /hotrod/dispatch`. For the
+  OTel stack, open the newest `checkout` traces. An order that hangs has no
+  `PlaceOrder` span at all, because a span is stored only once it has ended: its
+  trace shows `checkout`'s client spans, such as `oteldemo.CartService/GetCart`,
+  without their parent. An order that failed has a `PlaceOrder` span with an
+  error. Then look at the Pods of `payment` and `flagd`.
+  The record's `evidenceSince` holds the time the failed checks were bound to; pass
+  it as `--since` to `stack_health.py` to repeat them.
+  The releases are `deployed`, so the next run applies nothing new to them and
+  verifies again; fix the cause first.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
   [De-adopt companion releases](cutover.md#de-adopt-companion-releases) step 1,
   then install again.
@@ -875,7 +938,10 @@ reference, source commit and digest, the compatibility receipt or `live: not
 revalidated`, the tool versions and archive SHA-256 of the toolchain lock, the
 chart archive SHA-256s and Jaeger chart commit, each selected release's status and
 revision before, method, revision after and whether it changed, the stack check
-results with the running image references, the generator restarts, the patched
+results with the running image references, the time each stack's health
+evidence had to be newer than (`evidenceSince`, written before the stack's checks
+start, so a failed verification keeps it; a passed check repeats it as
+`evidenceSinceUTC`), the generator restarts, the patched
 fingerprints and the outcome. When Helm's history cannot be read after a write,
 the revision after and `changed` are recorded as unknown (`null`), never as a
 change. A refusing adoption gate is recorded with its name (`live-diff` or
@@ -956,7 +1022,9 @@ first, then:
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
    loads, that <https://jaeger.demo.jaegertracing.io> shows a fresh `checkout`
-   trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
+   trace, and that `python3 scripts/demo/stack_health.py --stack otel --since <time>`
+   passes, where `<time>` is the UTC time the run finished, for example
+   `2026-11-25T16:37:00Z`. It can pass from about four minutes after that time.
 3. Enable the schedule again and confirm that the next scheduled run succeeds.
    The change is not accepted until it does.
 

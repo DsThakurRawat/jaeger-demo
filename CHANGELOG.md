@@ -24,6 +24,18 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The Helmfile engine's verification no longer accepts traffic and SPM evidence
+  from before the run's changes. Each stack needs a server span without an error
+  and an SPM bucket with positive calls and finite latency that are newer than
+  the start of that stack's checks, so a run fails when the application stops
+  completing requests after a change, or when every request since has failed. The
+  OCI stack's check also completes one HotROD dispatch, which its probes cannot
+  stand in for. A healthy run takes three to four minutes longer per stack, and
+  `deploy-record.json` records the time as `evidenceSince`, also when the checks
+  fail. `stack_health.py --since <time>` applies the same bound by hand; the
+  smoke check is unchanged
+  ([#170](https://github.com/jaegertracing/jaeger-demo/pull/170),
+  refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - The scripts engine (`scripts/demo/deploy.py`) refuses to run while Helm holds a
   `demo-resources` companion release in any of the four release namespaces. It
   reads the releases before its first write and names each namespace that holds
@@ -50,6 +62,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- `otel-demo/flagd` has a readiness probe on `/readyz` of flagd's management
+  port, where the chart sets none. A new `flagd` Pod that starts without reading
+  its flag file is no longer Ready: it stays out of the Service, the previous Pod
+  keeps serving, and the `otel-demo` upgrade fails at Helm's wait instead of
+  passing. The next OTel demo upgrade restarts `flagd` once, and no other workload
+  ([#170](https://github.com/jaegertracing/jaeger-demo/pull/170),
+  refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - The Helmfile runbook rehearsal in the `operations` CI job waits for the trace
   generators' old Pods to finish terminating before it plans the de-adoption.
   A plan read while one was terminating went stale and failed the job. The wait

@@ -699,6 +699,21 @@ testPinnedChartRendersHeadlessLoadGeneratorWithoutFlagdUi() {
   assertContains "$flagd_deploy" "name: init-config"
   assertContains "$flagd_deploy" "name: config-rw"
 
+  # Issue #160: flagd is Ready only once its file source has synced. The probe
+  # reads flagd's management port, which the chart's command leaves at 8014, and
+  # no other workload's pod template gains a probe from this values file.
+  local readiness
+  readiness=$(printf '%s\n' "$flagd_deploy" | grep -A7 '^[[:space:]]*readinessProbe:$')
+  assertContains "$readiness" "path: /readyz"
+  assertContains "$readiness" "port: 8014"
+  assertContains "$readiness" "periodSeconds: 10"
+  assertContains "$readiness" "timeoutSeconds: 3"
+  assertContains "$readiness" "failureThreshold: 3"
+  assertNotContains "$flagd_deploy" "management-port"
+  assertNotContains "$flagd_deploy" "livenessProbe"
+  assertEquals "only flagd should render a readiness probe" 1 \
+    "$(printf '%s\n' "$rendered" | grep -c '^[[:space:]]*readinessProbe:$')"
+
   flagd_service=$(printf '%s\n' "$rendered" | awk '
     /^---$/ { if (svc && named) printf "%s", doc; doc = ""; svc = 0; named = 0; next }
     { doc = doc $0 "\n" }

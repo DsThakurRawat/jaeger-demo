@@ -15,8 +15,10 @@ helmfile_tools.py run unless that toolchain is already first on PATH.
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -342,6 +344,7 @@ def record_gate_failure(env, root, gate):
               "outcome": "refused", "imageMode": "digest", "configCommit": gate.get("configCommit"),
               "coreMain": gate.get("coreMain"), "imageGate": gate,
               "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": [], "generatorRestarts": [],
+              "evidenceSince": {},
               "error": {"operation": "images", "release": None, "stack": gate.get("rejectedStack"), "type": gate["type"],
                         "message": "The Jaeger configuration gate rejected the candidate images"}}
     (Path(root) / RECORD).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -576,9 +579,10 @@ class ProductionChecks:
     """The live checks of each stack. Each method raises on failure."""
 
     def __init__(self, root, run, health=stack_health.check, trace=verify_trace.verify,
-                 binding=deploy.opensearch_data_binding, sleep=time.sleep, open_reader=None):
+                 binding=deploy.opensearch_data_binding, sleep=time.sleep, open_reader=None, clock=None):
         self.root, self.run, self.health, self.trace, self.binding, self.sleep = root, run, health, trace, binding, sleep
         self.open_reader = open_reader or (lambda: cluster_reader(run))
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.before = self.expected = None
 
     def prepare(self, stacks, images=None):
@@ -637,12 +641,26 @@ class ProductionChecks:
                 raise Failed(f"Certificate {ns}/{name} is not Ready")
         return [f"{ns}/{name}" for ns, name in expected]
 
-    def verify(self, stack):
+    def fresh_health(self, stack, since):
+        """The public checks, with a span and an SPM bucket newer than since (#160).
+
+        A bucket from before the stack's last write proves nothing about that write. No bucket can
+        lie wholly after since until stack_health.evidence_ready_at, so wait for it once instead of
+        spending the retries on it. The wait is at most four minutes; the retries bound the rest.
+        """
+        wait = (stack_health.evidence_ready_at(since) - self.clock()).total_seconds()
+        if wait > 0:
+            print(f"Waiting {math.ceil(wait)} s for an SPM bucket newer than the {stack} changes", flush=True)
+            self.sleep(wait)
+        return retry(lambda: self.health(stack, since=since), sleep=self.sleep)
+
+    def verify(self, stack, since=None):
+        # The time the health evidence must be newer than: reconcile passes the one it recorded.
+        since = since or self.clock()
         if stack == "oci":
             rolled = self.rollouts(OCI_ROLLOUTS)
             images = self.running_images(stack)
-            return {"rollouts": rolled, "runningImages": images,
-                    "health": retry(lambda: self.health("oci"), sleep=self.sleep)}
+            return {"rollouts": rolled, "runningImages": images, "health": self.fresh_health("oci", since)}
         rolled = self.rollouts(OTEL_ROLLOUTS)
         images = self.running_images(stack)
         if self.before is None or self.binding() != self.before:
@@ -651,7 +669,7 @@ class ProductionChecks:
         self.trace(versions["opensearch/opensearch"], versions["opensearch/opensearch-dashboards"])
         certificates = self.certificates()
         return {"rollouts": rolled, "runningImages": images, "openSearchDataBindingUnchanged": True, "freshTrace": "passed",
-                "readyCertificates": certificates, "health": retry(lambda: self.health("otel"), sleep=self.sleep)}
+                "readyCertificates": certificates, "health": self.fresh_health("otel", since)}
 
 
 # ---------------------------------------------------------------- guards and reconcile
@@ -694,14 +712,15 @@ def error_entry(stage, error):
 
 
 def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
-              verify_charts=verify_locked_charts, sleep=time.sleep, open_reader=None, companion_gate=None):
+              verify_charts=verify_locked_charts, sleep=time.sleep, open_reader=None, companion_gate=None, clock=None):
     """Reconcile the selected releases and record the run. Returns the record; raises on failure."""
     root = Path(root)
     record_path = root / RECORD
     record_path.unlink(missing_ok=True)
     record = {"engine": "helmfile", "event": env.get("GITHUB_EVENT_NAME"), "run": env.get("GITHUB_RUN_ID"),
               "outcome": "refused", "releases": [], "verifiedStacks": [], "checks": {}, "fingerprints": [],
-              "generatorRestarts": []}
+              "generatorRestarts": [], "evidenceSince": {}}
+    clock = clock or (lambda: datetime.now(timezone.utc))
     stage = {"operation": "guards", "release": None, "stack": None}
     wrote = []
     try:
@@ -774,7 +793,7 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
                                   "revisionBefore": prior.get("revision"), "chartBefore": prior.get("chart"),
                                   "method": None, "revisionAfter": None, "statusAfter": None, "changed": False}
             record["releases"].append(entries[row["id"]])
-        checks = checks or ProductionChecks(root, run, sleep=sleep)
+        checks = checks or ProductionChecks(root, run, sleep=sleep, clock=clock)
         checks.prepare({release_phases.stack_of(row["id"]) for row in rows} | {"oci"}, images=expected)
         # Adoption must not change a pod template: the generator restart is for applies in digest
         # mode only, the routine deployments after adoption (parity with the scripts until #2).
@@ -819,7 +838,11 @@ def reconcile(env, *, root=ROOT, run=run_command, checks=None, live_images=None,
                     run(["kubectl", "-n", ns, "rollout", "status", "deployment/trace-generator", "--timeout=5m"])
                     record["generatorRestarts"].append(stack)
                 stage.update(operation="verify", release=None, stack=stack)
-                record["checks"][stack] = checks.verify(stack)
+                # Every write to the stack, and its generator restart, happened before this. Recorded
+                # before the checks start, so a failed verification keeps the bound it failed against.
+                since = clock()
+                record["evidenceSince"][stack] = since.isoformat()
+                record["checks"][stack] = checks.verify(stack, since)
                 record["verifiedStacks"].append(stack)
                 if operation == "apply":
                     # Keep the script engine's records current, one key at a time as deploy.py writes them.
@@ -854,6 +877,9 @@ def summary(record):
              f"- Event: {record.get('event')}; operation: {record.get('operation')}; image mode: {record.get('imageMode')}",
              f"- Configuration commit: {record.get('configCommit')}; upstream Jaeger main: {record.get('coreMain')}",
              f"- Verified stacks: {', '.join(record['verifiedStacks']) or 'none'}"]
+    bounds = record.get("evidenceSince")
+    if bounds:
+        lines.append("- Health evidence newer than: " + ", ".join(f"{stack} {at}" for stack, at in bounds.items()))
     compatibility = record.get("compatibility")
     if isinstance(compatibility, dict):
         compatibility = f"passed for selection {compatibility.get('selectionSHA256')}"

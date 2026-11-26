@@ -128,7 +128,9 @@ and OCI infrastructure/add-on maintenance is outside this workflow.
 on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stacks,
 `scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
 Jaeger UI tracking configuration, recent application spans and finite span
-metrics.
+metrics. The smoke check is a routine check of current traffic. The deployment
+tooling binds the same script to a change with `--since`
+([public health checks](../../docs/helmfile-applications.md#public-health-checks)).
 
 Retries and alerts:
 

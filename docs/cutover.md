@@ -1108,6 +1108,13 @@ is a reviewed commit on `main`, never a change made by hand.
   dispatch the live-mode apply again. Its record must show the no-op of the
   adoption step.
 
+When `otel-demo/otel-demo` failed at Helm's wait because a new `flagd` Pod never
+became Ready, the Pods listing above shows two `flagd` Pods: the previous one,
+Ready and still serving, and the new one at `0/1`. The cause is in that Pod, not
+in the configuration ([when a Helmfile run fails](releases.md#when-a-helmfile-run-fails)).
+After its log is kept, an administrator deletes the unready Pod, the Deployment
+starts another, and the apply above syncs the release.
+
 A failed first companion install is recovered by de-adoption step 1 instead, as
 in [Install each companion release](#install-each-companion-release). A failed
 OpenSearch upgrade that changed the engine version cannot be rolled back; see
@@ -1490,8 +1497,10 @@ no longer exists.
   the expected result, which in live mode is the no-op of the adoption step; an
   identity comparison with the capture taken before the incident whose every
   difference is explained; a drift report that exits 0; both stacks healthy with
-  fresh traces; and `0 difference(s)` from both access checks when access was
-  involved.
+  fresh traces and an SPM bucket newer than the last recovery step
+  (`python3 scripts/demo/stack_health.py --stack <name> --since <UTC time of that step>`,
+  which can pass from about four minutes after it); and `0 difference(s)` from
+  both access checks when access was involved.
 - **Where it goes.** The run URLs, records, captures, reports and decisions go in
   the private release record, and a dated, sanitized summary of the outcome in
   the [migration plan's evidence](MIGRATION.md#current-evidence-and-unresolved-gates).

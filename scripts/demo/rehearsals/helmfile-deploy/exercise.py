@@ -205,7 +205,7 @@ class Checks:
         # here; the live-mode pass runs the production check of the running images.
         self.calls.append(("prepare", tuple(sorted(stacks))))
 
-    def verify(self, stack):
+    def verify(self, stack, since=None):
         self.calls.append(("verify", stack))
         if stack in self.fail:
             raise RuntimeError(f"fixture {stack} health unavailable")
@@ -571,7 +571,7 @@ def exercise(cfg, context):
         return {"repository": repo, "tag": tag, "sourceCommit": tag, "digest": digest, "platformManifest": digest}
 
     (root / "helmfile/images.yaml").write_text("mode: live\n")
-    production = helmfile_deploy.ProductionChecks(root, run, health=lambda stack: {"stack": stack, "stub": True},
+    production = helmfile_deploy.ProductionChecks(root, run, health=lambda stack, since=None: {"stack": stack, "stub": True},
                                                   trace=lambda *versions: None, sleep=lambda s: None)
 
     def live_apply():

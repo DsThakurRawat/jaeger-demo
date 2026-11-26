@@ -362,7 +362,7 @@ def exercise(cfg, context):
         """The workflow dispatch: what its Reconcile step runs, then the record download."""
         commands.clear()
         mode = helmfile_deploy.image_mode(root)
-        checks = (helmfile_deploy.ProductionChecks(root, run, health=lambda stack: {"stack": stack, "stub": True},
+        checks = (helmfile_deploy.ProductionChecks(root, run, health=lambda stack, since=None: {"stack": stack, "stub": True},
                                                    trace=lambda *versions: None, sleep=lambda s: None)
                   if mode == "live" else fixture.Checks(admin_helm))
         error = None
