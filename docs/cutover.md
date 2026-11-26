@@ -1467,8 +1467,10 @@ namespace is de-adopted may a run use `engine=scripts` again.
   the expected result, which in live mode is the no-op of the adoption step; an
   identity comparison with the capture taken before the incident whose every
   difference is explained; a drift report that exits 0; both stacks healthy with
-  fresh traces; and `0 difference(s)` from both access checks when access was
-  involved.
+  fresh traces and an SPM bucket newer than the last recovery step
+  (`python3 scripts/demo/stack_health.py --stack <name> --since <UTC time of that step>`,
+  which can pass from about four minutes after it); and `0 difference(s)` from
+  both access checks when access was involved.
 - **Where it goes.** The run URLs, records, captures, reports and decisions go in
   the private release record, and a dated, sanitized summary of the outcome in
   the [migration plan's evidence](MIGRATION.md#current-evidence-and-unresolved-gates).

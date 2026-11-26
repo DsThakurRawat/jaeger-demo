@@ -151,7 +151,11 @@ payloads.
    remains failed even if unrelated components succeed.
 5. Verify fresh trace write/read, current generated traffic, UI and public routes,
    finite SPM calls and latency under load, Grafana, TLS and the configured analytics
-   behavior on both demos. Compare namespace/release names, Service addresses and
+   behavior on both demos. The traffic and SPM evidence must be newer than the
+   change: a bucket from before it says nothing about it. The Helmfile engine binds
+   its checks to the change itself; after a change made another way, pass its time,
+   as in `python3 scripts/demo/stack_health.py --stack otel --since 2026-11-25T16:37:00Z`.
+   Compare namespace/release names, Service addresses and
    PVC bindings against the pre-run record.
 6. Record the result. Diagnose failures before retrying or rolling back; do not
    promote an unverified result to last-known-good state.
@@ -667,8 +671,23 @@ the pinned tools for every Helm and Helmfile call:
    in the companion sources. This is stricter than the scripts, which only log
    Certificate readiness: a missing or unready one fails the run. The `default`
    Certificate is not checked, because the deployer role lists Certificates only in
-   the OTel namespaces. The health checks are retried up to ten times, 30 seconds
-   apart. OTel never starts when OCI fails.
+   the OTel namespaces. OTel never starts when OCI fails.
+
+   Each stack's `stack_health.py` evidence must be newer than the start of that
+   stack's checks, which is after its last release and its generator restart
+   ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)): the fresh
+   `frontend` or `checkout` span starts after it, and the SPM bucket with positive
+   server calls and finite latency is one whose whole two-minute rate window began
+   after it. For the OTel stack those are `checkout` server spans, its `PlaceOrder`
+   orders, that started and ended after the change. No bucket can qualify
+   until three to four minutes after the start, so the engine waits once for the
+   first one and then tries up to ten times, 30 seconds apart. A healthy run
+   therefore takes three to four minutes longer per stack than the checks
+   themselves, and a stack with no such bucket fails about eight and a half minutes
+   after its checks began, plus the time of the requests. The check proves that
+   orders completed in the minutes after the change. It cannot see a fault that
+   develops later; the [smoke check](../scripts/demo/README.md#scheduled-smoke-check)
+   covers that.
 6. On an apply, after a stack's checks pass, patches that stack's component
    fingerprints.
 
@@ -726,6 +745,12 @@ deployer kubeconfig the runbook writes
   while waiting for all sync sources` after five seconds. The deployer role cannot
   delete a Pod. An administrator deletes the unready one, and its Deployment starts
   another.
+- **A stack's checks fail with no SPM bucket newer than the change**: the
+  application stopped completing requests after the run's writes, or its traffic
+  stopped. For the OTel stack, look at the newest `checkout` traces for a
+  `PlaceOrder` span that never ends and at the Pods of `payment` and `flagd`.
+  The releases are `deployed`, so the next run applies nothing new to them and
+  verifies again; fix the cause first.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
   [De-adopt companion releases](cutover.md#de-adopt-companion-releases) step 1,
   then install again.
@@ -747,7 +772,8 @@ reference, source commit and digest, the compatibility receipt or `live: not
 revalidated`, the tool versions and archive SHA-256 of the toolchain lock, the
 chart archive SHA-256s and Jaeger chart commit, each selected release's status and
 revision before, method, revision after and whether it changed, the stack check
-results with the running image references, the generator restarts, the patched
+results with the running image references and the time each stack's health
+evidence had to be newer than (`evidenceSinceUTC`), the generator restarts, the patched
 fingerprints and the outcome. When Helm's history cannot be read after a write,
 the revision after and `changed` are recorded as unknown (`null`), never as a
 change. A refusing adoption gate is recorded with its name (`live-diff` or
@@ -828,7 +854,9 @@ first, then:
    [change and verification process](#change-and-verification-process). For the
    OTel sample application, confirm that <https://shop.demo.jaegertracing.io/>
    loads, that <https://jaeger.demo.jaegertracing.io> shows a fresh `checkout`
-   trace, and that `python3 scripts/demo/stack_health.py --stack otel` passes.
+   trace, and that `python3 scripts/demo/stack_health.py --stack otel --since <time>`
+   passes, where `<time>` is the UTC time the run finished, for example
+   `2026-11-25T16:37:00Z`. It can pass from about four minutes after that time.
 3. Enable the schedule again and confirm that the next scheduled run succeeds.
    The change is not accepted until it does.
 

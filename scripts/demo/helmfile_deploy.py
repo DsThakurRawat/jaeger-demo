@@ -15,8 +15,10 @@ helmfile_tools.py run unless that toolchain is already first on PATH.
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -576,9 +578,10 @@ class ProductionChecks:
     """The live checks of each stack. Each method raises on failure."""
 
     def __init__(self, root, run, health=stack_health.check, trace=verify_trace.verify,
-                 binding=deploy.opensearch_data_binding, sleep=time.sleep, open_reader=None):
+                 binding=deploy.opensearch_data_binding, sleep=time.sleep, open_reader=None, clock=None):
         self.root, self.run, self.health, self.trace, self.binding, self.sleep = root, run, health, trace, binding, sleep
         self.open_reader = open_reader or (lambda: cluster_reader(run))
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.before = self.expected = None
 
     def prepare(self, stacks, images=None):
@@ -637,12 +640,26 @@ class ProductionChecks:
                 raise Failed(f"Certificate {ns}/{name} is not Ready")
         return [f"{ns}/{name}" for ns, name in expected]
 
+    def fresh_health(self, stack, since):
+        """The public checks, with a span and an SPM bucket newer than since (#160).
+
+        A bucket from before the stack's last write proves nothing about that write. No bucket can
+        lie wholly after since until stack_health.evidence_ready_at, so wait for it once instead of
+        spending the retries on it. The wait is at most four minutes; the retries bound the rest.
+        """
+        wait = (stack_health.evidence_ready_at(since) - self.clock()).total_seconds()
+        if wait > 0:
+            print(f"Waiting {math.ceil(wait)} s for an SPM bucket newer than the {stack} changes", flush=True)
+            self.sleep(wait)
+        return retry(lambda: self.health(stack, since=since), sleep=self.sleep)
+
     def verify(self, stack):
+        # Every write to the stack, and its generator restart, happened before this call.
+        since = self.clock()
         if stack == "oci":
             rolled = self.rollouts(OCI_ROLLOUTS)
             images = self.running_images(stack)
-            return {"rollouts": rolled, "runningImages": images,
-                    "health": retry(lambda: self.health("oci"), sleep=self.sleep)}
+            return {"rollouts": rolled, "runningImages": images, "health": self.fresh_health("oci", since)}
         rolled = self.rollouts(OTEL_ROLLOUTS)
         images = self.running_images(stack)
         if self.before is None or self.binding() != self.before:
@@ -651,7 +668,7 @@ class ProductionChecks:
         self.trace(versions["opensearch/opensearch"], versions["opensearch/opensearch-dashboards"])
         certificates = self.certificates()
         return {"rollouts": rolled, "runningImages": images, "openSearchDataBindingUnchanged": True, "freshTrace": "passed",
-                "readyCertificates": certificates, "health": retry(lambda: self.health("otel"), sleep=self.sleep)}
+                "readyCertificates": certificates, "health": self.fresh_health("otel", since)}
 
 
 # ---------------------------------------------------------------- guards and reconcile

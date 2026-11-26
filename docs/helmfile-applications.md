@@ -133,6 +133,8 @@ Anything else is unexplained, including foreign, partial or missing Helm ownersh
 
 Run `python3 scripts/demo/stack_health.py --stack oci` or `--stack otel` to check the Jaeger UI and its configured analytics ID, the stack's HTTPS routes, current frontend or checkout traces, and finite p95 latency in a completed SPM bucket with positive calls. Calls and latency use the same UTC end time and must have matching sample timestamps. The OCI check also inspects Grafana database health. The OTel check verifies Dashboards status and the storefront. The output contains service names, freshness and aggregate metrics. The checker reads existing traffic. A controlled write/read and cluster rollout checks are additional release gates.
 
+After a change, add `--since <time>` with the UTC time of the change, for example `--since 2026-11-25T16:37:00Z`. The trace must then start after that time, and the SPM bucket must be one whose whole rate window began after it, so a bucket from before the change cannot pass ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)). The check asks for two-minute rates in place of the routine ten-minute ones, and the first bucket that can qualify is complete three to four minutes after the change; until then the check fails with `TrafficPending`. The Helmfile engine passes the start of each stack's checks. The output's `evidenceSinceUTC` is that time, or `null` for a routine check.
+
 ## Pull request render summary
 
 The **Rendered resource changes** pull request job renders the exact base and head

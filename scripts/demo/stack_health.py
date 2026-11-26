@@ -28,8 +28,25 @@ PAGES = {
 }
 
 
+# Evidence newer than a change. A calls value is a rate over a window that ends at its
+# sample, so a sample stamped after a change still counts spans from before it until the
+# whole window lies after the change. The routine ten-minute window would delay that proof
+# by ten minutes, so a check bound to a change asks for two-minute rates instead: the
+# shortest window that always spans a flush of the span metrics the OCI stack scrapes, and
+# two one-minute buckets of the spans the OTel stack aggregates.
+ROUTINE_RATE_SECONDS = 600
+FRESH_RATE_SECONDS = 120
+STEP_SECONDS = 60
+
+
 class TrafficPending(ValueError):
     """A valid response has no recent evidence of application traffic yet."""
+
+
+def evidence_ready_at(since):
+    """The earliest time a completed SPM sample can lie wholly after since."""
+    first = math.ceil((since.timestamp() + FRESH_RATE_SECONDS) / STEP_SECONDS) * STEP_SECONDS
+    return datetime.fromtimestamp(first + STEP_SECONDS, timezone.utc)
 
 
 def fetch(url, *, timeout=15):
@@ -44,8 +61,10 @@ def fetch(url, *, timeout=15):
         return raw
 
 
-def recent_spans(payload, service, now):
+def recent_spans(payload, service, now, since=None):
     minimum = (now - timedelta(minutes=10)).timestamp()
+    if since is not None:
+        minimum = max(minimum, since.timestamp())
     latest = None
     for line in payload.splitlines():
         if not line.strip():
@@ -81,9 +100,15 @@ def samples_by_timestamp(payload, now):
     return values
 
 
-def check_metrics(calls, latency, now):
+def check_metrics(calls, latency, now, since=None):
     rates = samples_by_timestamp(calls, now)
     quantiles = samples_by_timestamp(latency, now)
+    if since is not None:
+        # Only a sample whose whole rate window began at or after the change is evidence of it.
+        first = since + timedelta(seconds=FRESH_RATE_SECONDS)
+        rates = {timestamp: values for timestamp, values in rates.items() if timestamp >= first}
+        if not rates:
+            raise TrafficPending("No completed SPM bucket lies wholly after the change yet")
     # Evaluate latency only in a completed bucket with observed traffic.
     for timestamp in sorted(rates, reverse=True):
         if all(math.isfinite(v) and v >= 0 for v in rates[timestamp]) and sum(rates[timestamp]) > 0:
@@ -96,8 +121,11 @@ def check_metrics(calls, latency, now):
     raise TrafficPending("No recent completed SPM bucket with positive calls")
 
 
-def check(stack, read=fetch, *, tracking=None):
+def check(stack, read=fetch, *, tracking=None, since=None):
+    """Check one stack. With since, the span and the SPM bucket must be newer than that time."""
     base, service = STACKS[stack]
+    if since is not None and (since.tzinfo is None or since > datetime.now(timezone.utc)):
+        raise ValueError("since must be a past time with a UTC offset")
     ui = read(base + ("/" if stack == "oci" else "/search")).decode()
     if tracking is None:
         tracking = json.loads((ROOT / "examples/oci/ui-config.json").read_text())["tracking"]
@@ -122,22 +150,39 @@ def check(stack, read=fetch, *, tracking=None):
     if service not in services:
         raise TrafficPending(f"{service} is missing from Jaeger")
     now = datetime.now(timezone.utc)
-    criteria = {"query.service_name": service, "query.start_time_min": (now - timedelta(minutes=10)).isoformat(),
+    earliest = now - timedelta(minutes=10)
+    if since is not None:
+        earliest = max(earliest, since)
+    criteria = {"query.service_name": service, "query.start_time_min": earliest.isoformat(),
                 "query.start_time_max": now.isoformat(), "query.search_depth": "20"}
-    latest = recent_spans(read(base + "/api/v3/traces?" + urllib.parse.urlencode(criteria)), service, now)
-    opts = {"service": service, "spanKind": "server", "lookback": "600000", "step": "60000", "ratePer": "600000"}
+    latest = recent_spans(read(base + "/api/v3/traces?" + urllib.parse.urlencode(criteria)), service, now, since)
+    rate = ROUTINE_RATE_SECONDS if since is None else FRESH_RATE_SECONDS
+    opts = {"service": service, "spanKind": "server", "lookback": "600000", "step": str(STEP_SECONDS * 1000),
+            "ratePer": str(rate * 1000)}
     # Both Prometheus queries must evaluate the same completed sample intervals.
     opts["endTs"] = str(int(now.replace(second=0, microsecond=0).timestamp()) * 1000)
     metrics = base + "/api/metrics/"
     calls = json.loads(read(metrics + "calls?" + urllib.parse.urlencode(opts)))
     latency = json.loads(read(metrics + "latencies?" + urllib.parse.urlencode(dict(opts, quantile="0.95"))))
-    observed = check_metrics(calls, latency, now)
+    observed = check_metrics(calls, latency, now, since)
     return {"stack": stack, "service": service, "uiTrackingMatched": True, "publicRoutesHealthy": True,
-            "newestMatchingSpanAgeSeconds": latest, "finiteSPMBucketUTC": datetime.fromtimestamp(observed, timezone.utc).isoformat()}
+            "newestMatchingSpanAgeSeconds": latest, "finiteSPMBucketUTC": datetime.fromtimestamp(observed, timezone.utc).isoformat(),
+            "evidenceSinceUTC": since.isoformat() if since is not None else None}
+
+
+def parse_time(value):
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("--since needs a UTC offset, for example 2026-11-25T16:37:00Z")
+    return parsed
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stack", required=True, choices=STACKS)
+    parser.add_argument("--since", type=parse_time, metavar="TIME",
+                        help="ISO 8601 time of a change, for example 2026-11-25T16:37:00Z. The span and the "
+                             "SPM bucket must then be newer than it; the first such bucket is complete three to "
+                             "four minutes after it.")
     args = parser.parse_args()
-    print(json.dumps(check(args.stack), indent=2))
+    print(json.dumps(check(args.stack, since=args.since), indent=2))

@@ -571,7 +571,7 @@ def exercise(cfg, context):
         return {"repository": repo, "tag": tag, "sourceCommit": tag, "digest": digest, "platformManifest": digest}
 
     (root / "helmfile/images.yaml").write_text("mode: live\n")
-    production = helmfile_deploy.ProductionChecks(root, run, health=lambda stack: {"stack": stack, "stub": True},
+    production = helmfile_deploy.ProductionChecks(root, run, health=lambda stack, since=None: {"stack": stack, "stub": True},
                                                   trace=lambda *versions: None, sleep=lambda s: None)
 
     def live_apply():

@@ -24,6 +24,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The Helmfile engine's verification no longer accepts traffic and SPM evidence
+  from before the run's changes. Each stack's fresh span and its SPM bucket with
+  positive calls and finite latency must be newer than the start of that stack's
+  checks, so a run fails when the application stops completing requests after a
+  change. A healthy run takes three to four minutes longer per stack, and
+  `deploy-record.json` records the time as `evidenceSinceUTC`.
+  `stack_health.py --since <time>` applies the same bound by hand; the smoke check
+  is unchanged
+  (refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
   and the switch of the daily schedule to that engine
   ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),
