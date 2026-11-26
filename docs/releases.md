@@ -715,6 +715,17 @@ deployer kubeconfig the runbook writes
   An upgrade that fails on an immutable StatefulSet field needs
   [its own repair](cutover.md#repair-an-immutable-statefulset-field).
   Fingerprints are patched only for a stack that passed its checks.
+- **`otel-demo/otel-demo` fails at Helm's wait and a new `flagd` Pod is not Ready**:
+  its readiness probe reads `/readyz` on flagd's management port, which answers 200
+  only once the flag file is read, so a `flagd` that starts without syncing never
+  joins the Service ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
+  The previous `flagd` Pod keeps serving while the new one is unready, so the shop
+  keeps working; the release is `failed` and the next `digest` run syncs it again.
+  Read the unready Pod's log first: after `starting sync from` a healthy flagd
+  logs nothing more, and one whose file never reaches its store warns `timeout
+  while waiting for all sync sources` after five seconds. The deployer role cannot
+  delete a Pod. An administrator deletes the unready one, and its Deployment starts
+  another.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
   [De-adopt companion releases](cutover.md#de-adopt-companion-releases) step 1,
   then install again.

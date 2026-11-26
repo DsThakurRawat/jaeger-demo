@@ -90,7 +90,9 @@ ROLLOUT_TIMEOUT=900 ./deploy-all.sh upgrade
   - OpenTelemetry Demo (frontend, load-generator, and supporting services).
     The load generator runs headless and the flagd-ui sidecar is removed: the
     public `/loadgen/` and `/feature` routes have no backend, and the feature
-    flags stay at their reviewed `demo.flagd.json` content.
+    flags stay at their reviewed `demo.flagd.json` content. `flagd` has a
+    readiness probe on `/readyz` of its management port (8014), which the chart
+    does not set: its Pod is Ready only after it has read that file.
 
 
 ## Verifying the deployment

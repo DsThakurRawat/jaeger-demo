@@ -34,6 +34,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- `otel-demo/flagd` has a readiness probe on `/readyz` of flagd's management
+  port, where the chart sets none. A new `flagd` Pod that starts without reading
+  its flag file is no longer Ready: it stays out of the Service, the previous Pod
+  keeps serving, and the `otel-demo` upgrade fails at Helm's wait instead of
+  passing. The next OTel demo upgrade restarts `flagd` once, and no other workload
+  (refs [#160](https://github.com/jaegertracing/jaeger-demo/issues/160)).
 - The Helmfile runbook rehearsal in the `operations` CI job waits for the trace
   generators' old Pods to finish terminating before it plans the de-adoption.
   A plan read while one was terminating went stale and failed the job. The wait

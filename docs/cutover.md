@@ -1086,6 +1086,13 @@ is a reviewed commit on `main`, never a change made by hand.
   dispatch the live-mode apply again. Its record must show the no-op of the
   adoption step.
 
+When `otel-demo/otel-demo` failed at Helm's wait because a new `flagd` Pod never
+became Ready, the Pods listing above shows two `flagd` Pods: the previous one,
+Ready and still serving, and the new one at `0/1`. The cause is in that Pod, not
+in the configuration ([when a Helmfile run fails](releases.md#when-a-helmfile-run-fails)).
+After its log is kept, an administrator deletes the unready Pod, the Deployment
+starts another, and the apply above syncs the release.
+
 A failed first companion install is recovered by de-adoption step 1 instead, as
 in [Install each companion release](#install-each-companion-release). A failed
 OpenSearch upgrade that changed the engine version cannot be rolled back; see
