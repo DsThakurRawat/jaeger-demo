@@ -42,6 +42,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve()
@@ -64,6 +65,45 @@ def rehearsal(name):
 
 
 fixture = rehearsal("helmfile-deploy")
+
+
+def unsettled_generators(deployments):
+    """The namespaces whose trace generator Deployment has a terminating Pod or an unobserved change."""
+    unsettled = []
+    for ns, live in deployments.items():
+        status = live.get("status") or {}
+        if status.get("terminatingReplicas") or status.get("observedGeneration") != live["metadata"]["generation"]:
+            unsettled.append(ns)
+    return unsettled
+
+
+def settle_generators(read, timeout=120, clock=time.monotonic, sleep=time.sleep):
+    """Wait until no trace generator Deployment is unsettled; `read(ns, seconds)` returns one.
+
+    The generator runs `sh -c` as PID 1, which ignores SIGTERM, so a restarted generator's old
+    Pod stays for its 30-second grace period after `rollout status` returns. Its removal then
+    updates the Deployment's `status.terminatingReplicas` (on by default since Kubernetes 1.35)
+    and so its resourceVersion, which a reviewed ownership plan tests. Each read is bounded by
+    the time left.
+    """
+    deadline = clock() + timeout
+    while True:
+        deployments = {}
+        for ns in helmfile_deploy.GENERATOR.values():
+            left = deadline - clock()
+            try:
+                if left <= 0:
+                    raise subprocess.TimeoutExpired("read", timeout)
+                deployments[ns] = read(ns, left)
+            except subprocess.TimeoutExpired:
+                raise AssertionError(f"Reading the {ns} trace generator passed the {timeout}s settle limit") from None
+        unsettled = unsettled_generators(deployments)
+        if not unsettled:
+            return
+        sleep(min(2, max(0, deadline - clock())))
+        if clock() >= deadline:
+            raise AssertionError(f"The trace generators did not settle within {timeout}s: {unsettled}")
+
 
 CONTEXT = "kind-jaeger-demo-runbook-fixture"
 # The run attempt the runbook's record steps name. Each dispatch here stands for a first attempt.
@@ -172,6 +212,12 @@ def exercise(cfg, context):
 
     def admin_json(*args):
         return json.loads(subprocess.check_output(ctl + list(args) + ["-o", "json"]))
+
+    def generator(ns, seconds):
+        """A trace generator Deployment, read within the given number of seconds."""
+        return json.loads(subprocess.check_output(
+            ctl + ["-n", ns, "get", "deployment", "trace-generator", "-o", "json",
+                   f"--request-timeout={max(1, int(seconds))}s"], timeout=seconds))
 
     # ------------------------------------------------------------ the fixture, as the administrator
     for ns in release_phases.NAMESPACES[1:]:
@@ -571,7 +617,9 @@ def exercise(cfg, context):
     data = admin_json("-n", "opensearch", "get", "persistentvolumeclaim", claim["name"])
     assert (data["metadata"]["uid"], data["spec"]["volumeName"]) == (claim["uid"], claim["volume"]), data
 
-    # 10. De-adoption of every namespace, in the reverse of the adoption order.
+    # 10. De-adoption of every namespace, in the reverse of the adoption order. The applies above
+    # restarted the generators, and a plan made while an old generator Pod terminates goes stale.
+    settle_generators(generator)
     block("capture-identities", STEP="before-de-adoption")
     for ns in reversed(ORDER):
         assert f"sh.helm.release.v1.{release_phases.COMPANION}.v1" in block("deadopt-records", ns=ns).stdout
