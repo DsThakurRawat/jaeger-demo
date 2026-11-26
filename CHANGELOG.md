@@ -22,6 +22,13 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ## 2026-11-26
 
+### Changed
+
+- `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
+  and the switch of the daily schedule to that engine
+  ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),
+  refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+
 ### Fixed
 
 - The Helmfile runbook rehearsal in the `operations` CI job waits for the trace
