@@ -205,7 +205,7 @@ class Checks:
         # here; the live-mode pass runs the production check of the running images.
         self.calls.append(("prepare", tuple(sorted(stacks))))
 
-    def verify(self, stack):
+    def verify(self, stack, since=None):
         self.calls.append(("verify", stack))
         if stack in self.fail:
             raise RuntimeError(f"fixture {stack} health unavailable")

@@ -16,11 +16,43 @@ def metric(at, value):
     return {"metrics": [{"metricPoints": [point]}]}
 
 
-def trace(service, at):
-    span = {"traceId": "e1" * 16, "startTimeUnixNano": str(int(at.timestamp() * 1e9))}
+SERVER, CLIENT = 2, 3
+
+
+def trace(service, at, kind=None, *more):
+    """One trace of the service: a span at each (time, kind), as Jaeger's /api/v3/traces returns it."""
+    spans = [{"traceId": "e1" * 16, "startTimeUnixNano": str(int(start.timestamp() * 1e9)),
+              **({} if span_kind is None else {"kind": span_kind})} for start, span_kind in ((at, kind), *more)]
     batch = {"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": service}}]},
-             "scopeSpans": [{"spans": [span]}]}
+             "scopeSpans": [{"spans": spans}]}
     return json.dumps({"result": {"resourceSpans": [batch]}}).encode()
+
+
+def public_stack(stack, spans, metrics):
+    """A read() for one stack: spans are the service's (time, kind) pairs, metrics answers the SPM queries."""
+    base, service = stack_health.STACKS[stack]
+    tracking = json.loads((stack_health.ROOT / "examples/oci/ui-config.json").read_text())
+    ui = ("Jaeger UI; const JAEGER_CONFIG = " + json.dumps(tracking) + ";").encode()
+
+    def read(url):
+        parts = urlsplit(url)
+        if url == base + ("/" if stack == "oci" else "/search"):
+            return ui
+        if url in stack_health.PAGES[stack]:
+            return stack_health.PAGES[stack][url][0].encode()
+        if parts.path.endswith("/api/health"):
+            return b'{"database":"ok"}'
+        if parts.path.endswith("/api/status"):
+            return b'{"status":{"overall":{"state":"green"}}}'
+        if parts.path.endswith("/api/v3/services"):
+            return json.dumps({"services": [service]}).encode()
+        if parts.path.endswith("/api/v3/traces"):
+            return trace(service, *spans[0], *spans[1:])
+        if "/api/metrics/" in parts.path:
+            return metrics(parts.path.rsplit("/", 1)[1], parse_qs(parts.query))
+        raise AssertionError(f"Unexpected URL {url}")
+
+    return read
 
 
 def checkout_stack(orders, now):
@@ -30,11 +62,8 @@ def checkout_stack(orders, now):
     Jaeger's OpenSearch-backed SPM: one bucket per step by span start time, a calls value that
     counts the buckets of one rate window ending with its own, rounded to two decimals, and NaN
     for calls and latency alike when the bucket itself holds no span. Checkout keeps emitting
-    other spans while orders hang, so the trace search always finds a fresh one.
+    client spans while orders hang, so the trace search always finds a fresh one of those.
     """
-    base, service = stack_health.STACKS["otel"]
-    tracking = json.loads((stack_health.ROOT / "examples/oci/ui-config.json").read_text())
-    ui = ("Jaeger UI; const JAEGER_CONFIG = " + json.dumps(tracking) + ";").encode()
     starts = [order.timestamp() for order in orders]
     asked = []
 
@@ -52,23 +81,9 @@ def checkout_stack(orders, now):
             at += step
         return json.dumps({"metrics": [{"metricPoints": points}]}).encode()
 
-    def read(url):
-        parts = urlsplit(url)
-        if url == base + "/search":
-            return ui
-        if url in stack_health.PAGES["otel"]:
-            return stack_health.PAGES["otel"][url][0].encode()
-        if parts.path.endswith("/api/status"):
-            return b'{"status":{"overall":{"state":"green"}}}'
-        if parts.path.endswith("/api/v3/services"):
-            return json.dumps({"services": [service]}).encode()
-        if parts.path.endswith("/api/v3/traces"):
-            return trace(service, now - timedelta(seconds=5))
-        if "/api/metrics/" in parts.path:
-            return metrics(parts.path.rsplit("/", 1)[1], parse_qs(parts.query))
-        raise AssertionError(f"Unexpected URL {url}")
-
-    return read, asked
+    # A completed order is a server span; the fresh client span is one of a hanging order.
+    spans = [(now - timedelta(seconds=5), CLIENT)] + [(order, SERVER) for order in orders]
+    return public_stack("otel", spans, metrics), asked
 
 
 class StackHealthTests(unittest.TestCase):
@@ -185,11 +200,45 @@ class StackHealthTests(unittest.TestCase):
     def test_fresh_span_must_start_after_a_change(self):
         now = datetime.now(timezone.utc)
         at = now - timedelta(seconds=90)
-        self.assertAlmostEqual(stack_health.recent_spans(trace("checkout", at), "checkout", now), 90)
-        self.assertAlmostEqual(
-            stack_health.recent_spans(trace("checkout", at), "checkout", now, now - timedelta(seconds=120)), 90)
-        with self.assertRaises(stack_health.TrafficPending):
-            stack_health.recent_spans(trace("checkout", at), "checkout", now, now - timedelta(seconds=60))
+        after, before = now - timedelta(seconds=120), now - timedelta(seconds=60)
+        for kind in (SERVER, "SPAN_KIND_SERVER"):
+            with self.subTest(kind=kind):
+                body = trace("checkout", at, kind)
+                self.assertAlmostEqual(stack_health.recent_spans(body, "checkout", now), 90)
+                self.assertAlmostEqual(stack_health.recent_spans(body, "checkout", now, after), 90)
+                with self.assertRaises(stack_health.TrafficPending):
+                    stack_health.recent_spans(body, "checkout", now, before)
+        # A routine check takes any span of the service. Bound to a change, only a server span is
+        # evidence: a client span after it, beside a server span from before it, proves no request.
+        for kind in (CLIENT, None, 1, "SPAN_KIND_CLIENT"):
+            with self.subTest(kind=kind):
+                body = trace("checkout", at, kind, (now - timedelta(seconds=300), SERVER))
+                self.assertAlmostEqual(stack_health.recent_spans(body, "checkout", now), 90)
+                with self.assertRaisesRegex(stack_health.TrafficPending, "server span started after the change"):
+                    stack_health.recent_spans(body, "checkout", now, after)
+        both = trace("checkout", at, CLIENT, (now - timedelta(seconds=100), SERVER))
+        self.assertAlmostEqual(stack_health.recent_spans(both, "checkout", now, after), 100)
+
+    def test_buffered_span_metrics_do_not_pass_without_a_server_span_after_the_change(self):
+        # The OCI stack's connector flushes its counters every 60 s and Prometheus scrapes them every
+        # 15 s, so requests that ended before a change can raise a rate window that began after it.
+        now = datetime.now(timezone.utc)
+        minute = now.replace(second=0, microsecond=0)
+        since = minute - timedelta(minutes=3, seconds=10)
+
+        def metrics(name, query):
+            self.assertEqual(query["ratePer"], [str(stack_health.FRESH_RATE_SECONDS * 1000)])
+            # Positive in the one bucket whose window lies wholly after the change, from the flush.
+            return json.dumps(metric(minute - timedelta(minutes=1), 0.5 if name == "calls" else 20)).encode()
+
+        # frontend's own client calls continue; its last server span ended just before the change.
+        stale = [(now - timedelta(seconds=10), CLIENT), (since - timedelta(seconds=20), SERVER)]
+        with self.assertRaisesRegex(stack_health.TrafficPending, "frontend server span started after the change"):
+            stack_health.check("oci", public_stack("oci", stale, metrics), since=since)
+        fresh = stale + [(now - timedelta(seconds=30), SERVER)]
+        result = stack_health.check("oci", public_stack("oci", fresh, metrics), since=since)
+        self.assertEqual(result["evidenceSinceUTC"], since.isoformat())
+        self.assertAlmostEqual(result["newestMatchingSpanAgeSeconds"], 30, delta=1)
 
     def test_a_check_right_after_a_change_needs_a_bucket_newer_than_it(self):
         # Issue #160: orders completed until the change and none since. Checked at once, the
@@ -198,10 +247,16 @@ class StackHealthTests(unittest.TestCase):
         since = now - timedelta(seconds=20)
         read, asked = checkout_stack([since - timedelta(seconds=20 * n) for n in range(1, 45)], now)
         self.assertIsNone(stack_health.check("otel", read)["evidenceSinceUTC"])
-        with self.assertRaises(stack_health.TrafficPending):
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span started after the change"):
             stack_health.check("otel", read, since=since)
-        # Ten-minute rates for the routine check, two-minute rates for both queries of the bound one.
-        self.assertEqual(asked, [600, 600, 120, 120])
+        # Ten-minute rates for the routine check. The bound one stopped at the missing server span.
+        self.assertEqual(asked, [600, 600])
+        # An order that hangs leaves no server span, but one that completes right after the change
+        # does: then the check waits for the bucket instead.
+        read, asked = checkout_stack([now - timedelta(seconds=10)], now)
+        with self.assertRaisesRegex(stack_health.TrafficPending, "wholly after the change"):
+            stack_health.check("otel", read, since=since)
+        self.assertEqual(asked, [120, 120])
 
     def test_verification_after_a_change_fails_until_checkout_completes_orders_again(self):
         # The acceptance of issue #160. The change was four minutes before the current minute, so
@@ -211,7 +266,7 @@ class StackHealthTests(unittest.TestCase):
         since = minute - timedelta(minutes=4)
         until_change = [since - timedelta(seconds=20 * n) for n in range(1, 45)]
         stalled, _ = checkout_stack(until_change, now)
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(stack_health.TrafficPending, "checkout server span started after the change"):
             stack_health.check("otel", stalled, since=since)
         resumed = [minute - timedelta(seconds=150), minute - timedelta(seconds=100), minute - timedelta(seconds=40)]
         recovered, _ = checkout_stack(until_change + resumed, now)

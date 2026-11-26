@@ -34,6 +34,12 @@ PAGES = {
 # by ten minutes, so a check bound to a change asks for two-minute rates instead: the
 # shortest window that always spans a flush of the span metrics the OCI stack scrapes, and
 # two one-minute buckets of the spans the OTel stack aggregates.
+#
+# A bucket alone is not that proof on the OCI stack. Its span metrics connector flushes
+# every 60 seconds and Prometheus scrapes it every 15, so a window that began after the
+# change can still count calls that ended up to about 75 seconds before it began. The
+# proof that a request completed after the change is therefore a server span of the
+# service that started after it: a span reaches storage only once it has ended.
 ROUTINE_RATE_SECONDS = 600
 FRESH_RATE_SECONDS = 120
 STEP_SECONDS = 60
@@ -61,7 +67,11 @@ def fetch(url, *, timeout=15):
         return raw
 
 
+SERVER_KINDS = (2, "SPAN_KIND_SERVER")
+
+
 def recent_spans(payload, service, now, since=None):
+    """The age of the newest span of the service. With since, of its newest server span after it."""
     minimum = (now - timedelta(minutes=10)).timestamp()
     if since is not None:
         minimum = max(minimum, since.timestamp())
@@ -79,9 +89,14 @@ def recent_spans(payload, service, now, since=None):
             for scope in batch.get("scopeSpans", []):
                 for span in scope.get("spans", []):
                     at = int(span["startTimeUnixNano"]) / 1e9
+                    if since is not None and span.get("kind") not in SERVER_KINDS:
+                        # Other spans of the service still arrive while its requests hang.
+                        continue
                     if minimum <= at <= now.timestamp() and span.get("traceId"):
                         latest = max(at, latest or 0)
     if latest is None:
+        if since is not None:
+            raise TrafficPending(f"No {service} server span started after the change")
         raise TrafficPending(f"No recent matching spans for {service}")
     return round(now.timestamp() - latest, 3)
 
@@ -122,7 +137,7 @@ def check_metrics(calls, latency, now, since=None):
 
 
 def check(stack, read=fetch, *, tracking=None, since=None):
-    """Check one stack. With since, the span and the SPM bucket must be newer than that time."""
+    """Check one stack. With since, a server span and the SPM bucket must be newer than that time."""
     base, service = STACKS[stack]
     if since is not None and (since.tzinfo is None or since > datetime.now(timezone.utc)):
         raise ValueError("since must be a past time with a UTC offset")
@@ -181,8 +196,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stack", required=True, choices=STACKS)
     parser.add_argument("--since", type=parse_time, metavar="TIME",
-                        help="ISO 8601 time of a change, for example 2026-11-25T16:37:00Z. The span and the "
-                             "SPM bucket must then be newer than it; the first such bucket is complete three to "
-                             "four minutes after it.")
+                        help="ISO 8601 time of a change, for example 2026-11-25T16:37:00Z. A server span and "
+                             "the SPM bucket must then be newer than it; the first such bucket is complete three "
+                             "to four minutes after it.")
     args = parser.parse_args()
     print(json.dumps(check(args.stack, since=args.since), indent=2))

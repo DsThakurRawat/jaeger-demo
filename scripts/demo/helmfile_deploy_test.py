@@ -130,14 +130,15 @@ class Cluster:
 
 class Checks:
     def __init__(self, fail=(), log=None):
-        self.fail, self.calls, self.log, self.images = set(fail), [], log, None
+        self.fail, self.calls, self.log, self.images, self.since = set(fail), [], log, None, {}
 
     def prepare(self, stacks, images=None):
         self.calls.append(("prepare", tuple(sorted(stacks))))
         self.images = images
 
-    def verify(self, stack):
+    def verify(self, stack, since=None):
         self.calls.append(("verify", stack))
+        self.since[stack] = since
         if self.log is not None:
             self.log.append(["verify", stack])
         if stack in self.fail:
@@ -512,6 +513,12 @@ class DriverTest(unittest.TestCase):
         record = self.record()
         self.assertEqual("failed", record["outcome"])
         self.assertEqual([], record["verifiedStacks"])
+        # The failed stack keeps the bound its checks ran against, which is the one they were given;
+        # OTel never started, so it has none.
+        self.assertEqual(["oci"], list(record["evidenceSince"]))
+        self.assertEqual(self.checks.since["oci"].isoformat(), record["evidenceSince"]["oci"])
+        self.assertEqual({}, record["checks"])
+        self.assertIn(f"- Health evidence newer than: oci {record['evidenceSince']['oci']}", hd.summary(record))
         self.assertEqual([(5, "apply"), (None, None)], [(r["revisionAfter"], r["method"]) for r in record["releases"]
                                                         if r["id"] in ("default/jaeger", "jaeger/jaeger")])
 
@@ -523,6 +530,11 @@ class DriverTest(unittest.TestCase):
         self.assertEqual([{"data": {name: deploy.fingerprint(name, self.root)}} for name in ("oci-jaeger", "oci-monitoring")],
                          patches)
         self.assertEqual(["oci-jaeger", "oci-monitoring"], self.record()["fingerprints"])
+        # Each stack's bound is taken when its own checks start, OCI before OTel, and is kept on failure.
+        bounds = self.record()["evidenceSince"]
+        self.assertEqual(["oci", "otel"], list(bounds))
+        self.assertEqual({stack: at.isoformat() for stack, at in self.checks.since.items()}, bounds)
+        self.assertLessEqual(self.checks.since["oci"], self.checks.since["otel"])
         cluster = Cluster()
         self.reconcile(cluster)
         patched = [list(json.loads(c[-1])["data"]) for c in cluster.calls if c[:4] == ["kubectl", "-n", "default", "patch"]]
@@ -904,6 +916,9 @@ class DriverTest(unittest.TestCase):
                                      clock=lambda: now[0])
         self.assertEqual({"since": started}, checks.verify("oci")["health"])
         self.assertEqual([], slept)
+        # reconcile passes the bound it recorded; the checks use that one, not their own clock.
+        recorded = started - timedelta(minutes=10)
+        self.assertEqual({"since": recorded}, checks.verify("oci", recorded)["health"])
 
     # ------------------------------------------------------------ second review
 

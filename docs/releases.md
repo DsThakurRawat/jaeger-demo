@@ -152,7 +152,7 @@ payloads.
 5. Verify fresh trace write/read, current generated traffic, UI and public routes,
    finite SPM calls and latency under load, Grafana, TLS and the configured analytics
    behavior on both demos. The traffic and SPM evidence must be newer than the
-   change: a bucket from before it says nothing about it. The Helmfile engine binds
+   change: a span or a bucket from before it says nothing about it. The Helmfile engine binds
    its checks to the change itself; after a change made another way, pass its time,
    as in `python3 scripts/demo/stack_health.py --stack otel --since 2026-11-25T16:37:00Z`.
    Compare namespace/release names, Service addresses and
@@ -675,11 +675,16 @@ the pinned tools for every Helm and Helmfile call:
 
    Each stack's `stack_health.py` evidence must be newer than the start of that
    stack's checks, which is after its last release and its generator restart
-   ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)): the fresh
-   `frontend` or `checkout` span starts after it, and the SPM bucket with positive
+   ([#160](https://github.com/jaegertracing/jaeger-demo/issues/160)): a `frontend`
+   or `checkout` server span started after it, and the SPM bucket with positive
    server calls and finite latency is one whose whole two-minute rate window began
-   after it. For the OTel stack those are `checkout` server spans, its `PlaceOrder`
-   orders, that started and ended after the change. No bucket can qualify
+   after it. The server span is the proof that a request completed after the change,
+   because a span is stored only once it has ended; for the OTel stack it is a
+   `PlaceOrder` order. Another span of the service does not count: its client spans
+   keep arriving while its requests hang. The bucket alone would not be that proof
+   on the OCI stack, whose span metrics are flushed every 60 seconds and scraped
+   every 15, so a window can count calls that ended up to about 75 seconds before
+   it began. No bucket can qualify
    until three to four minutes after the start, so the engine waits once for the
    first one and then tries up to ten times, 30 seconds apart. A healthy run
    therefore takes three to four minutes longer per stack than the checks
@@ -745,10 +750,12 @@ deployer kubeconfig the runbook writes
   while waiting for all sync sources` after five seconds. The deployer role cannot
   delete a Pod. An administrator deletes the unready one, and its Deployment starts
   another.
-- **A stack's checks fail with no SPM bucket newer than the change**: the
-  application stopped completing requests after the run's writes, or its traffic
-  stopped. For the OTel stack, look at the newest `checkout` traces for a
-  `PlaceOrder` span that never ends and at the Pods of `payment` and `flagd`.
+- **A stack's checks fail with no server span or no SPM bucket newer than the
+  change**: the application stopped completing requests after the run's writes, or
+  its traffic stopped. For the OTel stack, look at the newest `checkout` traces for
+  a `PlaceOrder` span that never ends and at the Pods of `payment` and `flagd`.
+  The record's `evidenceSince` holds the time the failed checks were bound to; pass
+  it as `--since` to `stack_health.py` to repeat them.
   The releases are `deployed`, so the next run applies nothing new to them and
   verifies again; fix the cause first.
 - **A failed first companion install** leaves revision 1 `failed`. Recover with
@@ -772,8 +779,10 @@ reference, source commit and digest, the compatibility receipt or `live: not
 revalidated`, the tool versions and archive SHA-256 of the toolchain lock, the
 chart archive SHA-256s and Jaeger chart commit, each selected release's status and
 revision before, method, revision after and whether it changed, the stack check
-results with the running image references and the time each stack's health
-evidence had to be newer than (`evidenceSinceUTC`), the generator restarts, the patched
+results with the running image references, the time each stack's health
+evidence had to be newer than (`evidenceSince`, written before the stack's checks
+start, so a failed verification keeps it; a passed check repeats it as
+`evidenceSinceUTC`), the generator restarts, the patched
 fingerprints and the outcome. When Helm's history cannot be read after a write,
 the revision after and `changed` are recorded as unknown (`null`), never as a
 change. A refusing adoption gate is recorded with its name (`live-diff` or
