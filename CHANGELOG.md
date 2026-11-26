@@ -28,6 +28,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   and the switch of the daily schedule to that engine
   ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),
   refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
+- `docs/MIGRATION.md` records the first scheduled run through the Helmfile
+  engine (refs [#1](https://github.com/jaegertracing/jaeger-demo/issues/1)).
 
 ## 2026-11-25
 
