@@ -41,7 +41,7 @@ on:
           - monitoring
           - all
       engine:
-        description: 'Deployment engine. helmfile runs scripts/demo/helmfile_deploy.py and requires expected_config_sha.'
+        description: 'Deployment engine. helmfile runs scripts/demo/helmfile_deploy.py and requires expected_config_sha. scripts is refused while a demo-resources release is installed.'
         required: false
         default: scripts
         type: choice
@@ -116,6 +116,7 @@ jobs:
       GITHUB_EVENT_NAME: ${{ github.event_name }}
       # The scripts deploy unless a run selects Helmfile: a scheduled run only through the
       # DEMO_DEPLOY_ENGINE repository variable, a manual run only through its engine input.
+      # deploy.py itself refuses to run while a demo-resources companion release is installed.
       DEPLOY_ENGINE: ${{ github.event_name == 'schedule' && (vars.DEMO_DEPLOY_ENGINE == 'helmfile' && 'helmfile' || 'scripts') || inputs.engine || 'scripts' }}
       HELMFILE_OPERATION: ${{ inputs.helmfile_operation || 'apply' }}
       COMPANION_NAMESPACE: ${{ inputs.companion_namespace || 'none' }}

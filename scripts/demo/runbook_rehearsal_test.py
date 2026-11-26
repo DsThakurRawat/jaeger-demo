@@ -98,5 +98,35 @@ class SettleGeneratorsTest(unittest.TestCase):
         self.assertEqual(budgets, [30, 23])
 
 
+class ScriptsEngineGuardTest(unittest.TestCase):
+    """The walk keeps its kind demonstration of the scripts engine's companion guard (#158)."""
+
+    def test_the_walk_runs_the_scripts_engine_around_adoption_and_de_adoption(self):
+        source = Path(exercise.__file__).read_text()
+        walk = source[source.index("def exercise("):]
+        # It calls the engine's own entry point and replaces only the stack script.
+        self.assertIn("deploy.reconcile(env)", walk)
+        self.assertIn('mock.patch.object(deploy, "deploy_component"', walk)
+        self.assertNotIn('mock.patch.object(deploy, "companion_releases"', walk)
+        self.assertNotIn('mock.patch.object(deploy, "refuse_companion_releases"', walk)
+        # A refusal is the guard's own error, after release reads only and with the record unchanged.
+        refused = walk[walk.index("def scripts_engine_refused("):walk.index("# 1. Operator shell.")]
+        for text in ("isinstance(error, deploy.CompanionReleaseError)", '["helm", "list"], ["helm", "history"]',
+                     "not deployed and fingerprints() == before"):
+            self.assertIn(text, refused)
+        # Before adoption, after the first install, with a failed install, with all four adopted on
+        # both events, before each namespace's de-adoption, and after the last one.
+        order = [walk.index(text) for text in (
+            "# Before adoption the scripts engine runs",
+            "if ns == ORDER[0]:\n            # From the first companion install on",
+            "for event in (\"workflow_dispatch\", \"schedule\"):\n        scripts_engine_refused(held, event)",
+            "for ns in reversed(ORDER):\n        # Each namespace that still holds its release records",
+            "# De-adoption re-enables the scripts engine",
+            '"scriptsEngineRefusedWhileACompanionExists": True, "scriptsEngineRanAfterDeAdoption": True')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("# A failed first install is a companion release too.\n            scripts_engine_refused(", walk)
+        self.assertEqual(walk.count("error is None and deployed == [\"oci-monitoring\"]"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

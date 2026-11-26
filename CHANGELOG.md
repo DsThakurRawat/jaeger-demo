@@ -24,6 +24,14 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
+- The scripts engine (`scripts/demo/deploy.py`) refuses to run while Helm holds a
+  `demo-resources` companion release in any of the four release namespaces. It
+  reads the releases before its first write and names each namespace that holds
+  one, so a manual dispatch that leaves `engine` at its default, or a scheduled
+  run on the scripts, can no longer re-apply objects the Helmfile engine owns.
+  De-adoption removes the release records and re-enables the scripts. The
+  `operations` CI job rehearses the refusal and the run after de-adoption on kind
+  (refs [#158](https://github.com/jaegertracing/jaeger-demo/issues/158)).
 - `docs/MIGRATION.md` records the first digest-mode apply of the Helmfile engine
   and the switch of the daily schedule to that engine
   ([#163](https://github.com/jaegertracing/jaeger-demo/pull/163),

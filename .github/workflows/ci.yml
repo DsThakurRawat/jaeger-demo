@@ -176,7 +176,8 @@ jobs:
   # The Helmfile deploy driver of the deploy workflow on a real API server, as a user that holds
   # only the committed deployer role: no-op, failed-release retry, pending refusal, the OCI gate
   # and an incompatible image (#73). Then, on a new cluster, the adoption runbook of
-  # docs/cutover.md, whose marked blocks run verbatim as that user (#74).
+  # docs/cutover.md, whose marked blocks run verbatim as that user (#74), and the scripts
+  # engine's refusal while a companion release exists and its run after de-adoption (#158).
   operations:
     name: Helmfile deploy driver rehearsal
     runs-on: ubuntu-latest
