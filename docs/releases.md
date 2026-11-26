@@ -159,15 +159,43 @@ payloads.
 ## Daily component updates
 
 The scheduled run is the `deploy` job of `ci-deploy-demo.yml` on `main`, in the
-`demo-scheduled` environment. It resolves upstream Jaeger and HotROD snapshot tags
-independently and runs `scripts/demo/deploy.py`, as a manual run does. Both Jaeger
-releases refresh daily. Renovate proposes chart, image and
-dependency changes for maintainer review, with a seven-day release-age policy
-and manual merges. The next daily reconciliation uses the reviewed configuration
-on main. Unchanged storage, monitoring and sample-application inputs retain their
-current releases. Each successful component records its fingerprint by
-merge-patching only its own key in `default/jaeger-demo-deployment-revisions`; a
-first manual install creates the ConfigMap.
+`demo-scheduled` environment. [The engine switch](#the-engine-switch) decides what
+that job runs: `scripts/demo/deploy.py` unless the repository variable
+`DEMO_DEPLOY_ENGINE` is `helmfile`, and the [Helmfile engine](#helmfile-engine)
+while it is. Read the variable before you read a scheduled run, because the two
+engines select, verify and record differently:
+
+```bash
+gh variable get DEMO_DEPLOY_ENGINE --repo jaegertracing/jaeger-demo
+```
+
+Under either engine the run resolves the Jaeger and HotROD snapshot images from
+upstream `main` when it starts and uses the reviewed configuration on main.
+Renovate proposes chart, image and dependency changes for maintainer review, with
+a seven-day release-age policy and manual merges, and the next daily run applies
+what was merged. Unchanged storage, monitoring and sample-application inputs retain
+their current releases.
+
+Generated trace history is disposable. No workflow or script takes or restores a
+backup, and no deployment waits for one. Manual and scheduled OpenSearch upgrades
+preserve the existing PVC and create no snapshot, restored volume or test Pod. If
+the stored format becomes unusable, historical traces are lost. After an
+explicitly approved repair, new traffic repopulates the demo. See
+[OpenSearch storage maintenance](#opensearch-storage-maintenance).
+
+A chart version and its application version can differ: a chart-only release
+repackages the same OpenSearch or Dashboards version. Manual and scheduled runs
+require each release to be `deployed` at its chart pin and read the
+application version with `helm get metadata`, which uses the Helm release
+Secret reads the upgrade already needs.
+
+### With the scripts engine
+
+The run calls `scripts/demo/deploy.py`, as a manual `engine=scripts` run does, and
+resolves the Jaeger and HotROD snapshot tags independently. Both Jaeger releases
+refresh daily. Each successful component records its fingerprint by merge-patching
+only its own key in `default/jaeger-demo-deployment-revisions`; a first manual
+install creates the ConfigMap.
 
 | Component | Helm releases | Daily action and checks |
 | --- | --- | --- |
@@ -189,19 +217,6 @@ that adds, removes or renames an object is applied like any other once the
 deployer role covers it. See
 [When a change alters a release's objects](#when-a-change-alters-a-releases-objects).
 
-Generated trace history is disposable. No workflow or script takes or restores a
-backup, and no deployment waits for one. Manual and scheduled OpenSearch upgrades
-preserve the existing PVC and create no snapshot, restored volume or test Pod. If
-the stored format becomes unusable, historical traces are lost. After an
-explicitly approved repair, new traffic repopulates the demo. See
-[OpenSearch storage maintenance](#opensearch-storage-maintenance).
-
-A chart version and its application version can differ: a chart-only release
-repackages the same OpenSearch or Dashboards version. Manual and scheduled runs
-require each release to be `deployed` at its chart pin and read the
-application version with `helm get metadata`, which uses the Helm release
-Secret reads the upgrade already needs.
-
 Once the schedule is enabled, a merged change to the OpenSearch and Dashboards
 charts is applied in place by the next scheduled run, on the existing PVC and
 without a backup. The run compares the data PVC and its bound volume before and
@@ -217,12 +232,83 @@ updates may succeed in the same run. A failed component keeps its preceding
 fingerprint. Inspect each component outcome and its live Helm history before a
 retry, especially when OpenSearch upgraded before Dashboards failed.
 
-Before activation, review the selection read-only with the schedule disabled.
-After activation, use the first actual scheduled run to accept the deployment.
-Record its run URL, reconcile the six releases and five component fingerprints,
-and verify fresh traces, public health, TLS and storage bindings. The scheduled
-failure notification includes the run ID in `#jaeger-operations`.
+### With the Helmfile engine
+
+A scheduled Helmfile run is an `apply` in `digest` mode. It refuses `live` mode and
+installs no release ([images](#images)). An operator sees four differences from the
+scripts:
+
+- **Selection.** No fingerprint selects components. Every run applies all ten
+  releases, the six application releases of the table above and the four
+  `demo-resources` companions, each alone, and `helm diff` decides which ones
+  change. A `deployed` release with an empty diff keeps its revision. A `failed`
+  release is synced even when its diff is empty. A release in any other state
+  stops the run before a write.
+- **Order.** The OCI releases and the OCI checks finish before any OTel release is
+  touched, and OTel never starts when OCI fails.
+- **Checks.** Each stack is verified even when nothing changed, after its trace
+  generator was restarted. The three OTel Certificates must be present and Ready,
+  which the scripts only log, and each Jaeger and HotROD workload must run the
+  image the run validated.
+- **Record.** Each run, also a refused or failed one, uploads `deploy-record.json`.
+  A stack's component fingerprints are patched only after its checks pass, to keep
+  the scripts' ConfigMap current for a later return to them.
+
+[What a Helmfile run does](#what-a-helmfile-run-does) lists the steps and checks,
+[when a Helmfile run fails](#when-a-helmfile-run-fails) the failure cases, and
+[deployment record](#deployment-record) the fields. The operator checks that the
+table names after a rollout (the Dashboards console and menu check, the OTel Demo
+control-interface check and the public Grafana health endpoint) do not depend on
+the engine.
+
+A merged change to the OpenSearch and Dashboards charts is applied in place by the
+next scheduled run under this engine too, on the existing PVC and without a backup,
+and the run requires the data claim and its volume to be unchanged afterwards. To
+apply it under review instead, merge after the 13:00 UTC run or pause the schedule,
+and dispatch a manual `engine=helmfile` apply. That run ignores `demo_stack` and
+`otel_deploy_scope` and reconciles all ten releases
+([the engine switch](#the-engine-switch)).
+
+### Accepting the first scheduled run
+
+Before activation, review the scope read-only with the schedule disabled. After
+activation, use the first actual scheduled run to accept the deployment, and
+record its run URL. The scheduled failure notification includes the run ID in
+`#jaeger-operations`. Accept the run by the engine it took.
+
+**Scripts engine.** Reconcile the six releases and five component fingerprints
+with the pre-run record, and verify fresh traces, public health, TLS and storage
+bindings.
 [Activation and first-run criteria](cutover.md#review-scheduled-scope)
+
+**Helmfile engine.** Six releases and five fingerprints leave out the four
+companions, so accept on the run's own record. Download it and require a
+scheduled digest-mode apply that succeeded, verified OCI before OTel, left all ten
+releases `deployed` and patched the five fingerprints:
+
+```bash
+bash -euo pipefail <<'EOF'
+: "${RUN_ID:?Set the scheduled run ID}" "${RUN_ATTEMPT:=1}"
+gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo \
+  --name "deploy-record-$RUN_ID-$RUN_ATTEMPT" --dir "deploy-record-$RUN_ID"
+jq -e --arg run "$RUN_ID" '
+  .run == $run and .event == "schedule" and .outcome == "succeeded"
+  and .operation == "apply" and .imageMode == "digest"
+  and .verifiedStacks == ["oci", "otel"] and .generatorRestarts == ["oci", "otel"]
+  and (.releases | length) == 10 and all(.releases[]; .statusAfter == "deployed")
+  and (.fingerprints | length) == 5' "deploy-record-$RUN_ID/deploy-record.json"
+jq -r '.releases[] | [.id, .revisionBefore, .revisionAfter, .changed] | @tsv' \
+  "deploy-record-$RUN_ID/deploy-record.json"
+EOF
+```
+
+The first command prints `true` and the second the revisions to compare with the
+pre-run record: a release whose inputs did not change keeps its revision. The
+record's `checks` hold each stack's check results with the running image
+references. Then verify fresh traces in both Jaeger instances, the public routes
+and their certificates, and that the OpenSearch data claim is still bound to its
+volume, as for a scripts run. Keep the run URL and the record in the release
+record; the artifact expires after 90 days.
 
 ## Failure handling
 
