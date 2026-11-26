@@ -250,9 +250,12 @@ scripts:
   generator was restarted. The three OTel Certificates must be present and Ready,
   which the scripts only log, and each Jaeger and HotROD workload must run the
   image the run validated.
-- **Record.** Each run, also a refused or failed one, uploads `deploy-record.json`.
-  A stack's component fingerprints are patched only after its checks pass, to keep
-  the scripts' ConfigMap current for a later return to them.
+- **Record.** Every reconcile, also a refused or failed one, and every image gate
+  rejection writes `deploy-record.json`, and the job uploads it. A run that fails
+  in an earlier step, such as the toolchain or chart preparation or the access
+  check, never reaches reconcile and leaves no record: read the failed step's log
+  instead. A stack's component fingerprints are patched only after its checks
+  pass, to keep the scripts' ConfigMap current for a later return to them.
 
 [What a Helmfile run does](#what-a-helmfile-run-does) lists the steps and checks,
 [when a Helmfile run fails](#when-a-helmfile-run-fails) the failure cases, and
@@ -282,27 +285,36 @@ bindings.
 [Activation and first-run criteria](cutover.md#review-scheduled-scope)
 
 **Helmfile engine.** Six releases and five fingerprints leave out the four
-companions, so accept on the run's own record. Download it and require a
-scheduled digest-mode apply that succeeded, verified OCI before OTel, left all ten
-releases `deployed` and patched the five fingerprints:
+companions, so accept on the run's own record. A re-run is a new attempt of the
+same run with its own artifact, `deploy-record-<run id>-<attempt>`, and the record
+names the run but not the attempt. The block therefore reads the run's latest
+attempt, requires it to be a completed, successful scheduled run, and downloads
+only that attempt's record, so an earlier attempt's record cannot stand in for a
+later one that failed. It then requires a digest-mode apply that succeeded,
+verified OCI before OTel, left all ten releases `deployed` and patched the five
+fingerprints:
 
 ```bash
 bash -euo pipefail <<'EOF'
-: "${RUN_ID:?Set the scheduled run ID}" "${RUN_ATTEMPT:=1}"
-gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo \
-  --name "deploy-record-$RUN_ID-$RUN_ATTEMPT" --dir "deploy-record-$RUN_ID"
+: "${RUN_ID:?Set the scheduled run ID}"
+run=$(gh run view "$RUN_ID" --repo jaegertracing/jaeger-demo --json attempt,event,status,conclusion)
+jq -e '.event == "schedule" and .status == "completed" and .conclusion == "success"' <<<"$run"
+attempt=$(jq -r .attempt <<<"$run")
+record="deploy-record-$RUN_ID-$attempt"
+gh run download "$RUN_ID" --repo jaegertracing/jaeger-demo --name "$record" --dir "$record"
 jq -e --arg run "$RUN_ID" '
   .run == $run and .event == "schedule" and .outcome == "succeeded"
   and .operation == "apply" and .imageMode == "digest"
   and .verifiedStacks == ["oci", "otel"] and .generatorRestarts == ["oci", "otel"]
   and (.releases | length) == 10 and all(.releases[]; .statusAfter == "deployed")
-  and (.fingerprints | length) == 5' "deploy-record-$RUN_ID/deploy-record.json"
-jq -r '.releases[] | [.id, .revisionBefore, .revisionAfter, .changed] | @tsv' \
-  "deploy-record-$RUN_ID/deploy-record.json"
+  and (.fingerprints | length) == 5' "$record/deploy-record.json"
+jq -r '.releases[] | [.id, .revisionBefore, .revisionAfter, .changed] | @tsv' "$record/deploy-record.json"
+echo "Accepted on attempt $attempt of run $RUN_ID"
 EOF
 ```
 
-The first command prints `true` and the second the revisions to compare with the
+Both `jq -e` checks print `true`, or the block stops at the one that fails. The
+table that follows has the revisions to compare with the
 pre-run record: a release whose inputs did not change keeps its revision. The
 record's `checks` hold each stack's check results with the running image
 references. Then verify fresh traces in both Jaeger instances, the public routes
