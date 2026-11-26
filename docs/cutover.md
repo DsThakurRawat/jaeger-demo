@@ -411,7 +411,12 @@ The invariants hold throughout:
   diff of any release is not empty. Switching to `digest` is a later, separate
   reviewed pull request ([phase 7](MIGRATION.md#7-promotion-and-acceptance)), and
   `digest` is the committed mode after adoption. A later adoption first needs a
-  reviewed pull request that returns the file to `live`.
+  reviewed pull request that returns the file to `live`, and Jaeger and HotROD
+  workloads that run plain tags (`docker.io/<repository>:<tag>`): live mode
+  refuses the `<tag>@sha256:<digest>` references that digest mode deploys, and
+  de-adoption leaves them in place. Moving the workloads to plain tags changes
+  their pod templates, so it is its own reviewed change, done and verified before
+  the read-only baseline, and the adoption itself still changes no pod template.
 - Every apply reconciles all ten releases, OCI before OTel. A first companion
   install is a manual dispatch for one namespace and never runs on a schedule.
 - Companion rollback never uses `helm uninstall`, which would delete the adopted
