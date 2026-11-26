@@ -28,7 +28,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   generators' old Pods to finish terminating before it plans the de-adoption.
   A plan read while one was terminating went stale and failed the job. The wait
   has its own unit tests
-  (fixes [#166](https://github.com/jaegertracing/jaeger-demo/issues/166)).
+  ([#167](https://github.com/jaegertracing/jaeger-demo/pull/167),
+  fixes [#166](https://github.com/jaegertracing/jaeger-demo/issues/166)).
 
 ## 2026-11-25
 
