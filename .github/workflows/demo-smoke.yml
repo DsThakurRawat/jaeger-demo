@@ -18,14 +18,16 @@ jobs:
     # available.
     if: github.repository == 'jaegertracing/jaeger-demo' && (github.event_name != 'schedule' || vars.DEMO_SMOKE_ENABLED == 'true')
     runs-on: ubuntu-latest
-    # Worst case: each stack check is 3 attempts of at most 150 s (one
-    # stack_health.py run makes up to 9 requests with a 15 s socket timeout, so
-    # about 135 s) with a 20 s pause between attempts, which is
-    # 3 * 150 + 2 * 20 = 490 s. Two stacks take 980 s, about 16.3 minutes. The
-    # alert decision is capped at 30 s for the run list plus 60 s for the
-    # helper, and checkout and the Slack post add about a minute, so the worst
-    # case is about 1130 s of the 1200 s limit.
-    timeout-minutes: 20
+    # Worst case: each stack check is 3 attempts with a 20 s pause between
+    # them. One stack_health.py run makes 9 requests on the OCI stack and 10 on
+    # the OTel stack, each with a 15 s socket timeout, so about 135 s and
+    # 150 s, and an attempt is killed after 150 s and 165 s. That is
+    # 3 * 150 + 2 * 20 = 490 s for OCI and 3 * 165 + 2 * 20 = 535 s for OTel,
+    # together 1025 s, about 17.1 minutes. The alert decision is capped at 30 s
+    # for the run list plus 60 s for the helper, and checkout and the Slack
+    # post add about a minute, so the worst case is about 1175 s of the 1320 s
+    # limit, which leaves a margin of about two minutes.
+    timeout-minutes: 22
     # actions: read lets the alert decision list earlier runs of this workflow.
     permissions:
       actions: read
@@ -55,7 +57,7 @@ jobs:
       if: ${{ !cancelled() }}
       run: |
         for attempt in 1 2 3; do
-          if timeout 150 python3 scripts/demo/stack_health.py --stack otel; then
+          if timeout 165 python3 scripts/demo/stack_health.py --stack otel; then
             exit 0
           fi
           echo "::warning::The otel check failed (attempt $attempt of 3)"

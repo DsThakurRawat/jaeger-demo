@@ -128,17 +128,21 @@ and OCI infrastructure/add-on maintenance is outside this workflow.
 on `workflow_dispatch`, without cloud credentials. For the `oci` and `otel` stacks,
 `scripts/demo/stack_health.py --stack <name>` verifies the public routes, the
 Jaeger UI tracking configuration, recent application spans and finite span
-metrics. The smoke check is a routine check of current traffic. The deployment
+metrics, and completes one HotROD dispatch on each stack. The spans and metrics
+alone would pass on the OCI stack while dispatches hang, because the kubelet's
+probes of HotROD are `frontend` spans too. The smoke check is a routine check of
+current traffic. The deployment
 tooling binds the same script to a change with `--since`
 ([public health checks](../../docs/helmfile-applications.md#public-health-checks)).
 
 Retries and alerts:
 
 - Each stack check runs up to three times, 20 seconds apart, and each attempt is
-  killed after 150 seconds. The step fails only when all three attempts fail, so
-  one slow probe does not fail a run. The job limit is 20 minutes, above the
-  worst case of about 16 minutes. The retry lives in the workflow, not in
-  `stack_health.py`.
+  killed after 150 seconds on the OCI stack and 165 on the OTel stack, whose run
+  makes one request more. The step fails only when all three attempts fail, so
+  one slow probe does not fail a run. The job limit is 22 minutes, above the
+  worst case of about 20 minutes, of which the checks take about 17. The retry
+  lives in the workflow, not in `stack_health.py`.
 - A final step runs `scripts/demo/smoke_alert.py` with this run's result, the
   event and the conclusions of the last 10 completed scheduled runs. A failure
   posts to Slack through `SLACK_WEBHOOK_URL` only when the previous scheduled

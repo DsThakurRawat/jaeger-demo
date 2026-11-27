@@ -192,20 +192,23 @@ flowchart TB
     job -. "completed run" .-> observer
     observer --> slack
 
-    style helmfile stroke-dasharray: 5 5
-    style hf_oci stroke-dasharray: 5 5
-    style hf_otel stroke-dasharray: 5 5
-    style record stroke-dasharray: 5 5
 ```
 
-A scheduled run selects both Jaeger components every day, to refresh the snapshot
-images, plus every component whose fingerprint differs from its key in the
-ConfigMap. It upgrades existing releases in place only. A dashed outline marks the
-Helmfile engine. It is tested locally and in PR CI, including a kind rehearsal as
-the deployer. Its production use starts with manual adoption, following the
-[adoption runbook](docs/cutover.md#helmfile-adoption)
-([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)), and the schedule
-switches to it only after that is verified ([migration plan](docs/MIGRATION.md)).
+A scheduled run upgrades existing releases in place only and installs none. What
+it selects depends on the engine. The scripts engine selects both Jaeger
+components every day, to refresh the snapshot images, plus every component whose
+fingerprint differs from its key in the ConfigMap. The Helmfile engine selects
+nothing by fingerprint: every run applies all ten releases, OCI before OTel.
+`helm diff` decides which `deployed` releases change, and a `failed` release is
+synced even when its diff is empty
+([daily component updates](docs/releases.md#daily-component-updates)). The
+`DEMO_DEPLOY_ENGINE` repository variable selects the engine for scheduled runs and
+the `engine` input for manual ones; without either, the workflow runs the scripts.
+The Helmfile engine is also tested locally and in PR CI, including a kind
+rehearsal as the deployer, and the
+[adoption runbook](docs/cutover.md#helmfile-adoption) covers moving the releases to
+it. Which engine the hosted demo runs is recorded in the
+[migration plan](docs/MIGRATION.md).
 
 Existing namespaces, release names, routes, Service addresses and PVCs are
 preserved. Certificate issuers and the shared cluster, ingress controller and
