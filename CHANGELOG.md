@@ -95,8 +95,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 - The **Rendered resource changes** job now renders the head from the chart archives
   that `scripts/demo/chart_archives.py state` verified against the lock, and fails
-  when they do not verify. A base that has the command is rendered the same way. A
-  base from before it keeps the publisher render, and the summary says which side
+  when they do not verify. A base with a Helmfile is verified the same way, and
+  only a script-era base keeps the publisher render; the summary says which side
   was verified.
   ([#154](https://github.com/jaegertracing/jaeger-demo/pull/154),
   fixes [#144](https://github.com/jaegertracing/jaeger-demo/issues/144))

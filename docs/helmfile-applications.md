@@ -140,10 +140,13 @@ identifies that fallback.
 
 The head is rendered from the chart archives that `scripts/demo/chart_archives.py
 state` verified against `scripts/demo/chart-archives.lock.json`, and the job fails
-when they do not verify. A base that has the `state` command is rendered the same
-way. A base from before it keeps the publisher charts, and the summary marks its
-charts as not verified. A matching digest shows the archive matches the lock in that
-checkout. It does not approve a pull request that changes the lock, so review those changes.
+when they do not verify. A base with a Helmfile is verified and rendered the same
+way, and the job fails when it does not verify. Only a script-era base keeps the
+publisher charts, and the summary marks its charts as not verified. A matching
+digest shows the archive matches the lock in that checkout. It does not approve a
+pull request that changes the lock or the verifying and comparing scripts,
+`scripts/demo/chart_archives.py` and `scripts/demo/pr_render_diff.py`, so review
+those changes.
 
 The GitHub Actions job summary lists added, modified and removed resource
 identities. Comparison includes Secret contents in process memory. The job
