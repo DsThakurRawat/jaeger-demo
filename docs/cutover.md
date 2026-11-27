@@ -390,9 +390,11 @@ manual adoption of the hosted demo by the deploy workflow's
 reviewed commit on `main`, applied by **Deploy Jaeger Demo to OKE**, no bundle and
 no second identity). The engine does every write to a release. This runbook is
 the operator's part: the checks before, the ownership patches, the dispatches and
-what to check after each, recovery and rollback. A maintainer walks it once before
-production adoption ([#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
-Production runs the scripts until then.
+what to check after each, recovery and rollback. Adoption is done once: after it,
+the steps from [Recover a failed release](#recover-a-failed-release) on are the
+operating procedures of the adopted demo, and the adoption steps apply again only
+after [de-adoption](#de-adopt-companion-releases). Where an adoption step and a
+later step read differently before and after adoption, the step says which applies.
 
 The invariants hold throughout:
 
@@ -407,7 +409,14 @@ The invariants hold throughout:
   adoption: the engine renders exactly the image references that run, and a
   live-mode apply restarts nothing and is refused before any write if a read-only
   diff of any release is not empty. Switching to `digest` is a later, separate
-  reviewed pull request ([phase 7](MIGRATION.md#7-promotion-and-acceptance)).
+  reviewed pull request ([phase 7](MIGRATION.md#7-promotion-and-acceptance)), and
+  `digest` is the committed mode after adoption. A later adoption first needs a
+  reviewed pull request that returns the file to `live`, and Jaeger and HotROD
+  workloads that run plain tags (`docker.io/<repository>:<tag>`): live mode
+  refuses the `<tag>@sha256:<digest>` references that digest mode deploys, and
+  de-adoption leaves them in place. Moving the workloads to plain tags changes
+  their pod templates, so it is its own reviewed change, done and verified before
+  the read-only baseline, and the adoption itself still changes no pod template.
 - Every apply reconciles all ten releases, OCI before OTel. A first companion
   install is a manual dispatch for one namespace and never runs on a schedule.
 - Companion rollback never uses `helm uninstall`, which would delete the adopted
@@ -623,7 +632,10 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
    ```
 
    `DEMO_SCHEDULE_ENABLED` must be `false`, `DEMO_DEPLOY_ENGINE` must be absent and
-   the loop must print nothing. To pause the schedule:
+   the loop must print nothing. The later steps that refer to this check use only
+   its loop, which must print nothing, and its pause command: after adoption
+   `DEMO_DEPLOY_ENGINE` is `helmfile`, and the schedule is enabled unless a step
+   paused it. To pause the schedule:
 
    <!-- not-rehearsed: GitHub repository variable -->
    ```bash
@@ -631,7 +643,10 @@ None of these writes to the cluster. Keep every output in `$RECORD`.
    ```
 
 2. The six application releases, each `deployed`, and the history of each, which
-   holds the revisions a rollback before adoption would return to:
+   holds the revisions a rollback before adoption would return to. After adoption
+   this block fails, because the four companions are releases too; list the ten
+   releases with the `releases-after` block of
+   [Adopt and verify the no-op](#adopt-and-verify-the-no-op) instead:
 
    <!-- rehearse: releases-before -->
    ```bash
@@ -1077,10 +1092,10 @@ Read a failing Pod's log with `kubectl --namespace "$ns" logs <pod>`; in `defaul
 that is an administrator read as well. Then fix the cause. A configuration cause
 is a reviewed commit on `main`, never a change made by hand.
 
-- **Image mode `digest`** (after phase 7 switches it): dispatch an apply as in
+- **Image mode `digest`** (the committed mode after adoption): dispatch an apply as in
   [Adopt and verify the no-op](#adopt-and-verify-the-no-op). The engine syncs a
   `failed` release even when its diff is empty.
-- **Image mode `live`** (during adoption): the engine refuses every apply while a
+- **Image mode `live`** (during an adoption): the engine refuses every apply while a
   release is not `deployed`, because Helmfile reports such a release as changed
   and a live-mode apply must change nothing. Return the release to the revision
   this prints instead. It prints the last `deployed` revision when the latest is
