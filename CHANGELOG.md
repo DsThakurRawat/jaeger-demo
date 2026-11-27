@@ -22,6 +22,17 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ## 2026-11-27
 
+### Changed
+
+- The [Helmfile adoption](docs/cutover.md#helmfile-adoption) runbook reads for the
+  adopted demo: its recovery, rollback, repair and de-adoption steps are the
+  operating procedures, `digest` is the committed image mode, a later adoption
+  first returns `helmfile/images.yaml` to `live` and the Jaeger and HotROD
+  workloads to plain tags in separate reviewed changes, and the read-only checks that
+  later steps refer to say what holds after adoption
+  ([#172](https://github.com/jaegertracing/jaeger-demo/pull/172),
+  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
+
 ### Fixed
 
 - The 30-minute smoke check no longer passes while HotROD dispatches hang. Every
@@ -44,14 +55,6 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Changed
 
-- The [Helmfile adoption](docs/cutover.md#helmfile-adoption) runbook reads for the
-  adopted demo: its recovery, rollback, repair and de-adoption steps are the
-  operating procedures, `digest` is the committed image mode, a later adoption
-  first returns `helmfile/images.yaml` to `live` and the Jaeger and HotROD
-  workloads to plain tags in separate reviewed changes, and the read-only checks that
-  later steps refer to say what holds after adoption
-  ([#172](https://github.com/jaegertracing/jaeger-demo/pull/172),
-  refs [#74](https://github.com/jaegertracing/jaeger-demo/issues/74)).
 - The Helmfile engine's verification no longer accepts traffic and SPM evidence
   from before the run's changes. Each stack needs a server span without an error
   and an SPM bucket with positive calls and finite latency that are newer than
