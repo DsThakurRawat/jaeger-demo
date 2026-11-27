@@ -198,8 +198,9 @@ A scheduled run upgrades existing releases in place only and installs none. What
 it selects depends on the engine. The scripts engine selects both Jaeger
 components every day, to refresh the snapshot images, plus every component whose
 fingerprint differs from its key in the ConfigMap. The Helmfile engine selects
-nothing by fingerprint: every run applies all ten releases, OCI before OTel, and
-`helm diff` decides which ones change
+nothing by fingerprint: every run applies all ten releases, OCI before OTel.
+`helm diff` decides which `deployed` releases change, and a `failed` release is
+synced even when its diff is empty
 ([daily component updates](docs/releases.md#daily-component-updates)). The
 `DEMO_DEPLOY_ENGINE` repository variable selects the engine for scheduled runs and
 the `engine` input for manual ones; without either, the workflow runs the scripts.
