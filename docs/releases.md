@@ -835,8 +835,11 @@ the pinned tools for every Helm and Helmfile call:
    `frontend` server span, so the span and the bucket stay healthy while dispatches
    hang. The OCI check therefore also completes one dispatch itself
    (`/hotrod/dispatch?customer=123` must name a driver), as the deploy scripts did.
-   The OTel stack needs no such request: nothing probes `checkout`, and an order
-   that hangs leaves no server span. No bucket can qualify
+   The OTel stack needs no such request for `checkout`: nothing probes it, and an
+   order that hangs leaves no server span. Its check completes a dispatch of its own
+   HotROD too, which `checkout` says nothing about. Both requests are part of every
+   run of the check, also the routine one of the smoke check
+   ([public health checks](helmfile-applications.md#public-health-checks)). No bucket can qualify
    until three to four minutes after the start, so the engine waits once for the
    first one and then tries up to ten times, 30 seconds apart. A healthy run
    therefore takes three to four minutes longer per stack than the checks
