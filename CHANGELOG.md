@@ -31,7 +31,8 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   checked only by its page before, gets the same request, also in the Helmfile
   engine's OTel checks. An OTel attempt of the smoke check is limited to 165
   seconds and the job to 22 minutes
-  (fixes [#171](https://github.com/jaegertracing/jaeger-demo/issues/171)).
+  ([#173](https://github.com/jaegertracing/jaeger-demo/pull/173),
+  fixes [#171](https://github.com/jaegertracing/jaeger-demo/issues/171)).
 
 ## 2026-11-26
 
