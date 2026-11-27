@@ -33,6 +33,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
   seconds and the job to 22 minutes
   ([#173](https://github.com/jaegertracing/jaeger-demo/pull/173),
   fixes [#171](https://github.com/jaegertracing/jaeger-demo/issues/171)).
+- The README's deployment section describes what a scheduled run selects on each
+  engine and that `DEMO_DEPLOY_ENGINE` or the manual `engine` input picks it. It
+  no longer presents the Helmfile engine as future work, and the diagram drops
+  the dashed outline that marked it
+  ([#175](https://github.com/jaegertracing/jaeger-demo/pull/175),
+  fixes [#174](https://github.com/jaegertracing/jaeger-demo/issues/174)).
 
 ## 2026-11-26
 
