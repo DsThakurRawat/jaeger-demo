@@ -20,9 +20,11 @@ CI = (ROOT / '.github/workflows/ci.yml').read_text()
 DEPLOY = (ROOT / '.github/workflows/ci-deploy-demo.yml').read_text()
 JOB = yaml.safe_load(WORKFLOW)['jobs']['smoke']
 STEPS = {step['name']: step for step in JOB['steps'] if 'name' in step}
-# One stack_health.py run makes at most 9 sequential requests (otel), each with
-# the 15 s socket timeout set in stack_health.fetch.
-WORST_CASE_RUN_SECONDS = 9 * 15
+# One stack_health.py run makes this many sequential requests, each with the
+# 15 s socket timeout set in stack_health.fetch. stack_health_test.py pins the
+# counts (REQUESTS_PER_RUN), so a new request fails there until both are recounted.
+REQUESTS_PER_RUN = {'oci': 9, 'otel': 10}
+WORST_CASE_RUN_SECONDS = {stack: count * 15 for stack, count in REQUESTS_PER_RUN.items()}
 
 
 def run_step(step, stubs, **env):
@@ -138,8 +140,9 @@ class RetryTests(unittest.TestCase):
                 limits = [int(call.split()[1]) for call in calls if call.startswith('timeout ')]
                 self.assertEqual(3, len(limits))
                 for limit in limits:
-                    self.assertGreaterEqual(limit, WORST_CASE_RUN_SECONDS)
-                    self.assertLess(limit, 2 * WORST_CASE_RUN_SECONDS)
+                    # Above the worst case, so a run that is merely slow is not killed.
+                    self.assertGreater(limit, WORST_CASE_RUN_SECONDS[stack])
+                    self.assertLess(limit, 2 * WORST_CASE_RUN_SECONDS[stack])
 
     def test_pauses_between_attempts_are_short(self):
         _, calls, _ = self.attempt('oci', 99)
@@ -167,7 +170,7 @@ class RetryTests(unittest.TestCase):
         decision = sum(int(seconds) for seconds in re.findall(r'\btimeout (\d+) ', STEPS['Decide whether to notify']['run']))
         self.assertEqual(90, decision)
         self.assertLessEqual(total + decision + 60, JOB['timeout-minutes'] * 60)
-        self.assertGreater(total, 2 * 3 * WORST_CASE_RUN_SECONDS)
+        self.assertGreater(total, 3 * sum(WORST_CASE_RUN_SECONDS.values()))
 
 
 class AlertWiringTests(unittest.TestCase):

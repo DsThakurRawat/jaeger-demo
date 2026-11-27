@@ -24,6 +24,15 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- The 30-minute smoke check no longer passes while HotROD dispatches hang. Every
+  run of the public health check now completes one HotROD dispatch on its stack,
+  which must name a driver; on the OCI stack the kubelet's probe spans and the
+  HotROD page alone used to satisfy the routine check. The OTel stack's HotROD,
+  checked only by its page before, gets the same request, also in the Helmfile
+  engine's OTel checks. An OTel attempt of the smoke check is limited to 165
+  seconds and the job to 22 minutes
+  ([#173](https://github.com/jaegertracing/jaeger-demo/pull/173),
+  fixes [#171](https://github.com/jaegertracing/jaeger-demo/issues/171)).
 - The README's deployment section describes what a scheduled run selects on each
   engine and that `DEMO_DEPLOY_ENGINE` or the manual `engine` input picks it. It
   no longer presents the Helmfile engine as future work, and the diagram drops
