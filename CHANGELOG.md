@@ -62,6 +62,12 @@ Earlier hosted-demo history is in core up to the extraction cutoff below.
 
 ### Fixed
 
+- The README's deployment section describes what a scheduled run selects on each
+  engine and that `DEMO_DEPLOY_ENGINE` or the manual `engine` input picks it. It
+  no longer presents the Helmfile engine as future work, and the diagram drops
+  the dashed outline that marked it
+  ([#175](https://github.com/jaegertracing/jaeger-demo/pull/175),
+  fixes [#174](https://github.com/jaegertracing/jaeger-demo/issues/174)).
 - `otel-demo/flagd` has a readiness probe on `/readyz` of flagd's management
   port, where the chart sets none. A new `flagd` Pod that starts without reading
   its flag file is no longer Ready: it stays out of the Service, the previous Pod
