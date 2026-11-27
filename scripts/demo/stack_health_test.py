@@ -32,6 +32,8 @@ def trace(service, at, kind=None, *more):
 
 
 DISPATCHED = b'{"Driver":"T727756C","ETA":120000000000}'
+# The requests of one run of each stack. smoke_workflow_test.py budgets the smoke check by them.
+REQUESTS_PER_RUN = {"oci": 9, "otel": 10}
 
 
 def public_stack(stack, spans, metrics, functional=DISPATCHED):
@@ -155,6 +157,8 @@ class StackHealthTests(unittest.TestCase):
                     return ui
                 if url in stack_health.PAGES[stack]:
                     return stack_health.PAGES[stack][url][0].encode()
+                if url == stack_health.FUNCTIONAL[stack][0]:
+                    return DISPATCHED
                 if path.endswith("/api/health"):
                     return b'{"database":"ok"}'
                 if path.endswith("/api/status"):
@@ -169,6 +173,10 @@ class StackHealthTests(unittest.TestCase):
             with self.subTest(stack=stack):
                 self.assertTrue(stack_health.check(stack, read)["uiTrackingMatched"])
                 self.assertEqual(len(seen), len(set(seen)))
+                self.assertIn(stack_health.FUNCTIONAL[stack][0], seen)
+                # The smoke check budgets each run by this count times the socket timeout.
+                self.assertEqual(REQUESTS_PER_RUN[stack], len(seen),
+                                 "Recount the budget in demo-smoke.yml and smoke_workflow_test.py")
                 ends = [parse_qs(urlsplit(u).query).get("endTs") for u in seen if "/api/metrics/" in u]
                 self.assertEqual(len(ends), 2)
                 self.assertIsNotNone(ends[0])
@@ -356,14 +364,35 @@ class StackHealthTests(unittest.TestCase):
                 stack_health.check("oci", public_stack("oci", probes, metrics, hanging), since=since)
         result = stack_health.check("oci", public_stack("oci", probes, metrics), since=since)
         self.assertTrue(result["functionalRequestCompleted"])
-        # The routine check makes no dispatch, and the OTel stack has no functional request:
-        # a hung PlaceOrder leaves no checkout server span, and nothing probes checkout.
-        routine = stack_health.check("oci", public_stack("oci", probes, metrics, AssertionError("no dispatch")))
-        self.assertIsNone(routine["functionalRequestCompleted"])
-        self.assertEqual(["oci"], list(stack_health.FUNCTIONAL))
         values = (stack_health.ROOT / "examples/oci/jaeger-values.yaml").read_text()
         self.assertIn("--basepath=/hotrod", values)
         self.assertTrue(stack_health.FUNCTIONAL["oci"][0].startswith("https://demo.jaegertracing.io/hotrod/dispatch?"))
+
+    def test_the_routine_check_needs_a_completed_dispatch(self):
+        # The smoke check runs the routine check. On the OCI stack the kubelet's probes of
+        # /hotrod alone give it a fresh frontend span and a positive, finite SPM bucket, and the
+        # HotROD page answers, so without a dispatch of its own it passes while dispatches hang.
+        now = datetime.now(timezone.utc)
+        minute = now.replace(second=0, microsecond=0)
+        probes = [(now - timedelta(seconds=10 * n), SERVER) for n in range(1, 20)]
+
+        def metrics(name, query):
+            return json.dumps(metric(minute - timedelta(minutes=2), 0.1 if name == "calls" else 3)).encode()
+
+        self.assertEqual(["oci", "otel"], sorted(stack_health.FUNCTIONAL))
+        for stack in stack_health.STACKS:
+            for hanging in (TimeoutError("timed out"), b'{"error":"redis timeout"}', b""):
+                with self.subTest(stack=stack, hanging=hanging), self.assertRaises((ValueError, OSError)):
+                    stack_health.check(stack, public_stack(stack, probes, metrics, hanging))
+            with self.subTest(stack=stack):
+                result = stack_health.check(stack, public_stack(stack, probes, metrics))
+                self.assertTrue(result["functionalRequestCompleted"])
+                self.assertIsNone(result["evidenceSinceUTC"])
+        # The OTel stack's HotROD has no base path, so its dispatch is at the root of its host.
+        values = (stack_health.ROOT / "examples/otel-demo/jaeger-values.yaml").read_text()
+        self.assertNotIn("--basepath", values)
+        self.assertTrue(stack_health.FUNCTIONAL["otel"][0].startswith("https://hotrod.demo.jaegertracing.io/dispatch?"))
+        self.assertIn("https://hotrod.demo.jaegertracing.io/", stack_health.PAGES["otel"])
 
     def test_evidence_after_a_change_comes_from_the_newest_traces_only(self):
         # Issue #160 developed this way: orders completed for some minutes after the change, then

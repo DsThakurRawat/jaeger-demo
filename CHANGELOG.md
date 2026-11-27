@@ -20,6 +20,19 @@ Jaeger and HotROD product changes are recorded in the
 [core changelog](https://github.com/jaegertracing/jaeger/blob/main/CHANGELOG.md).
 Earlier hosted-demo history is in core up to the extraction cutoff below.
 
+## 2026-11-27
+
+### Fixed
+
+- The 30-minute smoke check no longer passes while HotROD dispatches hang. Every
+  run of the public health check now completes one HotROD dispatch on its stack,
+  which must name a driver; on the OCI stack the kubelet's probe spans and the
+  HotROD page alone used to satisfy the routine check. The OTel stack's HotROD,
+  checked only by its page before, gets the same request, also in the Helmfile
+  engine's OTel checks. An OTel attempt of the smoke check is limited to 165
+  seconds and the job to 22 minutes
+  (fixes [#171](https://github.com/jaegertracing/jaeger-demo/issues/171)).
+
 ## 2026-11-26
 
 ### Changed

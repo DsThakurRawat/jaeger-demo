@@ -45,9 +45,14 @@ PAGES = {
 #
 # On the OCI stack even that span can be a probe. The kubelet's liveness and readiness
 # probes request HotROD's /hotrod (examples/oci/jaeger-values.yaml), and each is a frontend
-# server span, so the spans and the span metrics stay healthy while dispatches hang. A check
-# bound to a change therefore completes one dispatch itself, as the deploy scripts did.
-FUNCTIONAL = {"oci": ("https://demo.jaegertracing.io/hotrod/dispatch?customer=123", '"Driver"')}
+# server span, so the spans and the span metrics stay healthy while dispatches hang. Every
+# check therefore completes one dispatch itself, as the deploy scripts did. That holds for
+# the routine check too: it is what the 30-minute smoke check runs, and without the request
+# it stays green while dispatches hang. The OTel stack's HotROD is otherwise checked by its
+# page alone, and the stack is judged by checkout spans, which say nothing about HotROD, so
+# it gets the same request. Each request adds to the per-run budget of demo-smoke.yml.
+FUNCTIONAL = {"oci": ("https://demo.jaegertracing.io/hotrod/dispatch?customer=123", '"Driver"'),
+              "otel": ("https://hotrod.demo.jaegertracing.io/dispatch?customer=123", '"Driver"')}
 ROUTINE_RATE_SECONDS = 600
 FRESH_RATE_SECONDS = 120
 STEP_SECONDS = 60
@@ -149,8 +154,8 @@ def check_metrics(calls, latency, now, since=None):
 
 
 def check(stack, read=fetch, *, tracking=None, since=None):
-    """Check one stack. With since, a server span without an error and the SPM bucket must be newer than
-    that time, and the stack's functional request, if it has one, must complete."""
+    """Check one stack, whose functional request must complete. With since, a server span without an
+    error and the SPM bucket must also be newer than that time."""
     base, service = STACKS[stack]
     if since is not None and (since.tzinfo is None or since > datetime.now(timezone.utc)):
         raise ValueError("since must be a past time with a UTC offset")
@@ -164,7 +169,7 @@ def check(stack, read=fetch, *, tracking=None, since=None):
         body = read(url).decode()
         if not any(m.lower() in body.lower() for m in markers):
             raise ValueError(f"Unexpected content at {url}")
-    functional = FUNCTIONAL.get(stack) if since is not None else None
+    functional = FUNCTIONAL.get(stack)
     if functional and functional[1] not in read(functional[0]).decode():
         raise ValueError(f"The {stack} functional request did not complete")
     if stack == "oci":
